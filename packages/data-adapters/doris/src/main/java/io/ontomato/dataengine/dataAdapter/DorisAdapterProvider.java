@@ -7,6 +7,12 @@ import org.springframework.stereotype.Component;
 
 import io.ontomato.dataengine.config.DataRagConfig;
 
+/**
+ * Registers the public read-only Doris FE adapter.
+ *
+ * @author lvdaxianerplus
+ * @date 2026-10-12
+ */
 @Component
 public class DorisAdapterProvider implements DataAdapterProvider {
 
