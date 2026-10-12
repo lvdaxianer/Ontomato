@@ -14,16 +14,21 @@ import io.ontomato.dataengine.config.DataRagConfig;
 class DataAdapterAssemblyTest {
 
 	@Test
-	void theOpenSourceEditionInstallsItsAdapters() {
+<<<<<<< HEAD
+	void theOpenSourceEditionInstallsConfiguredSqlAdapters() {
 		try (AnnotationConfigApplicationContext ctx = new AnnotationConfigApplicationContext()) {
 			ctx.register(DataRagConfig.class);
 			ctx.scan("io.ontomato.dataengine.dataAdapter");
 			ctx.refresh();
 			List<DataAdapterProvider> installed = ctx.getBean(DataAdapterRegistry.class).installed();
-			assertEquals(List.of("duckdb", "elasticsearch", "multi", "mysql", "neo4j", "opensearch", "postgresql", "sqlserver"),
+			assertEquals(List.of("doris", "duckdb", "elasticsearch", "multi", "mysql", "neo4j", "opensearch", "postgresql", "sqlserver"),
 					installed.stream().map(DataAdapterProvider::type).sorted().toList());
+			assertEquals(Map.of("url", "jdbc:mysql://host:9030/db?useSSL=false", "user", "reader"),
+					installed.stream().filter(provider -> "doris".equals(provider.type())).findFirst().orElseThrow()
+							.connectionExamples());
 			assertEquals(Map.of("url", "jdbc:postgresql://host:port/db", "user", "postgres"),
-					installed.stream().filter(p -> "postgresql".equals(p.type())).findFirst().orElseThrow().connectionExamples());
+					installed.stream().filter(provider -> "postgresql".equals(provider.type())).findFirst().orElseThrow()
+							.connectionExamples());
 		}
 	}
 }
