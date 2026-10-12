@@ -1,0 +1,4 @@
+schema: spec-driven
+created: 2026-10-12
+goal: Support Doris FE connections, metadata discovery, live read-only Ontology
+  DSL queries, and explicit unsupported write operations.
