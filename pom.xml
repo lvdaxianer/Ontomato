@@ -24,6 +24,7 @@
         <module>packages/data-adapters/sqlserver</module>
         <module>packages/data-adapters/gaussdb</module>
         <module>packages/data-adapters/duckdb</module>
+        <module>packages/data-adapters/doris</module>
         <module>apps/data-engine</module>
     </modules>
 
