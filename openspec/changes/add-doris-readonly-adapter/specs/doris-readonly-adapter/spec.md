@@ -97,4 +97,3 @@ The Doris adapter module SHALL be included in the root Maven reactor, the data-e
 - **WHEN** the Doris integration-test environment variables are absent
 - **THEN** the external test is skipped with an explicit reason
 - **AND** unit tests remain runnable without a Doris server
-
