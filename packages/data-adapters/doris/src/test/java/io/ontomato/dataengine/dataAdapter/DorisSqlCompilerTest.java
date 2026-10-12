@@ -94,6 +94,26 @@ class DorisSqlCompilerTest {
 		assertEquals(List.of("new", "done", 1700000000L, 10, 20), sql.parameters());
 	}
 
+	@Test
+	void compilesTheExistingTwoStepAggregationShapeAsAReadOnlySubquery() {
+		String dsl = """
+				[{"problem":"","answer":{"steps":[
+				{"graph":{"patterns":[{"objects":[{"idx":0,"variable":"o","class":"orders","conditions":{}}]}]},
+				"output":{"fields":[{"variable":"o","field":"customer_id","as":"customer_id"},{"variable":"o","field":"id","as":"id"}]}},
+				{"graph":{"patterns":[{"objects":[{"idx":0,"variable":"result","class":"derived"}]}]},
+				"output":{"fields":[{"field":"customer_id","as":"customer_id"},{"field":"id","function":"count","as":"order_count"}],
+				"group_by":{"fields":[{"field":"customer_id"}]},"sort":{"fields":[{"field":"order_count","order":"desc"}]},"limit":{"offset":5,"count":10}}}
+				]}}]""";
+
+		DorisSql sql = compile(dsl, rule(classDef("orders", attr("id", "varchar"), attr("customer_id", "varchar"))));
+
+		assertTrue(sql.sql().contains("from (\nselect"));
+		assertTrue(sql.sql().contains(") as `result`"));
+		assertTrue(sql.sql().contains("count(`result`.`id`) as `order_count`"));
+		assertTrue(sql.sql().contains("group by\n    `result`.`customer_id`"));
+		assertTrue(sql.sql().contains("limit 10 offset 5"));
+	}
+
 	private DorisSql compile(String dsl, Map<String, Object> rule) {
 		return new DorisSqlCompiler().compile(JSON.parseArray(dsl).getJSONObject(0), rule);
 	}
