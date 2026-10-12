@@ -1,7 +1,7 @@
 ## 1. Module and read-only contract
 
 - [x] 1.1 Add the `packages/data-adapters/doris` Maven module, provider, JDBC connection handling, and module-scoped provider/read-only tests.
-- [ ] 1.2 Implement explicit unsupported-operation behavior for all Doris mutation and non-live-object paths, with tests covering every `DataAdapter` mutation family.
+- [x] 1.2 Implement explicit unsupported-operation behavior for all Doris mutation and non-live-object paths, with tests covering every `DataAdapter` mutation family.
 - [ ] 1.3 Add root reactor, application dependency, runtime assembly, and image payload entries, with focused assembly verification.
 
 ## 2. Doris SQL compiler and live query execution
