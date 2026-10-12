@@ -13,7 +13,7 @@
 ## 3. Metadata and external compatibility
 
 - [x] 3.1 Add failing tests for Doris connection reports containing visible databases, schemas, tables, views, and columns, including SELECT-only behavior.
-- [ ] 3.2 Implement bounded Doris metadata discovery using JDBC and read-only `information_schema` queries, normalizing table/view/column metadata.
+- [x] 3.2 Implement bounded Doris metadata discovery using JDBC and read-only `information_schema` queries, normalizing table/view/column metadata.
 - [ ] 3.3 Add the opt-in real-Doris integration test controlled by `ONTOMATO_TEST_DORIS_URL`, `ONTOMATO_TEST_DORIS_USER`, and `ONTOMATO_TEST_DORIS_PASSWORD`; verify the exact FE/driver SQL behavior available in the environment.
 
 ## 4. Verification and handoff

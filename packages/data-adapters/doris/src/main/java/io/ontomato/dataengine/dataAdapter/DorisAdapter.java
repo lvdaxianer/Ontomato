@@ -22,10 +22,7 @@ import io.ontomato.dataengine.service.sys.bean.permission.UserDataPermission;
 import io.ontomato.dataengine.util.DslUtil;
 import io.ontomato.dataengine.util.HttpRequestUtil;
 
-/**
- * Doris FE adapter. Query compilation and metadata discovery are added in later tasks;
- * this boundary already keeps the adapter separate from the writable MySQL adapter.
- */
+/** Doris FE adapter with live SELECT execution and read-only metadata discovery. */
 public class DorisAdapter implements DataAdapter {
 
 	private final DataAdapterConnection connection;
@@ -48,6 +45,11 @@ public class DorisAdapter implements DataAdapter {
 	@Override
 	public Connection openConnection() throws SQLException {
 		return DriverManager.getConnection(connection.getUrl(), connection.getUser(), connection.getPassword());
+	}
+
+	@Override
+	public JSONObject testConnection() throws Exception {
+		return new DorisConnectionTester(this).test();
 	}
 
 	@Override
