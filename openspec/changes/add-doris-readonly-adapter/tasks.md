@@ -9,6 +9,7 @@
 - [x] 2.1 Add failing unit tests for Doris identifier quoting, parameter binding, single-table DSL, joins, filters, aggregates, ordering, and pagination.
 - [x] 2.2 Implement the dedicated Doris read-only DSL-to-SQL compiler and JDBC execution path until the compiler tests pass.
 - [x] 2.3 Add live-query tests proving each request uses the current Doris connection/result path and does not copy or synchronize source rows.
+- [ ] 2.4 Preserve the existing two-step SQL-adapter DSL shape by compiling its first-step read as a Doris subquery.
 
 ## 3. Metadata and external compatibility
 
