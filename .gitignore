@@ -21,3 +21,7 @@ packages/data-engine-core/.settings/
 packages/data-adapters/*/.classpath
 packages/data-adapters/*/.project
 packages/data-adapters/*/.settings/
+
+# >>> project-hygiene (managed, do not edit by hand) >>>
+.Codex/worktrees/
+# <<< project-hygiene (managed) <<<
