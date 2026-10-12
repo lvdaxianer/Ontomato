@@ -11,6 +11,7 @@ import java.sql.ResultSetMetaData;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.Test;
 
@@ -42,7 +43,34 @@ class DorisAdapterExecutionTest {
 		assertEquals(sqls, mqls);
 	}
 
+	@Test
+	void opensAFreshConnectionForEachQuerySoNewSourceRowsAreVisible() throws Exception {
+		List<String> sqls = new ArrayList<>();
+		AtomicInteger opened = new AtomicInteger();
+		DorisAdapter adapter = new DorisAdapter(new DataAdapterConnection(), rule()) {
+			@Override
+			public Connection openConnection() {
+				int sequence = opened.incrementAndGet();
+				return DorisAdapterExecutionTest.this.connection(sqls, new ArrayList<>(), "row-" + sequence);
+			}
+		};
+
+		String firstResponse = adapter.executeDsl(dsl(), "session-1", DslExecutionMode.RAW, new ArrayList<>());
+		String secondResponse = adapter.executeDsl(dsl(), "session-1", DslExecutionMode.RAW, new ArrayList<>());
+
+		assertEquals("row-1", JSON.parseArray(firstResponse).getJSONObject(0).getJSONArray("answer")
+				.getJSONObject(0).getString("id"));
+		assertEquals("row-2", JSON.parseArray(secondResponse).getJSONObject(0).getJSONArray("answer")
+				.getJSONObject(0).getString("id"));
+		assertEquals(2, opened.get());
+		assertEquals(2, sqls.size());
+	}
+
 	private Connection connection(List<String> sqls, List<Object> bound) {
+		return connection(sqls, bound, "row-1");
+	}
+
+	private Connection connection(List<String> sqls, List<Object> bound, String rowValue) {
 		ResultSetMetaData metadata = proxy(ResultSetMetaData.class, (method, args) -> switch (method.getName()) {
 			case "getColumnCount" -> 1;
 			case "getColumnLabel", "getColumnName" -> "id";
@@ -60,7 +88,7 @@ class DorisAdapterExecutionTest {
 					yield hasRow;
 				}
 				case "getMetaData" -> metadata;
-				case "getObject" -> "row-1";
+				case "getObject" -> rowValue;
 				default -> defaultValue(method.getReturnType());
 				};
 			}
