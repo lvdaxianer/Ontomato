@@ -22,7 +22,12 @@ import io.ontomato.dataengine.service.sys.bean.permission.UserDataPermission;
 import io.ontomato.dataengine.util.DslUtil;
 import io.ontomato.dataengine.util.HttpRequestUtil;
 
-/** Doris FE adapter with live SELECT execution and read-only metadata discovery. */
+/**
+ * Doris FE adapter with live SELECT execution and read-only metadata discovery.
+ *
+ * @author lvdaxianerplus
+ * @date 2026-10-12
+ */
 public class DorisAdapter implements DataAdapter {
 
 	private final DataAdapterConnection connection;
@@ -47,11 +52,31 @@ public class DorisAdapter implements DataAdapter {
 		return DriverManager.getConnection(connection.getUrl(), connection.getUser(), connection.getPassword());
 	}
 
+	/**
+	 * Tests the FE connection and returns visible metadata.
+	 *
+	 * @return bounded metadata report
+	 * @throws Exception when the connection or metadata probe fails
+	 * @author lvdaxianerplus
+	 * @date 2026-10-12
+	 */
 	@Override
 	public JSONObject testConnection() throws Exception {
 		return new DorisConnectionTester(this).test();
 	}
 
+	/**
+	 * Compiles and executes one read-only Ontology DSL query.
+	 *
+	 * @param queryJson serialized Ontology DSL
+	 * @param sessionId caller session identifier
+	 * @param mode execution mode
+	 * @param generatedMqls generated SQL collection
+	 * @return serialized query result
+	 * @throws Exception when compilation or JDBC execution fails
+	 * @author lvdaxianerplus
+	 * @date 2026-10-12
+	 */
 	@Override
 	public String executeDsl(String queryJson, String sessionId, DslExecutionMode mode, List<String> generatedMqls)
 			throws Exception {
@@ -68,7 +93,15 @@ public class DorisAdapter implements DataAdapter {
 		return JSON.toJSONString(JSONArray.of(answer), Feature.WriteMapNullValue);
 	}
 
-	/** Execute one already-compiled SELECT and close every JDBC resource before returning. */
+	/**
+	 * Executes one already-compiled SELECT and closes every JDBC resource.
+	 *
+	 * @param compiled parameterized SELECT
+	 * @return result rows
+	 * @throws SQLException when JDBC execution fails
+	 * @author lvdaxianerplus
+	 * @date 2026-10-12
+	 */
 	private JSONArray executeSql(DorisSql compiled) throws SQLException {
 		try (Connection jdbc = openConnection(); PreparedStatement statement = jdbc.prepareStatement(compiled.sql())) {
 			for (int index = 0; index < compiled.parameters().size(); index++) {
@@ -78,6 +111,42 @@ public class DorisAdapter implements DataAdapter {
 				return rowsToJson(rows);
 			}
 		}
+	}
+
+	/**
+	 * Normalizes one ontology query through the existing DSL pipeline.
+	 *
+	 * @param dsl ontology DSL object
+	 * @param domainId domain identifier
+	 * @param vectorResourceDao vector resource DAO
+	 * @param dataRagConfig data configuration
+	 * @return query result
+	 * @throws Exception when the shared query pipeline fails
+	 * @author lvdaxianerplus
+	 * @date 2026-10-12
+	 */
+	private DslExecutionResult executeOntologyQuery(JSONObject dsl, String domainId,
+			VectorResourceDao vectorResourceDao, DataRagConfig dataRagConfig) throws Exception {
+		List<Map<String, Object>> classDefs = classDefinitions();
+		String normalized = DslUtil.normalizeClassNames(
+				JSON.toJSONString(JSONArray.of(dsl), Feature.WriteMapNullValue), classDefs);
+		String dslJson = dataRagConfig == null ? normalized
+				: DslUtil.setConditionTimeColumnToCorrectFormat(normalized,
+						dataRagConfig.getDslMightTimeFormats(), classDefs);
+		return HttpRequestUtil.executeDsl(dataRagConfig, this, dslJson, null, true, jsonRule,
+				vectorResourceDao, new UserDataPermission(), DslExecutionMode.OPTIMIZED, domainId)[1];
+	}
+
+	/**
+	 * Reads ontology class definitions required by the shared DSL pipeline.
+	 *
+	 * @return mapped class definitions
+	 * @author lvdaxianerplus
+	 * @date 2026-10-12
+	 */
+	@SuppressWarnings("unchecked")
+	private List<Map<String, Object>> classDefinitions() {
+		return (List<Map<String, Object>>) jsonRule.get("classDef");
 	}
 
 	private JSONArray rowsToJson(ResultSet rows) throws SQLException {
@@ -173,27 +242,50 @@ public class DorisAdapter implements DataAdapter {
 	@Override
 	public Map<String, Object> query(JSONObject dsl, String sandboxId, String domainId,
 			VectorResourceDao vectorResourceDao, DataRagConfig dataRagConfig) throws Exception {
-		if (sandboxId != null && !sandboxId.isBlank()) {
-			throw unsupported("sandbox query");
-		}
+		validateSandbox(sandboxId);
 		if (jsonRule == null) {
 			throw new IllegalStateException("Doris ontology mapping is required for a query");
+		} else {
+			return queryMappedDsl(dsl, domainId, vectorResourceDao, dataRagConfig);
 		}
-		JSONArray dsls = JSONArray.of(dsl);
-		@SuppressWarnings("unchecked")
-		List<Map<String, Object>> classDefs = (List<Map<String, Object>>) jsonRule.get("classDef");
-		String dslJson = DslUtil.normalizeClassNames(JSON.toJSONString(dsls, Feature.WriteMapNullValue), classDefs);
-		if (dataRagConfig != null) {
-			dslJson = DslUtil.setConditionTimeColumnToCorrectFormat(dslJson, dataRagConfig.getDslMightTimeFormats(), classDefs);
+	}
+
+	/**
+	 * Rejects sandbox execution because Doris is an external live source.
+	 *
+	 * @param sandboxId sandbox identifier
+	 * @author lvdaxianerplus
+	 * @date 2026-10-12
+	 */
+	private void validateSandbox(String sandboxId) {
+		if (sandboxId != null && !sandboxId.isBlank()) {
+			throw unsupported("sandbox query");
+		} else {
+			return;
 		}
-		DslExecutionResult result = HttpRequestUtil.executeDsl(dataRagConfig, this, dslJson, null, true, jsonRule,
-				vectorResourceDao, new UserDataPermission(), DslExecutionMode.OPTIMIZED, domainId)[1];
+	}
+
+	/**
+	 * Executes one mapped DSL query through the shared Ontology pipeline.
+	 *
+	 * @param dsl ontology DSL object
+	 * @param domainId domain identifier
+	 * @param vectorResourceDao vector resource DAO
+	 * @param dataRagConfig data configuration
+	 * @return mapped result
+	 * @throws Exception when the shared query pipeline fails
+	 * @author lvdaxianerplus
+	 * @date 2026-10-12
+	 */
+	private Map<String, Object> queryMappedDsl(JSONObject dsl, String domainId,
+			VectorResourceDao vectorResourceDao, DataRagConfig dataRagConfig) throws Exception {
+		DslExecutionResult result = executeOntologyQuery(dsl, domainId, vectorResourceDao, dataRagConfig);
 		JSONObject data = new JSONObject();
-		if (result.data() != null) {
-			data.putAll(result.data());
-		}
+		data.putAll(result.data() == null ? Map.of() : result.data());
 		if (result.failed()) {
 			data.put("error", MultiThreadAIChatService.rawErrorText(result.failure().cause()));
+		} else {
+			return data;
 		}
 		return data;
 	}

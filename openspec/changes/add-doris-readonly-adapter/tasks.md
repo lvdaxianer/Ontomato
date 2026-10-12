@@ -21,6 +21,16 @@
 
 - [x] 4.1 Run module-scoped tests, relevant core/assembly tests, secret scans, and the available strict OpenSpec verification; record pre-existing baseline failures separately.
 - [x] 4.2 Perform code-review-spec and task-boundary audits, update this checklist with evidence, and commit the task with an English Conventional Commit message.
+- [x] 4.3 Refactor all new Doris production classes to satisfy the repository code-review contract without changing the read-only query and metadata behavior.
+
+### Task 4.3 boundary and execution plan
+
+- Module-oriented owner: Doris adapter production code and its focused tests only.
+- Allowed files: `packages/data-adapters/doris/**` and this OpenSpec checklist.
+- Out of scope: public contracts, other adapters, application behavior, and any Doris write capability.
+- Dependencies: existing Doris provider, compiler, metadata, assembly, and integration tests.
+- Focused verification: Doris module tests, source-size/method-size audit, strict OpenSpec validation, and full changed-tree diff review.
+- Execution fallback: direct main-agent execution is used because the strict review requires coordinated edits across the shared compiler, metadata reader, connection probe, and tests; delegating overlapping refactors would create unsafe merge churn.
 
 ## Verification evidence
 

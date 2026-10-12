@@ -11,7 +11,12 @@ import java.util.Map;
 import com.alibaba.fastjson2.JSONArray;
 import com.alibaba.fastjson2.JSONObject;
 
-/** Reads only the connected user's visible Doris information_schema rows. */
+/**
+ * Reads only the connected user's visible Doris information_schema rows.
+ *
+ * @author lvdaxianerplus
+ * @date 2026-10-12
+ */
 final class DorisMetadataReader {
 
 	private static final int METADATA_ROW_LIMIT = 10000;
@@ -19,6 +24,16 @@ final class DorisMetadataReader {
 	private DorisMetadataReader() {
 	}
 
+	/**
+	 * Reads bounded metadata visible to the current Doris user.
+	 *
+	 * @param connection open Doris JDBC connection
+	 * @param startNanos probe start time
+	 * @return metadata report
+	 * @throws SQLException when Doris rejects a metadata query
+	 * @author lvdaxianerplus
+	 * @date 2026-10-12
+	 */
 	static JSONObject read(Connection connection, long startNanos) throws SQLException {
 		DatabaseMetaData jdbcMetadata = connection.getMetaData();
 		JSONObject report = new JSONObject();
@@ -30,8 +45,8 @@ final class DorisMetadataReader {
 		report.put("schema", connection.getSchema());
 
 		JSONArray schemas = query(connection,
-				"select CATALOG_NAME, SCHEMA_NAME from information_schema.schemata "
-						+ "order by CATALOG_NAME, SCHEMA_NAME limit " + METADATA_ROW_LIMIT,
+				"SELECT CATALOG_NAME, SCHEMA_NAME FROM information_schema.schemata "
+						+ "ORDER BY CATALOG_NAME, SCHEMA_NAME LIMIT " + METADATA_ROW_LIMIT,
 				result -> {
 					JSONObject schema = new JSONObject();
 					schema.put("catalog", result.getString("CATALOG_NAME"));
@@ -43,13 +58,13 @@ final class DorisMetadataReader {
 		report.put("databases", distinctBy(schemas, "name"));
 
 		JSONArray tables = query(connection,
-				"select TABLE_CATALOG, TABLE_SCHEMA, TABLE_NAME, TABLE_TYPE "
-						+ "from information_schema.tables order by TABLE_CATALOG, TABLE_SCHEMA, TABLE_NAME limit "
+				"SELECT TABLE_CATALOG, TABLE_SCHEMA, TABLE_NAME, TABLE_TYPE "
+						+ "FROM information_schema.tables ORDER BY TABLE_CATALOG, TABLE_SCHEMA, TABLE_NAME LIMIT "
 						+ METADATA_ROW_LIMIT,
 				result -> {
 					String type = normalizeTableType(result.getString("TABLE_TYPE"));
-					if (type == null) {
-						return null;
+					if (type.isEmpty()) {
+						return new JSONObject();
 					}
 					JSONObject table = new JSONObject();
 					table.put("catalog", result.getString("TABLE_CATALOG"));
@@ -59,8 +74,8 @@ final class DorisMetadataReader {
 					return table;
 				});
 		JSONArray columns = query(connection,
-				"select TABLE_CATALOG, TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME, DATA_TYPE, ORDINAL_POSITION "
-						+ "from information_schema.columns order by TABLE_CATALOG, TABLE_SCHEMA, TABLE_NAME, ORDINAL_POSITION limit "
+				"SELECT TABLE_CATALOG, TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME, DATA_TYPE, ORDINAL_POSITION "
+						+ "FROM information_schema.columns ORDER BY TABLE_CATALOG, TABLE_SCHEMA, TABLE_NAME, ORDINAL_POSITION LIMIT "
 						+ METADATA_ROW_LIMIT,
 				result -> {
 					JSONObject column = new JSONObject();
@@ -113,12 +128,12 @@ final class DorisMetadataReader {
 
 	private static String normalizeTableType(String tableType) {
 		if (tableType == null) {
-			return null;
+			return "";
 		}
-		return switch (tableType.toUpperCase()) {
+		return switch (tableType.toUpperCase(java.util.Locale.ROOT)) {
 		case "TABLE", "BASE TABLE", "PARTITIONED TABLE", "FOREIGN TABLE" -> "TABLE";
 		case "VIEW", "MATERIALIZED VIEW" -> "VIEW";
-		default -> null;
+		default -> "";
 		};
 	}
 
@@ -127,8 +142,10 @@ final class DorisMetadataReader {
 		try (PreparedStatement statement = connection.prepareStatement(sql); ResultSet result = statement.executeQuery()) {
 			while (result.next()) {
 				JSONObject row = mapper.map(result);
-				if (row != null) {
+				if (!row.isEmpty()) {
 					rows.add(row);
+				} else {
+					continue;
 				}
 			}
 		}

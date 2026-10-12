@@ -20,10 +20,10 @@ class DorisSqlCompilerTest {
 		DorisSql sql = compile(singleTableDsl("status", "new' OR 1=1"), rule(
 				classDef("orders", attr("id", "varchar"), attr("status", "varchar"))));
 
-		assertTrue(sql.sql().contains("from\n    `orders` as `o`"));
+		assertTrue(sql.sql().contains("FROM\n    `orders` AS `o`"));
 		assertTrue(sql.sql().contains("`o`.`status` = ?"));
-		assertTrue(sql.sql().contains("order by\n    `id` desc"));
-		assertTrue(sql.sql().contains("limit 20 offset 10"));
+		assertTrue(sql.sql().contains("ORDER BY\n    `id` DESC"));
+		assertTrue(sql.sql().contains("LIMIT 20 OFFSET 10"));
 		assertEquals(List.of("new' OR 1=1"), sql.parameters());
 		assertFalse(sql.sql().contains("OR 1=1"));
 	}
@@ -44,9 +44,9 @@ class DorisSqlCompilerTest {
 
 		DorisSql sql = compile(dsl, jsonRule);
 
-		assertTrue(sql.sql().contains("`orders` as `o` inner join `customers` as `c`"));
-		assertTrue(sql.sql().contains("on `o`.`customer_id` = `c`.`id`"));
-		assertTrue(sql.sql().contains("`o`.`id` as `order_id`,`c`.`name` as `customer_name`"));
+		assertTrue(sql.sql().contains("`orders` AS `o` INNER JOIN `customers` AS `c`"));
+		assertTrue(sql.sql().contains("ON `o`.`customer_id` = `c`.`id`"));
+		assertTrue(sql.sql().contains("`o`.`id` AS `order_id`,`c`.`name` AS `customer_name`"));
 	}
 
 	@Test
@@ -60,10 +60,10 @@ class DorisSqlCompilerTest {
 
 		DorisSql sql = compile(dsl, rule(classDef("orders", attr("id", "varchar"), attr("customer_id", "varchar"))));
 
-		assertTrue(sql.sql().contains("count(`o`.`id`) as `order_count`"));
-		assertTrue(sql.sql().contains("group by\n    `o`.`customer_id`"));
-		assertTrue(sql.sql().contains("having\n    count(`o`.`id`) > ?"));
-		assertTrue(sql.sql().contains("order by\n    `order_count` desc"));
+		assertTrue(sql.sql().contains("COUNT(`o`.`id`) AS `order_count`"));
+		assertTrue(sql.sql().contains("GROUP BY\n    `o`.`customer_id`"));
+		assertTrue(sql.sql().contains("HAVING\n    COUNT(`o`.`id`) > ?"));
+		assertTrue(sql.sql().contains("ORDER BY\n    `order_count` DESC"));
 		assertEquals(List.of(1L), sql.parameters());
 	}
 
@@ -88,9 +88,9 @@ class DorisSqlCompilerTest {
 		DorisSql sql = compile(dsl, rule(classDef("orders", attr("id", "varchar"), attr("status", "varchar"),
 				attr("created_at", "timestamp"), attr("amount", "int"))));
 
-		assertTrue(sql.sql().contains("`o`.`status` in (?,?)"));
+		assertTrue(sql.sql().contains("`o`.`status` IN (?,?)"));
 		assertTrue(sql.sql().contains("`o`.`created_at` > FROM_UNIXTIME(?)"));
-		assertTrue(sql.sql().contains("`o`.`amount` >= ? and `o`.`amount` <= ?"));
+		assertTrue(sql.sql().contains("`o`.`amount` >= ? AND `o`.`amount` <= ?"));
 		assertEquals(List.of("new", "done", 1700000000L, 10, 20), sql.parameters());
 	}
 
@@ -107,11 +107,11 @@ class DorisSqlCompilerTest {
 
 		DorisSql sql = compile(dsl, rule(classDef("orders", attr("id", "varchar"), attr("customer_id", "varchar"))));
 
-		assertTrue(sql.sql().contains("from (\nselect"));
-		assertTrue(sql.sql().contains(") as `result`"));
-		assertTrue(sql.sql().contains("count(`result`.`id`) as `order_count`"));
-		assertTrue(sql.sql().contains("group by\n    `result`.`customer_id`"));
-		assertTrue(sql.sql().contains("limit 10 offset 5"));
+		assertTrue(sql.sql().contains("FROM (\nSELECT"));
+		assertTrue(sql.sql().contains(") AS `result`"));
+		assertTrue(sql.sql().contains("COUNT(`result`.`id`) AS `order_count`"));
+		assertTrue(sql.sql().contains("GROUP BY\n    `result`.`customer_id`"));
+		assertTrue(sql.sql().contains("LIMIT 10 OFFSET 5"));
 	}
 
 	private DorisSql compile(String dsl, Map<String, Object> rule) {
