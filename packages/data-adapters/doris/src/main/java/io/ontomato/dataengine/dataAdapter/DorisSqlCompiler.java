@@ -29,10 +29,77 @@ public final class DorisSqlCompiler {
 		}
 		CompilerContext context = new CompilerContext(jsonRule);
 		JSONArray steps = required(dsl.getJSONObject("answer"), "steps");
-		if (steps.isEmpty() || steps.size() > 1) {
-			throw new IllegalArgumentException("Doris supports one DSL query step");
+		if (steps.isEmpty() || steps.size() > 2) {
+			throw new IllegalArgumentException("Doris supports one or two DSL query steps");
 		}
-		JSONObject step = steps.getJSONObject(0);
+		return steps.size() == 1 ? compileSingleStep(steps.getJSONObject(0), context)
+				: compileTwoStep(steps.getJSONObject(0), steps.getJSONObject(1), context);
+	}
+
+	private DorisSql compileSingleStep(JSONObject step, CompilerContext context) {
+		populateObjects(step, context);
+		JSONObject graph = required(step, "graph");
+		JSONArray patterns = required(graph, "patterns");
+		JSONObject pattern = patterns.getJSONObject(0);
+		JSONArray objects = required(pattern, "objects");
+
+		JSONObject output = required(step, "output");
+		StringBuilder sql = new StringBuilder("select\n    ");
+		sql.append(selectFields(output.getJSONArray("fields"), context));
+		sql.append("\nfrom\n    ").append(fromClause(pattern.getJSONArray("relationship"), context));
+		String where = whereClause(objects, context);
+		if (!where.isEmpty()) {
+			sql.append("\nwhere\n    ").append(where);
+		}
+		appendGroupBy(sql, output.getJSONObject("group_by"), context);
+		appendSort(sql, output.getJSONObject("sort"), context);
+		appendLimit(sql, output.getJSONObject("limit"));
+		return new DorisSql(sql.toString(), context.parameters);
+	}
+
+	private DorisSql compileTwoStep(JSONObject firstStep, JSONObject secondStep, CompilerContext context) {
+		populateObjects(firstStep, context);
+		JSONObject firstOutput = required(firstStep, "output");
+		String innerSql = baseSelect(firstStep, firstOutput, context);
+		JSONObject secondGraph = required(secondStep, "graph");
+		JSONArray secondPatterns = required(secondGraph, "patterns");
+		JSONObject secondPattern = secondPatterns.getJSONObject(0);
+		JSONArray secondObjects = required(secondPattern, "objects");
+		if (secondObjects.size() != 1) {
+			throw new IllegalArgumentException("Doris two-step queries require one derived object");
+		}
+		String derivedAlias = identifier(secondObjects.getJSONObject(0).getString("variable"), "derived alias");
+		Set<String> firstAliases = outputAliases(firstOutput.getJSONArray("fields"));
+		JSONObject secondOutput = required(secondStep, "output");
+		Set<String> secondAliases = outputAliases(secondOutput.getJSONArray("fields"));
+		StringBuilder sql = new StringBuilder("select\n    ")
+				.append(secondSelectFields(secondOutput.getJSONArray("fields"), derivedAlias, firstAliases))
+				.append("\nfrom (\n")
+				.append(innerSql)
+				.append("\n) as ")
+				.append(quote(derivedAlias));
+		appendSecondGroupBy(sql, secondOutput.getJSONObject("group_by"), derivedAlias, firstAliases, context);
+		appendSecondSort(sql, secondOutput.getJSONObject("sort"), derivedAlias, firstAliases, secondAliases);
+		appendLimit(sql, secondOutput.getJSONObject("limit"));
+		return new DorisSql(sql.toString(), context.parameters);
+	}
+
+	private String baseSelect(JSONObject step, JSONObject output, CompilerContext context) {
+		JSONObject graph = required(step, "graph");
+		JSONArray patterns = required(graph, "patterns");
+		JSONObject pattern = patterns.getJSONObject(0);
+		JSONArray objects = required(pattern, "objects");
+		StringBuilder sql = new StringBuilder("select\n    ")
+				.append(selectFields(output.getJSONArray("fields"), context))
+				.append("\nfrom\n    ").append(fromClause(pattern.getJSONArray("relationship"), context));
+		String where = whereClause(objects, context);
+		if (!where.isEmpty()) {
+			sql.append("\nwhere\n    ").append(where);
+		}
+		return sql.toString();
+	}
+
+	private void populateObjects(JSONObject step, CompilerContext context) {
 		JSONObject graph = required(step, "graph");
 		JSONArray patterns = required(graph, "patterns");
 		JSONObject pattern = patterns.getJSONObject(0);
@@ -47,19 +114,6 @@ public final class DorisSqlCompiler {
 			String className = context.className(identifier(object.getString("class"), "class name"));
 			context.objects.put(index, new ObjectRef(index, alias, className));
 		}
-
-		JSONObject output = required(step, "output");
-		StringBuilder sql = new StringBuilder("select\n    ");
-		sql.append(selectFields(output.getJSONArray("fields"), context));
-		sql.append("\nfrom\n    ").append(fromClause(pattern.getJSONArray("relationship"), context));
-		String where = whereClause(objects, context);
-		if (!where.isEmpty()) {
-			sql.append("\nwhere\n    ").append(where);
-		}
-		appendGroupBy(sql, output.getJSONObject("group_by"), context);
-		appendSort(sql, output.getJSONObject("sort"), context);
-		appendLimit(sql, output.getJSONObject("limit"));
-		return new DorisSql(sql.toString(), context.parameters);
 	}
 
 	private String selectFields(JSONArray fields, CompilerContext context) {
@@ -79,8 +133,121 @@ public final class DorisSqlCompiler {
 		return String.join(",", rendered);
 	}
 
+	private Set<String> outputAliases(JSONArray fields) {
+		if (fields == null || fields.isEmpty()) {
+			throw new IllegalArgumentException("DSL output fields are required");
+		}
+		Set<String> aliases = new HashSet<>();
+		for (Object value : fields) {
+			aliases.add(identifier(((JSONObject) value).getString("as"), "output alias"));
+		}
+		return aliases;
+	}
+
+	private String secondSelectFields(JSONArray fields, String derivedAlias, Set<String> sourceAliases) {
+		if (fields == null || fields.isEmpty()) {
+			throw new IllegalArgumentException("DSL output fields are required");
+		}
+		List<String> rendered = new ArrayList<>();
+		for (Object value : fields) {
+			JSONObject field = (JSONObject) value;
+			String expression = secondFieldExpression(field, derivedAlias, sourceAliases);
+			if (Boolean.TRUE.equals(field.getBoolean("distinct"))) {
+				expression = "distinct " + expression;
+			}
+			String alias = identifier(field.getString("as"), "output alias");
+			rendered.add(expression + " as " + quote(alias));
+		}
+		return String.join(",", rendered);
+	}
+
+	private String secondFieldExpression(JSONObject field, String derivedAlias, Set<String> sourceAliases) {
+		String sourceVariable = field.getString("variable");
+		if (sourceVariable != null && !sourceVariable.isBlank()
+				&& !derivedAlias.equals(identifier(sourceVariable, "derived field alias"))) {
+			throw new IllegalArgumentException("Two-step output must reference the derived object");
+		}
+		String column = identifier(field.getString("field"), "derived field");
+		if (!sourceAliases.contains(column)) {
+			throw new IllegalArgumentException("Two-step output field is not present in the first step: " + column);
+		}
+		String expression = quote(derivedAlias) + "." + quote(column);
+		String function = field.getString("function");
+		if (function != null && !function.isBlank()) {
+			String normalized = function.toLowerCase();
+			if (!FUNCTIONS.contains(normalized)) {
+				throw new IllegalArgumentException("Unsupported aggregate function: " + function);
+			}
+			expression = normalized + "(" + expression + ")";
+		}
+		return expression;
+	}
+
+	private void appendSecondGroupBy(StringBuilder sql, JSONObject groupBy, String derivedAlias,
+			Set<String> sourceAliases, CompilerContext context) {
+		if (groupBy == null || groupBy.getJSONArray("fields") == null || groupBy.getJSONArray("fields").isEmpty()) {
+			return;
+		}
+		List<String> fields = new ArrayList<>();
+		for (Object value : groupBy.getJSONArray("fields")) {
+			JSONObject field = (JSONObject) value;
+			String name = identifier(field.getString("field"), "derived group field");
+			if (!sourceAliases.contains(name)) {
+				throw new IllegalArgumentException("Two-step group field is not present in the first step: " + name);
+			}
+			fields.add(quote(derivedAlias) + "." + quote(name));
+		}
+		sql.append("\ngroup by\n    ").append(String.join(",", fields));
+		JSONArray having = groupBy.getJSONArray("having");
+		if (having == null || having.isEmpty()) {
+			return;
+		}
+		List<String> clauses = new ArrayList<>();
+		for (Object value : having) {
+			JSONObject condition = (JSONObject) value;
+			String function = condition.getString("function");
+			String normalized = function == null ? "" : function.toLowerCase();
+			if (!FUNCTIONS.contains(normalized)) {
+				throw new IllegalArgumentException("Unsupported having function: " + function);
+			}
+			String field = identifier(condition.getString("field"), "derived having field");
+			if (!sourceAliases.contains(field)) {
+				throw new IllegalArgumentException("Two-step having field is not present in the first step: " + field);
+			}
+			String operator = condition.getString("operator");
+			if (!(Set.of("=", "!=", ">", ">=", "<", "<=").contains(operator))) {
+				throw new IllegalArgumentException("Unsupported having operator: " + operator);
+			}
+			String expression = normalized + "(" + quote(derivedAlias) + "." + quote(field) + ") " + operator + " "
+					+ parameterExpression("long", condition.get("value"), context);
+			clauses.add(expression);
+		}
+		sql.append("\nhaving\n    ").append(String.join(" and ", clauses));
+	}
+
+	private void appendSecondSort(StringBuilder sql, JSONObject sort, String derivedAlias, Set<String> sourceAliases,
+			Set<String> outputAliases) {
+		if (sort == null || sort.getJSONArray("fields") == null || sort.getJSONArray("fields").isEmpty()) {
+			return;
+		}
+		List<String> fields = new ArrayList<>();
+		for (Object value : sort.getJSONArray("fields")) {
+			JSONObject field = (JSONObject) value;
+			String name = identifier(field.getString("field"), "derived sort field");
+			if (!sourceAliases.contains(name) && !outputAliases.contains(name)) {
+				throw new IllegalArgumentException("Two-step sort field is not present in the query output: " + name);
+			}
+			String order = "desc".equalsIgnoreCase(field.getString("order")) ? " desc" : " asc";
+			fields.add(quote(name) + order);
+		}
+		sql.append("\norder by\n    ").append(String.join(",", fields));
+	}
+
 	private String fromClause(JSONArray relationships, CompilerContext context) {
 		if (relationships == null || relationships.isEmpty()) {
+			if (context.objects.size() > 1) {
+				throw new IllegalArgumentException("Doris query relationships must connect all objects");
+			}
 			ObjectRef first = context.objects.values().iterator().next();
 			return quote(first.className) + " as " + quote(first.alias);
 		}
