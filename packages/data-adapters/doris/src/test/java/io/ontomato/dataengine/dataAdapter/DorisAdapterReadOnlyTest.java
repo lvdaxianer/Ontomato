@@ -38,7 +38,7 @@ class DorisAdapterReadOnlyTest {
 		assertAll(
 			() -> assertUnsupported("sample data", () -> adapter.getSampleDataFileName("samples", "Order")),
 			() -> assertUnsupported("sample data", () -> adapter.querySampleDataByClassName("Order", List.of("id"))),
-			() -> assertUnsupported("stored object query", () -> adapter.query(new JSONObject(), "sandbox", "domain", null, new DataRagConfig())),
+			() -> assertUnsupported("sandbox query", () -> adapter.query(new JSONObject(), "sandbox", "domain", null, new DataRagConfig())),
 			() -> assertUnsupported("vector attribute query", () -> adapter.queryVectorAttr(Map.of(), "embedding", "1")),
 			() -> assertUnsupported("sandbox class resolution", () -> adapter.sandboxClassName("sandbox", "Order")),
 			() -> assertUnsupported("sandbox object resolution", () -> adapter.sandboxObjectId("sandbox", "1")));

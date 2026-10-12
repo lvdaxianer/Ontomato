@@ -2,15 +2,25 @@ package io.ontomato.dataengine.dataAdapter;
 
 import java.sql.Connection;
 import java.sql.DriverManager;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.util.List;
 import java.util.Map;
 
 import com.alibaba.fastjson2.JSONArray;
+import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONObject;
+import com.alibaba.fastjson2.JSONWriter.Feature;
 
+import io.ontomato.dataengine.bean.DslExecutionResult;
 import io.ontomato.dataengine.config.DataRagConfig;
 import io.ontomato.dataengine.dao.VectorResourceDao;
+import io.ontomato.dataengine.service.ai.MultiThreadAIChatService;
+import io.ontomato.dataengine.service.sys.bean.permission.UserDataPermission;
+import io.ontomato.dataengine.util.DslUtil;
+import io.ontomato.dataengine.util.HttpRequestUtil;
 
 /**
  * Doris FE adapter. Query compilation and metadata discovery are added in later tasks;
@@ -20,6 +30,7 @@ public class DorisAdapter implements DataAdapter {
 
 	private final DataAdapterConnection connection;
 	private final Map<String, Object> jsonRule;
+	private final DorisSqlCompiler compiler = new DorisSqlCompiler();
 
 	public DorisAdapter(DataAdapterConnection connection, Map<String, Object> jsonRule) {
 		this.connection = connection;
@@ -42,7 +53,43 @@ public class DorisAdapter implements DataAdapter {
 	@Override
 	public String executeDsl(String queryJson, String sessionId, DslExecutionMode mode, List<String> generatedMqls)
 			throws Exception {
-		throw unsupported("DSL query execution");
+		JSONArray dsls = JSONArray.parseArray(queryJson);
+		if (dsls == null || dsls.isEmpty()) {
+			throw new IllegalArgumentException("Doris DSL query must contain one query");
+		}
+		DorisSql compiled = compiler.compile(dsls.getJSONObject(0), jsonRule);
+		generatedMqls.add(compiled.sql());
+		JSONArray data = executeSql(compiled);
+		JSONObject answer = new JSONObject();
+		answer.put("answer", data);
+		answer.put("mqls", generatedMqls);
+		return JSON.toJSONString(JSONArray.of(answer), Feature.WriteMapNullValue);
+	}
+
+	/** Execute one already-compiled SELECT and close every JDBC resource before returning. */
+	private JSONArray executeSql(DorisSql compiled) throws SQLException {
+		try (Connection jdbc = openConnection(); PreparedStatement statement = jdbc.prepareStatement(compiled.sql())) {
+			for (int index = 0; index < compiled.parameters().size(); index++) {
+				statement.setObject(index + 1, compiled.parameters().get(index));
+			}
+			try (ResultSet rows = statement.executeQuery()) {
+				return rowsToJson(rows);
+			}
+		}
+	}
+
+	private JSONArray rowsToJson(ResultSet rows) throws SQLException {
+		JSONArray data = new JSONArray();
+		ResultSetMetaData metadata = rows.getMetaData();
+		int columnCount = metadata.getColumnCount();
+		while (rows.next()) {
+			JSONObject row = new JSONObject();
+			for (int column = 1; column <= columnCount; column++) {
+				row.put(metadata.getColumnLabel(column), rows.getObject(column));
+			}
+			data.add(row);
+		}
+		return data;
 	}
 
 	@Override
@@ -57,12 +104,16 @@ public class DorisAdapter implements DataAdapter {
 
 	@Override
 	public void validateClassNameFormat(String className) {
-		throw unsupported("class validation");
+		if (className == null || !className.matches("[A-Za-z_][A-Za-z0-9_]*")) {
+			throw new IllegalArgumentException("Invalid Doris class name: " + className);
+		}
 	}
 
 	@Override
 	public void validatePrimaryKeyName(String attrName) {
-		throw unsupported("primary-key validation");
+		if (attrName == null || !attrName.matches("[A-Za-z_][A-Za-z0-9_]*")) {
+			throw new IllegalArgumentException("Invalid Doris primary-key name: " + attrName);
+		}
 	}
 
 	@Override
@@ -119,8 +170,30 @@ public class DorisAdapter implements DataAdapter {
 
 	@Override
 	public Map<String, Object> query(JSONObject dsl, String sandboxId, String domainId,
-			VectorResourceDao vectorResourceDao, DataRagConfig dataRagConfig) {
-		throw unsupported("stored object query");
+			VectorResourceDao vectorResourceDao, DataRagConfig dataRagConfig) throws Exception {
+		if (sandboxId != null && !sandboxId.isBlank()) {
+			throw unsupported("sandbox query");
+		}
+		if (jsonRule == null) {
+			throw new IllegalStateException("Doris ontology mapping is required for a query");
+		}
+		JSONArray dsls = JSONArray.of(dsl);
+		@SuppressWarnings("unchecked")
+		List<Map<String, Object>> classDefs = (List<Map<String, Object>>) jsonRule.get("classDef");
+		String dslJson = DslUtil.normalizeClassNames(JSON.toJSONString(dsls, Feature.WriteMapNullValue), classDefs);
+		if (dataRagConfig != null) {
+			dslJson = DslUtil.setConditionTimeColumnToCorrectFormat(dslJson, dataRagConfig.getDslMightTimeFormats(), classDefs);
+		}
+		DslExecutionResult result = HttpRequestUtil.executeDsl(dataRagConfig, this, dslJson, null, true, jsonRule,
+				vectorResourceDao, new UserDataPermission(), DslExecutionMode.OPTIMIZED, domainId)[1];
+		JSONObject data = new JSONObject();
+		if (result.data() != null) {
+			data.putAll(result.data());
+		}
+		if (result.failed()) {
+			data.put("error", MultiThreadAIChatService.rawErrorText(result.failure().cause()));
+		}
+		return data;
 	}
 
 	@Override
