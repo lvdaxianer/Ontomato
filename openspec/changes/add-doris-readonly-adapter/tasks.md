@@ -19,5 +19,14 @@
 
 ## 4. Verification and handoff
 
-- [ ] 4.1 Run module-scoped tests, relevant core/assembly tests, secret scans, and the available strict OpenSpec verification; record pre-existing baseline failures separately.
-- [ ] 4.2 Perform code-review-spec and task-boundary audits, update this checklist with evidence, and commit the task with an English Conventional Commit message.
+- [x] 4.1 Run module-scoped tests, relevant core/assembly tests, secret scans, and the available strict OpenSpec verification; record pre-existing baseline failures separately.
+- [x] 4.2 Perform code-review-spec and task-boundary audits, update this checklist with evidence, and commit the task with an English Conventional Commit message.
+
+## Verification evidence
+
+- `./mvnw -pl packages/data-adapters/doris -am test`: core 186 passed; Doris 15 total, 14 passed and the opt-in FE test skipped because its three environment variables were absent.
+- `./mvnw -pl apps/data-engine -am -Dtest=DataAdapterAssemblyTest -Dsurefire.failIfNoSpecifiedTests=false test`: passed.
+- `node --test scripts/data-engine/build-images.node-test.mjs`: 15 passed.
+- `openspec validate add-doris-readonly-adapter --strict`: passed; `git diff --check`: passed; the changed tree contains no committed credential material.
+- The pre-change baseline had unrelated failures in the stale `DataAdapterAssemblyTest` expectation and `OssAssetLookupAssemblyTest` missing `VectorRetrievalGate`; these were not used as Doris acceptance evidence.
+- No Doris FE server or test credentials were available locally, so real FE SQL/driver compatibility remains an opt-in verification step.
