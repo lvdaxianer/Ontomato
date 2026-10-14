@@ -37,7 +37,8 @@ final class DorisMetadataReader {
 	static JSONObject read(Connection connection, long startNanos) throws SQLException {
 		DatabaseMetaData jdbcMetadata = connection.getMetaData();
 		JSONObject report = new JSONObject();
-		report.put("databaseProduct", jdbcMetadata.getDatabaseProductName());
+		report.put("databaseProduct", "Doris");
+		report.put("jdbcDatabaseProduct", jdbcMetadata.getDatabaseProductName());
 		report.put("databaseVersion", jdbcMetadata.getDatabaseProductVersion());
 		report.put("driverName", jdbcMetadata.getDriverName());
 		report.put("driverVersion", jdbcMetadata.getDriverVersion());

@@ -31,6 +31,7 @@ class DorisMetadataTest {
 		JSONObject report = adapter.testConnection();
 
 		assertEquals("Doris", report.getString("databaseProduct"));
+		assertEquals("MySQL", report.getString("jdbcDatabaseProduct"));
 		assertEquals(List.of("internal"), names(report.getJSONArray("catalogs")));
 		assertEquals(List.of("analytics"), names(report.getJSONArray("databases")));
 		assertEquals(List.of("analytics"), names(report.getJSONArray("schemas")));
@@ -71,7 +72,7 @@ class DorisMetadataTest {
 
 	private Connection connection(List<String> executed) {
 		DatabaseMetaData metadata = proxy(DatabaseMetaData.class, (method, args) -> switch (method.getName()) {
-		case "getDatabaseProductName" -> "Doris";
+		case "getDatabaseProductName" -> "MySQL";
 		case "getDatabaseProductVersion" -> "2.1.7";
 		case "getDriverName" -> "MySQL Connector/J";
 		case "getDriverVersion" -> "9.0.0";
