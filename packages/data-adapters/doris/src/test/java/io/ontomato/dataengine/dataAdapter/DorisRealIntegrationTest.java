@@ -35,7 +35,10 @@ class DorisRealIntegrationTest {
 
 		assertTrue(report.getString("databaseProduct").toLowerCase().contains("doris"), report.toJSONString());
 		JSONArray tables = report.getJSONArray("tables");
-		JSONObject table = tables.stream().map(JSONObject.class::cast).filter(this::queryable).findFirst().orElse(null);
+		String currentDatabase = report.getString("catalog");
+		JSONObject table = tables.stream().map(JSONObject.class::cast)
+				.filter(candidate -> currentDatabase != null && currentDatabase.equals(candidate.getString("schema")))
+				.filter(this::queryable).findFirst().orElse(null);
 		Assumptions.assumeTrue(table != null,
 			"The configured Doris user must expose at least one table or view with a simple column name");
 
