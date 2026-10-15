@@ -27,19 +27,36 @@ public class VectorRetrievalGate {
     private LangService langService;
 
     public static boolean isRebuildNeeded(BusinessConfig businessConfig) {
+        BusinessConfig.EmbeddingModelProperties current = businessConfig.getEmbeddingModelProperties();
+        if (!isUsableEmbeddingConfiguration(current)) {
+            return false;
+        }
         BusinessConfig.EmbeddingVectorSource source = businessConfig.getEmbeddingVectorSource();
         if (source == null) {
             throw new IllegalStateException(
                     "The embeddingVectorSource of this domain is missing; run the upgrade migration first");
         }
-        BusinessConfig.EmbeddingModelProperties current = businessConfig.getEmbeddingModelProperties();
-        if (current == null) {
-            throw new IllegalStateException(
-                    "The embeddingModelProperties of this domain is missing; run the upgrade migration first");
-        }
         return !Objects.equals(source.getBaseUrl(), current.getBaseUrl())
                 || !Objects.equals(source.getModelName(), current.getModelName())
                 || !Objects.equals(source.getDimensions(), current.getDimensions());
+    }
+
+    /**
+     * Checks whether the saved embedding settings are sufficient for vector operations.
+     *
+     * @param current saved embedding model settings, possibly incomplete during initial setup
+     * @return whether the settings contain the required connection, model, and dimension fields
+     * @author lvdaxianer@yeah.net
+     * @date 2026-10-15
+     */
+    private static boolean isUsableEmbeddingConfiguration(BusinessConfig.EmbeddingModelProperties current) {
+        return current != null
+                && current.getBaseUrl() != null
+                && !current.getBaseUrl().isBlank()
+                && current.getModelName() != null
+                && !current.getModelName().isBlank()
+                && current.getDimensions() != null
+                && current.getDimensions() > 0;
     }
 
     /**

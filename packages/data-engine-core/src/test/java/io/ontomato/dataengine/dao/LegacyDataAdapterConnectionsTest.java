@@ -89,7 +89,7 @@ class LegacyDataAdapterConnectionsTest {
 	void theDaoWritesTheMigratedRecordBackAndBindsIt() {
 		JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
 		when(jdbcTemplate.queryForObject(anyString(), eq(String.class), eq("d1"))).thenReturn(
-				"{\"models\":[],\"dataAdapter\":\"mysql\",\"mysqlDataAdapterProperties\":{\"mysqlUrl\":\"jdbc:mysql\",\"mysqlUser\":\"u\",\"mysqlPassword\":\"p\"}}");
+				"{\"models\":[],\"embeddingVectorSource\":{},\"dataAdapter\":\"mysql\",\"mysqlDataAdapterProperties\":{\"mysqlUrl\":\"jdbc:mysql\",\"mysqlUser\":\"u\",\"mysqlPassword\":\"p\"}}");
 		BusinessConfigDao dao = new BusinessConfigDao();
 		ReflectionTestUtils.setField(dao, "jdbcTemplate", jdbcTemplate);
 
@@ -108,7 +108,7 @@ class LegacyDataAdapterConnectionsTest {
 	void theDaoDoesNotWriteANewFormatRecord() {
 		JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
 		when(jdbcTemplate.queryForObject(anyString(), eq(String.class), eq("d1"))).thenReturn(
-				"{\"models\":[],\"dataAdapter\":\"postgresql\",\"dataAdapterConnections\":{}}");
+				"{\"models\":[],\"embeddingVectorSource\":{},\"dataAdapter\":\"postgresql\",\"dataAdapterConnections\":{}}");
 		BusinessConfigDao dao = new BusinessConfigDao();
 		ReflectionTestUtils.setField(dao, "jdbcTemplate", jdbcTemplate);
 
