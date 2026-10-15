@@ -1,0 +1,2 @@
+- [x] T1: Add persisted-config migration and retrieval-gate behavior
+- [x] T2: Run focused and broader data-engine verification

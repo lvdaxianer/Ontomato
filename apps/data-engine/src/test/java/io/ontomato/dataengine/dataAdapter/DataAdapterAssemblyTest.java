@@ -14,7 +14,6 @@ import io.ontomato.dataengine.config.DataRagConfig;
 class DataAdapterAssemblyTest {
 
 	@Test
-<<<<<<< HEAD
 	void theOpenSourceEditionInstallsConfiguredSqlAdapters() {
 		try (AnnotationConfigApplicationContext ctx = new AnnotationConfigApplicationContext()) {
 			ctx.register(DataRagConfig.class);

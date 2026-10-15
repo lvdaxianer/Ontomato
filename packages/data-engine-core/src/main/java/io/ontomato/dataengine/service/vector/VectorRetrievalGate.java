@@ -1,5 +1,6 @@
 package io.ontomato.dataengine.service.vector;
 
+import java.util.Objects;
 import java.util.function.Supplier;
 
 import org.springframework.beans.factory.annotation.Autowired;
@@ -72,6 +73,35 @@ public class VectorRetrievalGate {
         return recorded.sameGeneration(current)
                 ? VectorRebuildState.of(current, VectorRebuildState.Status.READY, true)
                 : VectorRebuildState.of(current, VectorRebuildState.Status.PENDING, false);
+    }
+
+    /**
+     * Checks whether the saved vector source differs from the current embedding configuration.
+     * Incomplete embedding settings are not actionable during initial setup.
+     */
+    public static boolean isRebuildNeeded(BusinessConfig businessConfig) {
+        BusinessConfig.EmbeddingModelProperties current = businessConfig.getEmbeddingModelProperties();
+        if (!isUsableEmbeddingConfiguration(current)) {
+            return false;
+        }
+        BusinessConfig.EmbeddingVectorSource source = businessConfig.getEmbeddingVectorSource();
+        if (source == null) {
+            throw new IllegalStateException(
+                    "The embeddingVectorSource of this domain is missing; run the upgrade migration first");
+        }
+        return !Objects.equals(source.getBaseUrl(), current.getBaseUrl())
+                || !Objects.equals(source.getModelName(), current.getModelName())
+                || !Objects.equals(source.getDimensions(), current.getDimensions());
+    }
+
+    private static boolean isUsableEmbeddingConfiguration(BusinessConfig.EmbeddingModelProperties current) {
+        return current != null
+                && current.getBaseUrl() != null
+                && !current.getBaseUrl().isBlank()
+                && current.getModelName() != null
+                && !current.getModelName().isBlank()
+                && current.getDimensions() != null
+                && current.getDimensions() > 0;
     }
 
     /**
