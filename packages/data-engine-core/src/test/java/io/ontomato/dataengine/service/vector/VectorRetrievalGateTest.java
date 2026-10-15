@@ -59,6 +59,15 @@ class VectorRetrievalGateTest {
         assertFalse(VectorRetrievalGate.isRebuildNeeded(config("http://emb/v1", "m1", 2048, 2048)));
     }
 
+    /** A migrated empty source must force a rebuild once the embedding model is usable. */
+    @Test
+    void emptyVectorSourceNeedsARebuildWhenEmbeddingIsConfigured() {
+        BusinessConfig businessConfig = config("http://emb/v1", "m1", 2048, 2048);
+        businessConfig.setEmbeddingVectorSource(new BusinessConfig.EmbeddingVectorSource());
+
+        assertTrue(VectorRetrievalGate.isRebuildNeeded(businessConfig));
+    }
+
     @Test
     void missingVectorSourceFailsExplicitly() {
         BusinessConfig businessConfig = config("http://emb/v1", "m1", 2048, 2048);
@@ -69,14 +78,22 @@ class VectorRetrievalGateTest {
         assertTrue(error.getMessage().contains("embeddingVectorSource"), error.getMessage());
     }
 
+    /** An absent current embedding configuration must not block settings-page initialization. */
     @Test
-    void missingEmbeddingConfigurationFailsExplicitly() {
+    void missingEmbeddingConfigurationDoesNotNeedARebuild() {
         BusinessConfig businessConfig = config("http://emb/v1", "m1", 2048, 2048);
         businessConfig.setEmbeddingModelProperties(null);
 
-        IllegalStateException error = assertThrows(IllegalStateException.class,
-                () -> VectorRetrievalGate.isRebuildNeeded(businessConfig));
-        assertTrue(error.getMessage().contains("embeddingModelProperties"), error.getMessage());
+        assertFalse(VectorRetrievalGate.isRebuildNeeded(businessConfig));
+    }
+
+    /** A partial embedding configuration is not actionable and therefore needs no rebuild. */
+    @Test
+    void incompleteEmbeddingConfigurationDoesNotNeedARebuild() {
+        BusinessConfig businessConfig = config("http://emb/v1", "m1", 2048, 2048);
+        businessConfig.getEmbeddingModelProperties().setDimensions(null);
+
+        assertFalse(VectorRetrievalGate.isRebuildNeeded(businessConfig));
     }
 
     @Test

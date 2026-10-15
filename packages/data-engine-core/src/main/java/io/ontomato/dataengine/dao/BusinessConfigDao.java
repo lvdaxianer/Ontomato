@@ -45,34 +45,76 @@ public class BusinessConfigDao {
 
 	public BusinessConfig query(String domainId) {
 		try {
-			String content = jdbcTemplate.queryForObject(
-					"SELECT content FROM " + TABLE_NAME + " WHERE id = ?",
-					String.class, domainId);
-			if (content == null) {
-				return null;
-			}
-			JSONObject stored = JSON.parseObject(content, JSONReader.Feature.DisableReferenceDetect);
-			if (stored == null) {
-				return null;
-			}
-			if (!stored.containsKey("models")) {
-				throw new IllegalStateException(
-						"business_config record is in the old format; run the upgrade migration first (domainId=" + domainId + ")");
-			}
-			rejectLegacyShapes(stored, domainId);
-			if (LegacyDataAdapterConnections.migrate(stored)) {
-				content = JSON.toJSONString(stored, Feature.WriteMapNullValue);
-				jdbcTemplate.update("UPDATE " + TABLE_NAME + " SET content = ? WHERE id = ?", content, domainId);
-				log.info("business_config data adapter connections migrated (domainId={})", domainId);
-			}
-			return JSON.parseObject(
-					content, BusinessConfig.class, JSONReader.Feature.DisableReferenceDetect);
+			return queryPersisted(domainId, 0);
 		} catch (org.springframework.dao.EmptyResultDataAccessException e) {
 			return null;
-		} catch (RuntimeException e) {
-			log.error("Failed to read BusinessConfig from PostgreSQL", e);
-			throw e;
 		}
+	}
+
+	/**
+	 * Reads and, when necessary, conditionally migrates one persisted domain configuration.
+	 *
+	 * @param domainId domain whose configuration is being read
+	 * @param retryCount number of compare-and-set retries already attempted
+	 * @return persisted business configuration, or null when no row exists
+	 * @author lvdaxianer@yeah.net
+	 * @date 2026-10-15
+	 */
+	private BusinessConfig queryPersisted(String domainId, int retryCount) {
+		String content = jdbcTemplate.queryForObject(
+				"SELECT content FROM " + TABLE_NAME + " WHERE id = ?",
+				String.class, domainId);
+		if (content == null) {
+			return null;
+		}
+		JSONObject stored = JSON.parseObject(content, JSONReader.Feature.DisableReferenceDetect);
+		if (stored == null) {
+			return null;
+		}
+		if (!stored.containsKey("models")) {
+			throw new IllegalStateException(
+					"business_config record is in the old format; run the upgrade migration first (domainId=" + domainId + ")");
+		}
+		rejectLegacyShapes(stored, domainId);
+		boolean dataAdapterConnectionsMigrated = LegacyDataAdapterConnections.migrate(stored);
+		boolean embeddingVectorSourceMigrated = migrateEmbeddingVectorSource(stored);
+		if (dataAdapterConnectionsMigrated || embeddingVectorSourceMigrated) {
+			String migratedContent = JSON.toJSONString(stored, Feature.WriteMapNullValue);
+			if (embeddingVectorSourceMigrated) {
+				int updated = jdbcTemplate.update("UPDATE " + TABLE_NAME + " SET content = ? WHERE id = ? AND content = ?",
+						migratedContent, domainId, content);
+				if (updated == 0) {
+					if (retryCount >= 1) {
+						throw new IllegalStateException("business_config changed concurrently; retry the request (domainId=" + domainId + ")");
+					}
+					return queryPersisted(domainId, retryCount + 1);
+				}
+			} else {
+				jdbcTemplate.update("UPDATE " + TABLE_NAME + " SET content = ? WHERE id = ?", migratedContent, domainId);
+			}
+			content = migratedContent;
+			if (dataAdapterConnectionsMigrated) {
+				log.info("business_config data adapter connections migrated (domainId={})", domainId);
+			}
+		}
+		return JSON.parseObject(content, BusinessConfig.class, JSONReader.Feature.DisableReferenceDetect);
+	}
+
+	/**
+	 * Mark a legacy domain's vector source as unknown so a configured embedding model requires an
+	 * explicit rebuild. The migration never invents the model URL, name, or dimensions.
+	 *
+	 * @param stored persisted business configuration JSON
+	 * @return whether the JSON was changed
+	 * @author lvdaxianer@yeah.net
+	 * @date 2026-10-15
+	 */
+	static boolean migrateEmbeddingVectorSource(JSONObject stored) {
+		if (stored.get("embeddingVectorSource") != null) {
+			return false;
+		}
+		stored.put("embeddingVectorSource", new JSONObject());
+		return true;
 	}
 
 	private static final Set<String> LEGACY_ROLE_KEYS = Set.of(
