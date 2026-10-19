@@ -33,7 +33,8 @@ import io.ontomato.dataengine.config.multisource.RelationshipRoute;
  * <p>Neo4j traverses the edge name the DSL carries, so this is where a relationship whose ontology name
  * differs from its physical edge name has to be rewritten before the element is handed over. The test
  * pins that rewrite against a real instance: the ontology name does not exist as an edge type, and only a
- * correct rewrite makes the traversal find it.</p>
+ * correct rewrite makes the traversal find it. Writes go through the same translation, so an edge written
+ * through the multi adapter under the ontology name is stored under the physical name and read back.</p>
  *
  * <p>Provisioning mirrors {@code Neo4jAdapterTest}: Testcontainers when Docker is available, an external
  * URL through {@code ONTOMATO_TEST_NEO4J_URL} otherwise, and a skip (not a failure) when neither is.</p>
@@ -162,7 +163,7 @@ class MultiDataSourceNeo4jTest {
 		DataSourceEntry entry = new DataSourceEntry();
 		entry.setId(id);
 		entry.setAdapterType("neo4j");
-		entry.setConnectionRef(id);
+		entry.setConnection(connection());
 		entry.setLabel(id);
 		return entry;
 	}
@@ -171,7 +172,6 @@ class MultiDataSourceNeo4jTest {
 	private MultiDataSourceAdapter multiWithPhysicalEdge() {
 		BusinessConfig businessConfig = new BusinessConfig();
 		businessConfig.setDataAdapter("multi");
-		businessConfig.getDataAdapterConnections().put("gph", connection());
 		MultiDataSourceDefinition definition = new MultiDataSourceDefinition();
 		definition.getDataSources().add(source("gph"));
 		ClassRoute person = new ClassRoute();
@@ -184,7 +184,6 @@ class MultiDataSourceNeo4jTest {
 		definition.getClasses().add(org);
 		RelationshipRoute relationship = new RelationshipRoute();
 		relationship.setForOntoMap(ONTOLOGY_RELATION);
-		relationship.setSourceId("gph");
 		relationship.setRealEdge(PHYSICAL_EDGE);
 		definition.getRelationships().add(relationship);
 		businessConfig.setMultiDataSource(definition);
@@ -224,5 +223,32 @@ class MultiDataSourceNeo4jTest {
 
 		assertEquals(1, rows.size());
 		assertEquals("alice", rows.get(0).getString("name"));
+	}
+
+	/** An edge written through the multi adapter lands under the physical name, where the read path looks. */
+	@Test
+	void anEdgeWrittenThroughTheMultiAdapterIsReadBackThroughIt() throws Exception {
+		try (Driver driver = GraphDatabase.driver(url, AuthTokens.basic(user, password));
+				Session session = driver.session()) {
+			session.run("CREATE (:" + PERSON + " {id:'3', name:'bob'})");
+		}
+		MultiDataSourceAdapter multi = multiWithPhysicalEdge();
+		try {
+			multi.createEdge(null, ONTOLOGY_RELATION, PERSON, "3", ORG, "2");
+
+			List<String> names = new ArrayList<>();
+			rowsOf(multi.executeDsl(dsl(ONTOLOGY_RELATION), "s", null, new ArrayList<>()))
+					.forEach(row -> names.add(((JSONObject) row).getString("name")));
+			assertTrue(names.contains("bob"), names.toString());
+			assertTrue(rowsOf(new Neo4jAdapter(connection(), jsonRule())
+					.executeDsl(dsl(ONTOLOGY_RELATION), "s", null, new ArrayList<>())).isEmpty(),
+					"no edge may be stored under the ontology name");
+		} finally {
+			multi.deleteEdge(null, ONTOLOGY_RELATION, PERSON, "3", ORG, "2");
+		}
+		List<String> afterDelete = new ArrayList<>();
+		rowsOf(multi.executeDsl(dsl(ONTOLOGY_RELATION), "s", null, new ArrayList<>()))
+				.forEach(row -> afterDelete.add(((JSONObject) row).getString("name")));
+		assertEquals(List.of("alice"), afterDelete);
 	}
 }

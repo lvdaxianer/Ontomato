@@ -148,7 +148,7 @@ public class EnvServiceImpl implements EnvService {
 				namespace = null;
 			}
 			BusinessConfig businessConfig = businessConfigService.get(domainId);
-			DataAdapter adapter = dataAdapterRegistry.create(businessConfig, null);
+			DataAdapter adapter = dataAdapterRegistry.create(businessConfig, jsonRule);
 			adapter.truncateNamespace(namespace);
 			adapter.dropNamespace(namespace);
 			adapter.createNamespace(namespace);

@@ -27,11 +27,16 @@ import io.ontomato.dataengine.config.ModelConfig;
 import io.ontomato.dataengine.config.ModelResolver;
 import io.ontomato.dataengine.core.bean.User;
 import io.ontomato.dataengine.config.CustomRequestParameters;
+import io.ontomato.dataengine.config.multisource.DataSourceEntry;
+import io.ontomato.dataengine.config.multisource.MultiDataSourceDefinition;
+import io.ontomato.dataengine.dataAdapter.ConfigurationProblem;
 import io.ontomato.dataengine.dataAdapter.DataAdapter;
 import io.ontomato.dataengine.dataAdapter.DataAdapterConnection;
 import io.ontomato.dataengine.dataAdapter.DataAdapterConnectionTester;
 import io.ontomato.dataengine.dataAdapter.DataAdapterProvider;
 import io.ontomato.dataengine.dataAdapter.DataAdapterRegistry;
+import io.ontomato.dataengine.dataAdapter.MultiDataSourceValidator;
+import io.ontomato.dataengine.service.AdminService;
 import io.ontomato.dataengine.service.BusinessConfigService;
 import io.ontomato.dataengine.service.LangService;
 import io.ontomato.dataengine.service.ai.EmbeddingService;
@@ -45,6 +50,8 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 @RestController
 public class BusinessConfigController {
+
+	private static final String MULTI = "multi";
 
 	@Autowired
 	private BusinessConfigService businessConfigService;
@@ -63,6 +70,9 @@ public class BusinessConfigController {
 	
 	@Autowired
 	private DataAdapterRegistry dataAdapterRegistry;
+
+	@Autowired
+	private AdminService adminService;
 	
 	@PostMapping("/businessConfig/testModel")
     @ResponseBody
@@ -488,11 +498,58 @@ public class BusinessConfigController {
     	try {
     		User user = SystemUtils.getCurUser();
     		DataAdapterProvider provider = dataAdapterRegistry.provider(input.getString("type"));
+    		if (MULTI.equals(provider.type())) {
+    			throw new IllegalArgumentException("The multi data adapter is saved through /businessConfig/useMultiDataSource");
+    		}
     		BusinessConfig businessConfig = businessConfigService.get(user.getDomainId());
     		businessConfig.getDataAdapterConnections().put(provider.type(), connectionOf(provider, input));
     		businessConfig.setDataAdapter(provider.type());
     		businessConfigService.set(businessConfig, user.getDomainId());
     		ret.put("success", true);
+    	} catch (Exception e) {
+    		log.error(e.getMessage(), e);
+    		ret.put("success", false);
+    		ret.put("message", e.getMessage());
+    	}
+		return ret;
+	}
+
+	/**
+	 * Switch the current domain to the multi data adapter with the given definition.
+	 *
+	 * <p>The definition is checked on its own and against the domain's ontomap under the multi adapter's
+	 * rules; nothing is saved unless both pass, and a failure lists every located problem. Each source keeps
+	 * only the connection fields its type declares. The single-source connections are left untouched.</p>
+	 */
+	@PostMapping("/businessConfig/useMultiDataSource")
+    @ResponseBody
+    public JSONObject useMultiDataSource(@RequestBody JSONObject input) {
+    	JSONObject ret = new JSONObject();
+    	try {
+    		User user = SystemUtils.getCurUser();
+    		MultiDataSourceDefinition definition = input.to(MultiDataSourceDefinition.class);
+    		List<ConfigurationProblem> problems = MultiDataSourceValidator.problems(definition, dataAdapterRegistry);
+    		if (problems.isEmpty()) {
+    			for (DataSourceEntry source : definition.getDataSources()) {
+    				DataAdapterConnection given = source.getConnection();
+    				source.setConnection(connectionOf(dataAdapterRegistry.provider(source.getAdapterType()),
+    						given == null ? new JSONObject() : JSONObject.from(given)));
+    			}
+    			BusinessConfig businessConfig = businessConfigService.get(user.getDomainId());
+    			businessConfig.setMultiDataSource(definition);
+    			businessConfig.setDataAdapter(MULTI);
+    			Map<String, Object> jsonRule = adminService.getJSONRule(user.getDomainId());
+    			problems = dataAdapterRegistry.create(businessConfig, jsonRule).validateOntoMap(jsonRule);
+    			if (problems.isEmpty()) {
+    				businessConfigService.set(businessConfig, user.getDomainId());
+    				ret.put("success", true);
+    				return ret;
+    			}
+    		}
+    		ret.put("success", false);
+    		ret.put("message", "Invalid multi-source configuration: "
+    				+ String.join("; ", problems.stream().map(ConfigurationProblem::detail).toList()));
+    		ret.put("data", JSONObject.of("problems", problems));
     	} catch (Exception e) {
     		log.error(e.getMessage(), e);
     		ret.put("success", false);
