@@ -118,4 +118,19 @@ public interface DataAdapter {
 	 */
 	public String sandboxObjectId(String sandboxId, String objectId);
 
+	/**
+	 * Report the problems this adapter finds in a domain's ontomap under its own routing rules.
+	 *
+	 * <p>The default returns none: a single-source adapter can honour every relationship its ontomap
+	 * declares. An adapter that constrains the ontomap (the multi-source adapter, whose cross-source
+	 * relationships are not a graph query) returns the located problems, so the management layer can
+	 * report them without knowing any adapter's constraints, and a later adapter switch re-applies the
+	 * new adapter's rules to the existing ontomap.</p>
+	 *
+	 * @param jsonRule the domain's ontomap ({@code classDef} / {@code relationship_rule}); may be null
+	 */
+	default List<OntoMapViolation> validateOntoMap(Map<String, Object> jsonRule) {
+		return List.of();
+	}
+
 }

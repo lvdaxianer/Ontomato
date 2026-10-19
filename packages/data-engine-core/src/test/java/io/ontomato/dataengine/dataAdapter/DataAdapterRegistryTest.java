@@ -10,6 +10,7 @@ import java.util.List;
 import java.util.Map;
 
 import org.junit.jupiter.api.Test;
+import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 
 import io.ontomato.dataengine.config.BusinessConfig;
 import io.ontomato.dataengine.config.DataRagConfig;
@@ -17,6 +18,21 @@ import io.ontomato.dataengine.config.DataRagConfig;
 class DataAdapterRegistryTest {
 
 	private static final List<String> SQL_FIELDS = List.of("url", "user", "password");
+
+	@Test
+	void multiSourceProviderStartsWithoutCircularReferences() {
+		try (AnnotationConfigApplicationContext context = new AnnotationConfigApplicationContext()) {
+			context.getDefaultListableBeanFactory().setAllowCircularReferences(false);
+			context.registerBean(DataRagConfig.class, DataRagConfig::new);
+			context.register(DataAdapterRegistry.class, MultiDataSourceAdapterProvider.class);
+			context.refresh();
+
+			DataAdapterRegistry registry = context.getBean(DataAdapterRegistry.class);
+			MultiDataSourceAdapterProvider multi = context.getBean(MultiDataSourceAdapterProvider.class);
+			assertSame(multi, registry.provider("multi"));
+			assertSame(multi, multi.registry.provider("multi"));
+		}
+	}
 
 	@Test
 	void aDuplicateTypeFailsStartup() {
