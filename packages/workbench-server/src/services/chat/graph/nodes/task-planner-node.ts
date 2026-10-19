@@ -335,7 +335,7 @@ export async function taskPlannerNode(state: GraphState, config?: any): Promise<
     });
 
     const messages = buildTaskPlannerPromptMessages({
-      systemPrompt: prompt,
+      systemPrompt: prompt + '\nThe query agent supports generating downloadable PowerPoint files from the entire conversation, including tables, charts and explanations, via the generate-ppt Skill. For a request to generate/export a PPT, return status "reply", replyKind "generate_ppt", replyInstruction "Generate a PPT from the whole conversation" in the same JSON envelope. Do not treat PPT generation as out of scope. For capability questions, mention this capability. Conversation PPT generation uses default options.',
       currentUserContent: state.userQuestion,
       priorMessages,
     });
