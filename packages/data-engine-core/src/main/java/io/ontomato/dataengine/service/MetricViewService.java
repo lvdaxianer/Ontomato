@@ -25,6 +25,10 @@ public interface MetricViewService {
 	public List<MetricView> queryList(String type, String status, String functionId, String className, String domainId);
 	
 	public List<MetricView> find(String question, String className, String domainId);
+
+	public byte[] exportMetricViews(String lang) throws Exception;
+
+	public JSONObject importMetricViews(byte[] zipData, String lang) throws Exception;
 	
 	public MetricViewContent test(MetricView metricView, String lang, User user, UserDataPermission permission, int timeoutMinutes) throws Exception;
 	
