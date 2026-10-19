@@ -903,4 +903,30 @@ class MultiDataSourceAdapterTest {
 
 		assertEquals(1, problems.size(), problems.toString());
 	}
+
+	@Test
+	void reportsADefinitionWithoutDataSources() {
+		List<ConfigurationProblem> problems = MultiDataSourceValidator.problems(new MultiDataSourceDefinition(),
+				new DataAdapterRegistry(providers, dataRagConfig));
+
+		assertEquals(List.of("dataSources"), problems.stream().map(ConfigurationProblem::path).toList(), problems.toString());
+	}
+
+	/** Entries with no name are told apart by position, so two of them never share one locator. */
+	@Test
+	void locatesUnnamedEntriesByPosition() {
+		providers.add(new RecordingProvider("postgresql"));
+		MultiDataSourceDefinition definition = new MultiDataSourceDefinition();
+		definition.getDataSources().add(source("crm", "postgresql"));
+		definition.getDataSources().add(source(" ", "postgresql"));
+		definition.getDataSources().add(source(null, "postgresql"));
+		definition.getClasses().add(classRoute("", "crm"));
+		definition.getRelationships().add(physicalEdge(null, "KNOWS"));
+
+		List<ConfigurationProblem> problems = MultiDataSourceValidator.problems(definition,
+				new DataAdapterRegistry(providers, dataRagConfig));
+
+		assertEquals(List.of("dataSources[#2]", "dataSources[#3]", "classes[#1]", "relationships[#1]"),
+				problems.stream().map(ConfigurationProblem::path).toList(), problems.toString());
+	}
 }

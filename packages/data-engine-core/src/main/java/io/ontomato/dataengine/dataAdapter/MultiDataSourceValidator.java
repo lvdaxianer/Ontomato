@@ -35,9 +35,10 @@ public final class MultiDataSourceValidator {
 		if (definition.getDataSources().isEmpty()) {
 			problems.add(new ConfigurationProblem("dataSources", "no data sources are configured"));
 		}
-		for (DataSourceEntry source : definition.getDataSources()) {
+		for (int i = 0; i < definition.getDataSources().size(); i++) {
+			DataSourceEntry source = definition.getDataSources().get(i);
 			if (source.getId() == null || source.getId().isBlank()) {
-				problems.add(new ConfigurationProblem("dataSources[]", "a data source has no id"));
+				problems.add(new ConfigurationProblem(positionPath("dataSources", i), "data source #" + (i + 1) + " has no id"));
 				continue;
 			}
 			String path = "dataSources[" + source.getId() + "]";
@@ -57,10 +58,11 @@ public final class MultiDataSourceValidator {
 		}
 
 		Set<String> classNames = new HashSet<>();
-		for (ClassRoute route : definition.getClasses()) {
+		for (int i = 0; i < definition.getClasses().size(); i++) {
+			ClassRoute route = definition.getClasses().get(i);
 			String key = DataSourceRouter.key(route.getForOntoMap());
-			if (key == null) {
-				problems.add(new ConfigurationProblem("classes[]", "a class route has no class"));
+			if (key == null || key.isEmpty()) {
+				problems.add(new ConfigurationProblem(positionPath("classes", i), "class route #" + (i + 1) + " has no class"));
 				continue;
 			}
 			String path = "classes[" + route.getForOntoMap() + "]";
@@ -74,10 +76,12 @@ public final class MultiDataSourceValidator {
 		}
 
 		Set<String> relationshipNames = new HashSet<>();
-		for (RelationshipRoute route : definition.getRelationships()) {
+		for (int i = 0; i < definition.getRelationships().size(); i++) {
+			RelationshipRoute route = definition.getRelationships().get(i);
 			String key = DataSourceRouter.key(route.getForOntoMap());
-			if (key == null) {
-				problems.add(new ConfigurationProblem("relationships[]", "a relationship route has no relationship"));
+			if (key == null || key.isEmpty()) {
+				problems.add(new ConfigurationProblem(positionPath("relationships", i),
+						"relationship route #" + (i + 1) + " has no relationship"));
 				continue;
 			}
 			if (!relationshipNames.add(key)) {
@@ -86,6 +90,11 @@ public final class MultiDataSourceValidator {
 			}
 		}
 		return problems;
+	}
+
+	/** An entry with no name is located by its 1-based position, e.g. {@code dataSources[#2]}. */
+	private static String positionPath(String list, int index) {
+		return list + "[#" + (index + 1) + "]";
 	}
 
 	/** @throws IllegalArgumentException when {@link #problems} finds any */
