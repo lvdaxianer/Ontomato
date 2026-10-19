@@ -34,6 +34,10 @@ public class DataAdapterRegistry {
 		return provider;
 	}
 
+	public boolean isInstalled(String type) {
+		return providers.containsKey(type);
+	}
+
 	/** The adapter of the business config's current type, with that type's saved connection. */
 	public DataAdapter create(BusinessConfig businessConfig, Map<String, Object> jsonRule) {
 		String type = businessConfig.getDataAdapter();

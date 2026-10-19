@@ -3,28 +3,20 @@ package io.ontomato.dataengine.config.multisource;
 import lombok.Data;
 
 /**
- * Routes one ontology relationship type to one data source.
+ * The physical edge name of one ontology relationship inside its data source.
  *
- * <p>A route is only <em>needed</em> for a native-graph source whose physical edge name differs from
- * the ontology name, or when two graph sources would otherwise expose the same edge name. For a
- * relational source the join is already expressed by the {@code fromField}/{@code toField} of the
- * relationship definition in the ontomap, so nothing has to be repeated here.</p>
- *
- * <p>Because {@code fromClass}/{@code toClass} are unique class routes, a relationship whose two ends
- * land in different sources cannot be honoured — that is a cross-source graph query and is rejected.</p>
+ * <p>Ontology relationship names are unique across the whole domain, while two databases may each
+ * hold an edge of the same physical name (both graphs have {@code KNOWS}); the ontology then has to
+ * name them apart ({@code knows_a}, {@code knows_b}) and this route maps each back to its physical
+ * name. The source a relationship lives in is not configured here: it is the source of its endpoint
+ * classes, so that fact has one owner.</p>
  */
 @Data
 public class RelationshipRoute {
 
-	/** The ontology relationship name, globally unique across sources. */
+	/** The ontology relationship name, unique across routes. */
 	private String forOntoMap;
 
-	/** The {@link DataSourceEntry#getId()} this relationship lives in. */
-	private String sourceId;
-
-	/**
-	 * The physical edge name to use inside a native-graph source, when it differs from
-	 * {@link #forOntoMap} or collides with another graph source's edge name. Ignored by non-graph sources.
-	 */
+	/** The physical edge name inside the relationship's source; blank means the ontology name itself. */
 	private String realEdge;
 }

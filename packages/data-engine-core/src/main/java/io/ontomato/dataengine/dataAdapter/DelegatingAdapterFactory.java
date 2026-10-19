@@ -2,42 +2,30 @@ package io.ontomato.dataengine.dataAdapter;
 
 import java.util.Map;
 
-import io.ontomato.dataengine.config.BusinessConfig;
 import io.ontomato.dataengine.config.DataRagConfig;
 import io.ontomato.dataengine.config.multisource.DataSourceEntry;
 
 /**
  * Builds the delegate adapter of one configured source on demand.
  *
- * <p>Delegates are deliberately not cached across calls. An adapter is a thin holder of
- * {@code (connection, jsonRule)}, and different call paths hand the same source different jsonRules
- * (the sandbox write path passes none at all) — so a cache keyed on the source id would eventually
+ * <p>A delegate is the ordinary adapter of the source's type, built over the source's own connection;
+ * two sources of one type are two instances of the same implementation. Delegates are deliberately not
+ * cached across calls: an adapter is a thin holder of {@code (connection, jsonRule)}, and different call
+ * paths hand the same source different jsonRules, so a cache keyed on the source id would eventually
  * serve a stale ontomap. Building is cheap, so it happens per call.</p>
  */
 public class DelegatingAdapterFactory {
 
 	private final DataAdapterRegistry registry;
 	private final DataRagConfig dataRagConfig;
-	private final BusinessConfig businessConfig;
 
-	public DelegatingAdapterFactory(DataAdapterRegistry registry, DataRagConfig dataRagConfig,
-			BusinessConfig businessConfig) {
+	public DelegatingAdapterFactory(DataAdapterRegistry registry, DataRagConfig dataRagConfig) {
 		this.registry = registry;
 		this.dataRagConfig = dataRagConfig;
-		this.businessConfig = businessConfig;
 	}
 
-	/** The delegate of one source, wired to the given jsonRule (which may be null, as on the write path). */
+	/** The delegate of one validated source, wired to the given jsonRule (the source's own view of the ontomap). */
 	public DataAdapter create(DataSourceEntry source, Map<String, Object> jsonRule) {
-		if (source == null) {
-			throw new IllegalArgumentException("Unknown data source");
-		}
-		DataAdapterProvider provider = registry.provider(source.getAdapterType());
-		if ("multi".equals(provider.type())) {
-			throw new IllegalArgumentException("A data source may not nest another multi source: " + source.getId());
-		}
-		DataAdapterConnection connection = businessConfig.getDataAdapterConnections()
-				.getOrDefault(source.effectiveConnectionRef(), new DataAdapterConnection());
-		return provider.create(connection, dataRagConfig, jsonRule);
+		return registry.provider(source.getAdapterType()).create(source.getConnection(), dataRagConfig, jsonRule);
 	}
 }

@@ -10,7 +10,6 @@ import java.sql.DriverManager;
 import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -102,16 +101,14 @@ class MultiDataSourceDuckDbTest {
 		return JSON.parseArray(result).getJSONObject(0).getJSONArray("answer");
 	}
 
-	/** A multi adapter over the given sources, each wired to the real DuckDB file in {@code connections}. */
-	private MultiDataSourceAdapter multi(JSONObject jsonRule, List<DataSourceEntry> sources, List<ClassRoute> routes,
-			Map<String, String> connections) {
+	/** A multi adapter over the given sources, each wired to its own real DuckDB file. */
+	private MultiDataSourceAdapter multi(JSONObject jsonRule, List<DataSourceEntry> sources, List<ClassRoute> routes) {
 		BusinessConfig businessConfig = new BusinessConfig();
 		businessConfig.setDataAdapter("multi");
 		MultiDataSourceDefinition definition = new MultiDataSourceDefinition();
 		definition.getDataSources().addAll(sources);
 		definition.getClasses().addAll(routes);
 		businessConfig.setMultiDataSource(definition);
-		connections.forEach((id, url) -> businessConfig.getDataAdapterConnections().put(id, connection(url)));
 		DataAdapterRegistry registry = new DataAdapterRegistry(List.of(new DuckDBAdapterProvider()), new DataRagConfig());
 		return new MultiDataSourceAdapter(registry, businessConfig, new DataRagConfig(), jsonRule);
 	}
@@ -120,7 +117,7 @@ class MultiDataSourceDuckDbTest {
 		DataSourceEntry entry = new DataSourceEntry();
 		entry.setId(id);
 		entry.setAdapterType("duckdb");
-		entry.setConnectionRef(id);
+		entry.setConnection(connection(url));
 		entry.setLabel(id);
 		return entry;
 	}
@@ -142,8 +139,7 @@ class MultiDataSourceDuckDbTest {
 		JSONObject jsonRule = jsonRule("person");
 
 		DataAdapter direct = new DuckDBAdapter(connection(url), jsonRule);
-		MultiDataSourceAdapter wrapped = multi(jsonRule, List.of(source("crm", url)), List.of(route("person", "crm")),
-				Map.of("crm", url));
+		MultiDataSourceAdapter wrapped = multi(jsonRule, List.of(source("crm", url)), List.of(route("person", "crm")));
 
 		String directResult = direct.executeDsl(dsl("person"), "s", null, new ArrayList<>());
 		String wrappedResult = wrapped.executeDsl(dsl("person"), "s", null, new ArrayList<>());
@@ -170,8 +166,6 @@ class MultiDataSourceDuckDbTest {
 		definition.getClasses().add(route("person", "crm"));
 		definition.getClasses().add(route("invoice", "erp"));
 		businessConfig.setMultiDataSource(definition);
-		businessConfig.getDataAdapterConnections().put("crm", connection(crmUrl));
-		businessConfig.getDataAdapterConnections().put("erp", connection(erpUrl));
 		DataAdapterRegistry registry = new DataAdapterRegistry(List.of(new DuckDBAdapterProvider()), new DataRagConfig());
 		MultiDataSourceAdapter adapter = new MultiDataSourceAdapter(registry, businessConfig, new DataRagConfig(), jsonRule);
 
@@ -196,8 +190,6 @@ class MultiDataSourceDuckDbTest {
 		definition.getClasses().add(route("person", "crm"));
 		definition.getClasses().add(route("invoice", "erp"));
 		businessConfig.setMultiDataSource(definition);
-		businessConfig.getDataAdapterConnections().put("crm", connection(crmUrl));
-		businessConfig.getDataAdapterConnections().put("erp", connection(erpUrl));
 		DataAdapterRegistry registry = new DataAdapterRegistry(List.of(new DuckDBAdapterProvider()), new DataRagConfig());
 		MultiDataSourceAdapter adapter = new MultiDataSourceAdapter(registry, businessConfig, new DataRagConfig(), jsonRule);
 

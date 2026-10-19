@@ -47,6 +47,8 @@ class MultiDataSourceAdapterTest {
 		final String name;
 		final List<String> calls = new ArrayList<>();
 		String lastDsl;
+		/** The ontomap this adapter was last built with: the source's own view. */
+		Map<String, Object> jsonRule;
 		boolean closed = false;
 		Exception writeFailure;
 
@@ -237,6 +239,7 @@ class MultiDataSourceAdapterTest {
 			if (adapter == null) {
 				throw new IllegalArgumentException("no stub adapter for url " + connection.getUrl());
 			}
+			adapter.jsonRule = jsonRule;
 			return adapter;
 		}
 	}
@@ -249,7 +252,7 @@ class MultiDataSourceAdapterTest {
 		DataSourceEntry entry = new DataSourceEntry();
 		entry.setId(id);
 		entry.setAdapterType(adapterType);
-		entry.setConnectionRef(id);
+		entry.setConnection(connection("jdbc:" + id));
 		return entry;
 	}
 
@@ -271,6 +274,12 @@ class MultiDataSourceAdapterTest {
 
 	/** Two sources of one adapter type, one class each, routed. */
 	private MultiDataSourceAdapter twoSources(RecordingAdapter[] out) {
+		return twoSources(out, null, List.of());
+	}
+
+	/** {@link #twoSources(RecordingAdapter[])} with an ontomap and relationship routes. */
+	private MultiDataSourceAdapter twoSources(RecordingAdapter[] out, Map<String, Object> jsonRule,
+			List<RelationshipRoute> relationships) {
 		RecordingProvider pg = new RecordingProvider("postgresql");
 		out[0] = pg.adapter("jdbc:crm", "crm");
 		out[1] = pg.adapter("jdbc:erp", "erp");
@@ -278,18 +287,58 @@ class MultiDataSourceAdapterTest {
 
 		BusinessConfig businessConfig = new BusinessConfig();
 		businessConfig.setDataAdapter("multi");
-		businessConfig.getDataAdapterConnections().put("crm", connection("jdbc:crm"));
-		businessConfig.getDataAdapterConnections().put("erp", connection("jdbc:erp"));
 		MultiDataSourceDefinition definition = new MultiDataSourceDefinition();
 		definition.getDataSources().add(source("crm", "postgresql"));
 		definition.getDataSources().add(source("erp", "postgresql"));
 		definition.getClasses().add(classRoute("Person", "crm"));
 		definition.getClasses().add(classRoute("Invoice", "erp"));
+		definition.getRelationships().addAll(relationships);
 		businessConfig.setMultiDataSource(definition);
 
 		DataAdapterRegistry registry = new DataAdapterRegistry(providers, dataRagConfig);
 		multiProvider.registry = registry;
-		return new MultiDataSourceAdapter(registry, businessConfig, dataRagConfig, null);
+		return new MultiDataSourceAdapter(registry, businessConfig, dataRagConfig, jsonRule);
+	}
+
+	private static RelationshipRoute physicalEdge(String relationshipName, String realEdge) {
+		RelationshipRoute route = new RelationshipRoute();
+		route.setForOntoMap(relationshipName);
+		route.setRealEdge(realEdge);
+		return route;
+	}
+
+	private static JSONObject relationshipDef(String fromClass, String toClass) {
+		return new JSONObject().fluentPut("fromclass", fromClass).fluentPut("toclass", toClass);
+	}
+
+	/**
+	 * Person and Invoice, each with a self relationship whose physical name is {@code KNOWS} in its own
+	 * source, plus one relationship crossing the two sources.
+	 */
+	private static JSONObject ontomapWithSameNamedEdges() {
+		return new JSONObject()
+				.fluentPut("classDef", JSONArray.of(classDef("Person"), classDef("Invoice")))
+				.fluentPut("relationship_rule", new JSONObject()
+						.fluentPut("knows_a", relationshipDef("Person", "Person"))
+						.fluentPut("knows_b", relationshipDef("Invoice", "Invoice"))
+						.fluentPut("person_invoice", relationshipDef("Person", "Invoice")));
+	}
+
+	private static List<RelationshipRoute> bothKnows() {
+		return List.of(physicalEdge("knows_a", "KNOWS"), physicalEdge("knows_b", "KNOWS"));
+	}
+
+	private static String dslWithRelationship(String className, String relationshipName) {
+		JSONObject first = new JSONObject().fluentPut("idx", 0).fluentPut("variable", "a").fluentPut("class", className);
+		JSONObject second = new JSONObject().fluentPut("idx", 1).fluentPut("variable", "b").fluentPut("class", className);
+		JSONObject relationship = new JSONObject().fluentPut("from", 0).fluentPut("to", 1)
+				.fluentPut("type", JSONArray.of(relationshipName));
+		JSONObject pattern = new JSONObject().fluentPut("objects", JSONArray.of(first, second))
+				.fluentPut("relationship", JSONArray.of(relationship));
+		JSONObject step = new JSONObject().fluentPut("graph", new JSONObject().fluentPut("patterns", JSONArray.of(pattern)))
+				.fluentPut("output", new JSONObject().fluentPut("to_user", true));
+		return JSONArray.of(new JSONObject().fluentPut("answer",
+				new JSONObject().fluentPut("steps", JSONArray.of(step)))).toJSONString();
 	}
 
 	private static DataAdapterConnection connection(String url) {
@@ -455,8 +504,6 @@ class MultiDataSourceAdapterTest {
 
 		BusinessConfig businessConfig = new BusinessConfig();
 		businessConfig.setDataAdapter("multi");
-		businessConfig.getDataAdapterConnections().put("crm", connection("jdbc:crm"));
-		businessConfig.getDataAdapterConnections().put("dw", connection("jdbc:dw"));
 		MultiDataSourceDefinition definition = new MultiDataSourceDefinition();
 		definition.getDataSources().add(source("crm", "postgresql"));
 		DataSourceEntry warehouse = source("dw", "postgresql");
@@ -485,7 +532,6 @@ class MultiDataSourceAdapterTest {
 
 		BusinessConfig businessConfig = new BusinessConfig();
 		businessConfig.setDataAdapter("multi");
-		businessConfig.getDataAdapterConnections().put("crm", connection("jdbc:crm"));
 		MultiDataSourceDefinition definition = new MultiDataSourceDefinition();
 		definition.getDataSources().add(source("crm", "postgresql"));
 		definition.getDataSources().add(source("erp", "mysql"));
@@ -521,15 +567,10 @@ class MultiDataSourceAdapterTest {
 		assertTrue(multiProvider.connectionFields().isEmpty());
 	}
 
+	/** Each source is tested through its own type; the multi type has nothing of its own to test. */
 	@Test
-	void testsEverySourceConnection() {
-		RecordingAdapter[] adapters = new RecordingAdapter[2];
-		MultiDataSourceAdapter adapter = twoSources(adapters);
-
-		JSONObject report = adapter.testConnection();
-
-		assertEquals("multi-source", report.getString("kind"));
-		assertEquals(2, report.getJSONArray("sources").size());
+	void doesNotTestAsAWhole() {
+		assertThrows(UnsupportedDataAdapterOperationException.class, () -> twoSources(new RecordingAdapter[2]).testConnection());
 	}
 
 	// ----------------------------------------------------------------------------------
@@ -605,19 +646,17 @@ class MultiDataSourceAdapterTest {
 	@Test
 	void rewritesARelationshipTypeToItsPhysicalEdgeName() throws Exception {
 		RecordingProvider pg = new RecordingProvider("postgresql");
-		RecordingAdapter graphSource = pg.adapter("jdbc:g", "gph");
+		RecordingAdapter graphSource = pg.adapter("jdbc:gph", "gph");
 		providers.add(pg);
 
 		BusinessConfig businessConfig = new BusinessConfig();
 		businessConfig.setDataAdapter("multi");
-		businessConfig.getDataAdapterConnections().put("gph", connection("jdbc:g"));
 		MultiDataSourceDefinition definition = new MultiDataSourceDefinition();
 		definition.getDataSources().add(source("gph", "postgresql"));
 		definition.getClasses().add(classRoute("Person", "gph"));
 		definition.getClasses().add(classRoute("Org", "gph"));
 		RelationshipRoute relationshipRoute = new RelationshipRoute();
 		relationshipRoute.setForOntoMap("person_works_at");
-		relationshipRoute.setSourceId("gph");
 		relationshipRoute.setRealEdge("WORKS_AT");
 		definition.getRelationships().add(relationshipRoute);
 		businessConfig.setMultiDataSource(definition);
@@ -684,7 +723,7 @@ class MultiDataSourceAdapterTest {
 				.fluentPut("classDef", JSONArray.of(classDef("Person"), classDef("Invoice")))
 				.fluentPut("relationship_rule", new JSONObject().fluentPut("person_invoice", relationshipDef));
 
-		List<OntoMapViolation> violations = adapter.validateOntoMap(jsonRule);
+		List<ConfigurationProblem> violations = adapter.validateOntoMap(jsonRule);
 
 		assertEquals(1, violations.size());
 		assertTrue(violations.get(0).path().contains("person_invoice"), violations.toString());
@@ -712,7 +751,6 @@ class MultiDataSourceAdapterTest {
 
 		BusinessConfig businessConfig = new BusinessConfig();
 		businessConfig.setDataAdapter("multi");
-		businessConfig.getDataAdapterConnections().put("crm", connection("jdbc:crm"));
 		MultiDataSourceDefinition definition = new MultiDataSourceDefinition();
 		definition.getDataSources().add(source("crm", "postgresql"));
 		businessConfig.setMultiDataSource(definition);
@@ -724,8 +762,145 @@ class MultiDataSourceAdapterTest {
 		String result = adapter.executeDsl(dsl("Anything"), "s", DslExecutionMode.RAW, new ArrayList<>());
 
 		assertTrue(result.contains("\"source\":\"crm\""), result);
-		assertTrue(adapter.validateOntoMap(null).isEmpty());
+		assertTrue(adapter.validateOntoMap(new JSONObject().fluentPut("classDef", JSONArray.of(classDef("Anything")))
+				.fluentPut("relationship_rule", new JSONObject())).isEmpty());
 		assertDoesNotThrow(() -> adapter.createClass("ns", classDef("Anything")));
 		assertTrue(only.called("createClass:Anything"));
+	}
+
+	// ----------------------------------------------------------------------------------
+	// Physical edge names on the write path, and each source's view of the ontomap
+	// ----------------------------------------------------------------------------------
+
+	/** Two sources may each hold an edge named KNOWS; each delegate sees only its own, under that name. */
+	@Test
+	void handsEachDelegateOnlyItsOwnRelationshipsUnderPhysicalNames() throws Exception {
+		RecordingAdapter[] adapters = new RecordingAdapter[2];
+		MultiDataSourceAdapter adapter = twoSources(adapters, ontomapWithSameNamedEdges(), bothKnows());
+
+		adapter.executeDsl(dslWithRelationship("Person", "knows_a"), "s", DslExecutionMode.RAW, new ArrayList<>());
+		adapter.executeDsl(dslWithRelationship("Invoice", "knows_b"), "s", DslExecutionMode.RAW, new ArrayList<>());
+
+		Map<?, ?> crmRules = (Map<?, ?>) adapters[0].jsonRule.get("relationship_rule");
+		Map<?, ?> erpRules = (Map<?, ?>) adapters[1].jsonRule.get("relationship_rule");
+		assertEquals(java.util.Set.of("KNOWS"), crmRules.keySet());
+		assertEquals("Person", ((Map<?, ?>) crmRules.get("KNOWS")).get("fromclass"));
+		assertEquals(java.util.Set.of("KNOWS"), erpRules.keySet());
+		assertEquals("Invoice", ((Map<?, ?>) erpRules.get("KNOWS")).get("fromclass"));
+		assertTrue(adapters[0].lastDsl.contains("\"KNOWS\"") && !adapters[0].lastDsl.contains("knows_a"), adapters[0].lastDsl);
+		assertTrue(adapters[1].lastDsl.contains("\"KNOWS\"") && !adapters[1].lastDsl.contains("knows_b"), adapters[1].lastDsl);
+	}
+
+	/** A write uses the same physical name as a read, so an edge written through the adapter can be read back. */
+	@Test
+	void writesAndDeletesAnEdgeUnderItsPhysicalName() throws Exception {
+		RecordingAdapter[] adapters = new RecordingAdapter[2];
+		MultiDataSourceAdapter adapter = twoSources(adapters, ontomapWithSameNamedEdges(), bothKnows());
+
+		adapter.createEdge("ns", "knows_b", "Invoice", "1", "Invoice", "2");
+		adapter.deleteEdge("ns", "knows_b", "Invoice", "1", "Invoice", "2");
+
+		assertTrue(adapters[1].called("createEdge:KNOWS"), adapters[1].calls.toString());
+		assertTrue(adapters[1].called("deleteEdge:KNOWS"), adapters[1].calls.toString());
+		assertFalse(adapters[0].called("createEdge"));
+	}
+
+	@Test
+	void rejectsAnEdgeWhoseEndsLiveInDifferentSources() {
+		RecordingAdapter[] adapters = new RecordingAdapter[2];
+		MultiDataSourceAdapter adapter = twoSources(adapters, ontomapWithSameNamedEdges(), bothKnows());
+
+		IllegalArgumentException failure = assertThrows(IllegalArgumentException.class,
+				() -> adapter.createEdge("ns", "person_invoice", "Person", "1", "Invoice", "2"));
+		assertTrue(failure.getMessage().contains("spans data sources"), failure.getMessage());
+	}
+
+	/** An edge type carries only its name, so its source is found from its endpoint classes in the ontomap. */
+	@Test
+	void createsAnEdgeTypeInTheSourceOfItsEndpointClasses() {
+		RecordingAdapter[] adapters = new RecordingAdapter[2];
+		MultiDataSourceAdapter adapter = twoSources(adapters, ontomapWithSameNamedEdges(), bothKnows());
+
+		adapter.createEdgeType("ns", "knows_b");
+
+		assertTrue(adapters[1].called("createEdgeType:KNOWS"), adapters[1].calls.toString());
+		assertFalse(adapters[0].called("createEdgeType"));
+	}
+
+	@Test
+	void refusesToRouteAnEdgeTypeWithoutTheOntomap() {
+		MultiDataSourceAdapter adapter = twoSources(new RecordingAdapter[2], null, bothKnows());
+
+		assertThrows(IllegalStateException.class, () -> adapter.createEdgeType("ns", "knows_b"));
+	}
+
+	// ----------------------------------------------------------------------------------
+	// Located problems, for the save endpoint
+	// ----------------------------------------------------------------------------------
+
+	@Test
+	void reportsAnUnroutedClassWhenSeveralSourcesExist() {
+		MultiDataSourceAdapter adapter = twoSources(new RecordingAdapter[2]);
+		JSONObject jsonRule = new JSONObject()
+				.fluentPut("classDef", JSONArray.of(classDef("Person"), classDef("Order")))
+				.fluentPut("relationship_rule", new JSONObject().fluentPut("person_order", relationshipDef("Person", "Order")));
+
+		List<ConfigurationProblem> problems = adapter.validateOntoMap(jsonRule);
+
+		assertEquals(List.of("classDef[Order]"), problems.stream().map(ConfigurationProblem::path).toList(), problems.toString());
+	}
+
+	@Test
+	void reportsTwoRelationshipsOfOneSourceSharingAPhysicalName() {
+		MultiDataSourceAdapter adapter = twoSources(new RecordingAdapter[2], null,
+				List.of(physicalEdge("knows_a", "KNOWS")));
+		JSONObject jsonRule = new JSONObject()
+				.fluentPut("classDef", JSONArray.of(classDef("Person")))
+				.fluentPut("relationship_rule", new JSONObject()
+						.fluentPut("knows_a", relationshipDef("Person", "Person"))
+						.fluentPut("KNOWS", relationshipDef("Person", "Person")));
+
+		List<ConfigurationProblem> problems = adapter.validateOntoMap(jsonRule);
+
+		assertEquals(1, problems.size(), problems.toString());
+		assertTrue(problems.get(0).detail().contains("KNOWS"), problems.toString());
+	}
+
+	@Test
+	@SuppressWarnings("unchecked")
+	void allowsOnePhysicalNameInTwoSources() {
+		MultiDataSourceAdapter adapter = twoSources(new RecordingAdapter[2], null, bothKnows());
+		JSONObject jsonRule = ontomapWithSameNamedEdges();
+		((Map<String, Object>) jsonRule.get("relationship_rule")).remove("person_invoice");
+
+		assertTrue(adapter.validateOntoMap(jsonRule).isEmpty());
+	}
+
+	@Test
+	void listsEveryDefinitionProblemWithItsLocation() {
+		providers.add(new RecordingProvider("postgresql"));
+		MultiDataSourceDefinition definition = new MultiDataSourceDefinition();
+		definition.getDataSources().add(source("crm", "postgresql"));
+		definition.getDataSources().add(source("crm", "oracle"));
+		definition.getClasses().add(classRoute("Person", "nope"));
+		definition.getRelationships().add(physicalEdge("knows", "KNOWS"));
+		definition.getRelationships().add(physicalEdge("/knows", "KNOWS2"));
+
+		List<ConfigurationProblem> problems = MultiDataSourceValidator.problems(definition,
+				new DataAdapterRegistry(providers, dataRagConfig));
+
+		assertEquals(List.of("dataSources[crm]", "dataSources[crm]", "classes[Person]", "relationships[/knows]"),
+				problems.stream().map(ConfigurationProblem::path).toList(), problems.toString());
+	}
+
+	@Test
+	void reportsMissingListsInsteadOfFailingOnThem() {
+		MultiDataSourceDefinition definition = new MultiDataSourceDefinition();
+		definition.setClasses(null);
+
+		List<ConfigurationProblem> problems = MultiDataSourceValidator.problems(definition,
+				new DataAdapterRegistry(providers, dataRagConfig));
+
+		assertEquals(1, problems.size(), problems.toString());
 	}
 }

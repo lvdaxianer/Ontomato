@@ -124,12 +124,12 @@ public interface DataAdapter {
 	 * <p>The default returns none: a single-source adapter can honour every relationship its ontomap
 	 * declares. An adapter that constrains the ontomap (the multi-source adapter, whose cross-source
 	 * relationships are not a graph query) returns the located problems, so the management layer can
-	 * report them without knowing any adapter's constraints, and a later adapter switch re-applies the
-	 * new adapter's rules to the existing ontomap.</p>
+	 * report them without knowing any adapter's constraints. Saving a multi-source configuration runs it
+	 * against the domain's current ontomap.</p>
 	 *
-	 * @param jsonRule the domain's ontomap ({@code classDef} / {@code relationship_rule}); may be null
+	 * @param jsonRule the domain's ontomap ({@code classDef} / {@code relationship_rule})
 	 */
-	default List<OntoMapViolation> validateOntoMap(Map<String, Object> jsonRule) {
+	default List<ConfigurationProblem> validateOntoMap(Map<String, Object> jsonRule) {
 		return List.of();
 	}
 

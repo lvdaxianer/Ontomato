@@ -3,8 +3,11 @@ package io.ontomato.dataengine.dataAdapter;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.TimeZone;
 import java.util.TreeMap;
 import java.util.function.Consumer;
@@ -17,7 +20,6 @@ import io.ontomato.dataengine.config.BusinessConfig;
 import io.ontomato.dataengine.config.DataRagConfig;
 import io.ontomato.dataengine.config.multisource.DataSourceEntry;
 import io.ontomato.dataengine.config.multisource.MultiDataSourceDefinition;
-import io.ontomato.dataengine.config.multisource.RelationshipRoute;
 import io.ontomato.dataengine.dao.VectorResourceDao;
 import lombok.extern.slf4j.Slf4j;
 
@@ -29,6 +31,13 @@ import lombok.extern.slf4j.Slf4j;
  * cannot be routed uniquely. Because it is an ordinary {@link DataAdapter}, every caller above it is
  * unchanged, and a domain that is not configured with {@code multiDataSource} never reaches it.</p>
  *
+ * <p><b>Each delegate sees only its own physical names.</b> A delegate is the ordinary adapter of its
+ * source's type and knows nothing of other sources. The ontomap it is handed holds only the
+ * relationships of its own source, keyed by their physical edge names, and every relationship name this
+ * adapter forwards (in a DSL or a write) is translated the same way, so reads and writes of one
+ * relationship always use one name inside its source. A relationship lives in the source of its
+ * endpoint classes.</p>
+ *
  * <p><b>What it deliberately does not do.</b> A graph query whose classes span sources is not a
  * supported construct here — the same kind of limitation as {@code timeseries} on an adapter that has
  * not implemented it — so it is rejected with a located {@link DslContractViolationException#Code#UNSUPPORTED_CONSTRUCT},
@@ -39,29 +48,24 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 public class MultiDataSourceAdapter implements DataAdapter {
 
-	private final DataAdapterRegistry registry;
-	private final DataRagConfig dataRagConfig;
-	private final BusinessConfig businessConfig;
 	private final Map<String, Object> jsonRule;
-
 	private final MultiDataSourceDefinition definition;
 	private final DataSourceRouter router;
 	private final DelegatingAdapterFactory factory;
+	/** Each source's view of {@link #jsonRule}, built on first use; the jsonRule is fixed for this instance. */
+	private final Map<String, Map<String, Object>> sourceViews = new HashMap<>();
 
 	public MultiDataSourceAdapter(DataAdapterRegistry registry, BusinessConfig businessConfig,
 			DataRagConfig dataRagConfig, Map<String, Object> jsonRule) {
-		this.registry = registry;
-		this.businessConfig = businessConfig;
-		this.dataRagConfig = dataRagConfig;
 		this.jsonRule = jsonRule;
-		this.definition = businessConfig == null ? null : businessConfig.getMultiDataSource();
+		this.definition = businessConfig.getMultiDataSource();
 		if (this.definition == null) {
 			throw new IllegalStateException(
 					"The multi data adapter needs businessConfig.multiDataSource; an unset block means the domain is single-source");
 		}
 		MultiDataSourceValidator.validate(this.definition, registry);
 		this.router = new DataSourceRouter(this.definition);
-		this.factory = new DelegatingAdapterFactory(registry, dataRagConfig, businessConfig);
+		this.factory = new DelegatingAdapterFactory(registry, dataRagConfig);
 	}
 
 	// ----------------------------------------------------------------------------------
@@ -69,7 +73,7 @@ public class MultiDataSourceAdapter implements DataAdapter {
 	// ----------------------------------------------------------------------------------
 
 	/**
-	 * The one source a configuration-time class name belongs to.
+	 * The one source a class name belongs to.
 	 *
 	 * <p>When a single source is configured, an unrouted name falls back to it: there is no ambiguity to
 	 * resolve, and this keeps a one-source {@code multi} domain behaving exactly like that source alone.</p>
@@ -92,28 +96,74 @@ public class MultiDataSourceAdapter implements DataAdapter {
 
 	private String singleConfiguredSource() {
 		List<DataSourceEntry> sources = definition.getDataSources();
-		return sources != null && sources.size() == 1 ? sources.get(0).getId() : null;
+		return sources.size() == 1 ? sources.get(0).getId() : null;
+	}
+
+	/** The source both ends of an edge live in. @throws IllegalArgumentException when they differ */
+	private String sourceOfEdge(String relationName, String sourceClassName, String targetClassName) {
+		String from = configSourceOfClass(sourceClassName);
+		String to = configSourceOfClass(targetClassName);
+		if (!from.equals(to)) {
+			throw new IllegalArgumentException("The relationship `" + relationName + "` spans data sources (`"
+					+ sourceClassName + "` is in `" + from + "`, `" + targetClassName + "` is in `" + to + "`)");
+		}
+		return from;
+	}
+
+	@SuppressWarnings("unchecked")
+	private static Map<String, Object> relationshipRule(Map<String, Object> jsonRule) {
+		return (Map<String, Object>) jsonRule.get("relationship_rule");
+	}
+
+	/** The source a relationship lives in, found from its endpoint classes in the ontomap. */
+	@SuppressWarnings("unchecked")
+	private String sourceOfRelationship(String relationName) {
+		if (jsonRule == null) {
+			throw new IllegalStateException("Routing the relationship `" + relationName
+					+ "` needs the domain's ontomap, and this multi data adapter was built without one");
+		}
+		Map<String, Object> relationshipDef = (Map<String, Object>) relationshipRule(jsonRule).get(relationName);
+		if (relationshipDef == null) {
+			throw new IllegalArgumentException("The relationship `" + relationName + "` is not defined in the ontomap");
+		}
+		return sourceOfEdge(relationName, (String) relationshipDef.get("fromclass"), (String) relationshipDef.get("toclass"));
+	}
+
+	/**
+	 * One source's view of the ontomap: the same object, except that {@code relationship_rule} holds only
+	 * the relationships whose two ends live in this source, keyed by their physical edge names. Without a
+	 * jsonRule there is nothing to view, and the delegate gets none either.
+	 */
+	@SuppressWarnings("unchecked")
+	private Map<String, Object> viewFor(String sourceId) {
+		if (jsonRule == null) {
+			return null;
+		}
+		return sourceViews.computeIfAbsent(sourceId, id -> {
+			JSONObject relationships = new JSONObject();
+			relationshipRule(jsonRule).forEach((name, value) -> {
+				Map<String, Object> relationshipDef = (Map<String, Object>) value;
+				if (id.equals(resolveSourceOfClass((String) relationshipDef.get("fromclass")))
+						&& id.equals(resolveSourceOfClass((String) relationshipDef.get("toclass")))) {
+					relationships.put(router.physicalEdgeName(name), relationshipDef);
+				}
+			});
+			JSONObject view = new JSONObject(jsonRule);
+			view.put("relationship_rule", relationships);
+			return view;
+		});
+	}
+
+	private DataAdapter delegate(String sourceId) {
+		return factory.create(definition.source(sourceId), viewFor(sourceId));
 	}
 
 	private DataAdapter delegateOfClass(String className) {
-		return factory.create(definition.source(configSourceOfClass(className)), jsonRule);
-	}
-
-	private String configSourceOfRelationship(String relationName) {
-		RelationshipRoute route = router.routeOfRelationship(relationName);
-		if (route != null) {
-			return route.getSourceId();
-		}
-		String fallback = singleConfiguredSource();
-		if (fallback == null) {
-			throw new IllegalArgumentException("The relationship `" + relationName
-					+ "` is not routed to any data source in this domain's multi-source configuration");
-		}
-		return fallback;
+		return delegate(configSourceOfClass(className));
 	}
 
 	private static String classNameOf(Map<String, Object> classDef) {
-		return classDef == null ? null : (String) classDef.get("className");
+		return (String) classDef.get("className");
 	}
 
 	/**
@@ -189,7 +239,7 @@ public class MultiDataSourceAdapter implements DataAdapter {
 				continue;
 			}
 			try {
-				action.accept(factory.create(source, jsonRule));
+				action.accept(delegate(source.getId()));
 			} catch (Exception e) {
 				failures.add(source.getId() + ": " + e.getMessage());
 				log.warn("{} failed on data source {}: {}", operation, source.getId(), e.getMessage());
@@ -210,24 +260,10 @@ public class MultiDataSourceAdapter implements DataAdapter {
 		throw new UnsupportedDataAdapterOperationException("multi", "openConnection");
 	}
 
+	/** Each source is tested on its own through its type's connection test; the multi type has no connection. */
 	@Override
 	public JSONObject testConnection() {
-		JSONArray sources = new JSONArray();
-		for (DataSourceEntry source : definition.getDataSources()) {
-			JSONObject entry = new JSONObject();
-			entry.put("id", source.getId());
-			entry.put("adapterType", source.getAdapterType());
-			entry.put("readOnly", source.isReadOnly());
-			try {
-				entry.put("report", factory.create(source, jsonRule).testConnection());
-				entry.put("ok", true);
-			} catch (Exception e) {
-				entry.put("ok", false);
-				entry.put("error", DataAdapterConnectionTester.failureMessage(e));
-			}
-			sources.add(entry);
-		}
-		return new JSONObject().fluentPut("kind", "multi-source").fluentPut("sources", sources);
+		throw new UnsupportedDataAdapterOperationException("multi", "testConnection");
 	}
 
 	/**
@@ -256,9 +292,8 @@ public class MultiDataSourceAdapter implements DataAdapter {
 		for (int i = 0; i < elements.size(); i++) {
 			JSONObject element = elements.getJSONObject(i);
 			String sourceId = singleSourceOf(element, "[" + i + "]");
-			DataAdapter delegate = factory.create(definition.source(sourceId), jsonRule);
-			String result = delegate.executeDsl(JSONArray.of(withPhysicalEdgeNames(element)).toJSONString(), sessionId, mode,
-					generatedMqls);
+			String result = delegate(sourceId).executeDsl(JSONArray.of(withPhysicalEdgeNames(element)).toJSONString(),
+					sessionId, mode, generatedMqls);
 			if (result != null && !result.isBlank()) {
 				merged.addAll(JSON.parseArray(result));
 			}
@@ -309,18 +344,12 @@ public class MultiDataSourceAdapter implements DataAdapter {
 
 	@Override
 	public void createClass(String namespace, Map<String, Object> classDef) {
-		String className = classNameOf(classDef);
-		delegateOfClass(className).createClass(namespace, classDef);
+		delegateOfClass(classNameOf(classDef)).createClass(namespace, classDef);
 	}
 
 	@Override
 	public void createEdgeType(String namespace, String edgeName) {
-		String sourceId = configSourceOfRelationship(edgeName);
-		RelationshipRoute route = router.routeOfRelationship(edgeName);
-		String physicalName = route != null && route.getRealEdge() != null && !route.getRealEdge().isBlank()
-				? route.getRealEdge()
-				: edgeName;
-		factory.create(definition.source(sourceId), jsonRule).createEdgeType(namespace, physicalName);
+		delegate(sourceOfRelationship(edgeName)).createEdgeType(namespace, router.physicalEdgeName(edgeName));
 	}
 
 	@Override
@@ -342,47 +371,30 @@ public class MultiDataSourceAdapter implements DataAdapter {
 	@Override
 	public void createEdge(String namespace, String relationName, String sourceClassName, String sourceObjId,
 			String targetClassName, String targetObjId) throws Exception {
-		assertSameSource(relationName, sourceClassName, targetClassName);
-		String sourceId = configSourceOfRelationship(relationName);
-		factory.create(definition.source(sourceId), jsonRule).createEdge(namespace, relationName, sourceClassName,
-				sourceObjId, targetClassName, targetObjId);
+		delegate(sourceOfEdge(relationName, sourceClassName, targetClassName)).createEdge(namespace,
+				router.physicalEdgeName(relationName), sourceClassName, sourceObjId, targetClassName, targetObjId);
 	}
 
 	@Override
 	public void deleteEdge(String namespace, String relationName, String sourceClassName, String sourceObjId,
 			String targetClassName, String targetObjId) throws Exception {
-		assertSameSource(relationName, sourceClassName, targetClassName);
-		String sourceId = configSourceOfRelationship(relationName);
-		factory.create(definition.source(sourceId), jsonRule).deleteEdge(namespace, relationName, sourceClassName,
-				sourceObjId, targetClassName, targetObjId);
-	}
-
-	/** An edge whose two ends live in different sources is a configuration error, not a query to guess at. */
-	private void assertSameSource(String relationName, String sourceClassName, String targetClassName) {
-		String from = resolveSourceOfClass(sourceClassName);
-		String to = resolveSourceOfClass(targetClassName);
-		if (from != null && to != null && !from.equals(to)) {
-			throw new IllegalArgumentException("The relationship `" + relationName + "` spans data sources (`"
-					+ sourceClassName + "` is in `" + from + "`, `" + targetClassName + "` is in `" + to + "`)");
-		}
+		delegate(sourceOfEdge(relationName, sourceClassName, targetClassName)).deleteEdge(namespace,
+				router.physicalEdgeName(relationName), sourceClassName, sourceObjId, targetClassName, targetObjId);
 	}
 
 	@Override
 	public Map<String, Object> query(JSONObject dsl, String sandboxId, String domainId,
 			VectorResourceDao vectorResourceDao, DataRagConfig dataRagConfig) throws Exception {
-		String sourceId = singleSourceOf(dsl, "query");
-		return factory.create(definition.source(sourceId), jsonRule).query(withPhysicalEdgeNames(dsl), sandboxId, domainId,
+		return delegate(singleSourceOf(dsl, "query")).query(withPhysicalEdgeNames(dsl), sandboxId, domainId,
 				vectorResourceDao, dataRagConfig);
 	}
 
 	/**
-	 * Replace every relationship type that has a configured physical edge name, on a copy.
+	 * Replace every relationship type with its physical edge name, on a copy.
 	 *
-	 * <p>A graph source traverses the name the DSL carries, so when the ontology relationship name is not
-	 * the physical edge name (or two graph sources would clash on one), the route's {@code realEdge} has to
-	 * be applied on the read path too — otherwise the traversal looks for an edge that does not exist. The
-	 * element is copied, so the caller's object is never mutated and an element with no configured edge name
-	 * is forwarded byte for byte.</p>
+	 * <p>The delegate's ontomap is keyed by physical names, and a graph source traverses the name the DSL
+	 * carries, so the DSL has to carry the same names. The element is copied, so the caller's object is
+	 * never mutated; a relationship without a configured physical name keeps its own.</p>
 	 */
 	private JSONObject withPhysicalEdgeNames(JSONObject element) {
 		JSONObject copy = JSON.parseObject(element.toJSONString());
@@ -410,10 +422,7 @@ public class MultiDataSourceAdapter implements DataAdapter {
 						continue;
 					}
 					for (int t = 0; t < types.size(); t++) {
-						RelationshipRoute route = router.routeOfRelationship(types.getString(t));
-						if (route != null && route.getRealEdge() != null && !route.getRealEdge().isBlank()) {
-							types.set(t, route.getRealEdge());
-						}
+						types.set(t, router.physicalEdgeName(types.getString(t)));
 					}
 				}
 			}
@@ -450,45 +459,41 @@ public class MultiDataSourceAdapter implements DataAdapter {
 	}
 
 	/**
-	 * Report the ontomap shapes this routing cannot honour: a class with no source, and a relationship whose
-	 * two ends land in different sources. Both are found from the routes alone, so this runs before any query
-	 * and also when the domain switches to {@code multi} with an ontomap already configured.
+	 * Report the ontomap shapes this routing cannot honour: a class with no source, a relationship whose
+	 * two ends land in different sources, and two relationships of one source sharing a physical edge name
+	 * (the source's view of the ontomap could not hold both).
 	 */
 	@Override
-	public List<OntoMapViolation> validateOntoMap(Map<String, Object> jsonRule) {
-		List<OntoMapViolation> violations = new ArrayList<>();
-		if (jsonRule == null) {
-			return violations;
-		}
-		List<Map<String, Object>> classDefs = (List<Map<String, Object>>) jsonRule.get("classDef");
-		if (classDefs != null) {
-			for (Map<String, Object> classDef : classDefs) {
-				String className = classNameOf(classDef);
-				if (resolveSourceOfClass(className) == null) {
-					violations.add(new OntoMapViolation("classDef[" + className + "]",
-							"the class `" + className + "` is not routed to any data source"));
-				}
+	@SuppressWarnings("unchecked")
+	public List<ConfigurationProblem> validateOntoMap(Map<String, Object> jsonRule) {
+		List<ConfigurationProblem> problems = new ArrayList<>();
+		for (Map<String, Object> classDef : (List<Map<String, Object>>) jsonRule.get("classDef")) {
+			String className = classNameOf(classDef);
+			if (resolveSourceOfClass(className) == null) {
+				problems.add(new ConfigurationProblem("classDef[" + className + "]",
+						"the class `" + className + "` is not routed to any data source"));
 			}
 		}
-		Map<String, Object> relationshipRule = (Map<String, Object>) jsonRule.get("relationship_rule");
-		if (relationshipRule != null) {
-			for (Map.Entry<String, Object> entry : relationshipRule.entrySet()) {
-				Map<String, Object> relationshipDef = (Map<String, Object>) entry.getValue();
-				if (relationshipDef == null) {
-					continue;
-				}
-				String fromClass = (String) relationshipDef.get("fromclass");
-				String toClass = (String) relationshipDef.get("toclass");
-				String from = resolveSourceOfClass(fromClass);
-				String to = resolveSourceOfClass(toClass);
-				if (from != null && to != null && !from.equals(to)) {
-					violations.add(new OntoMapViolation("relationshipDefs[" + entry.getKey() + "]",
-							"the relationship `" + entry.getKey() + "` crosses data sources (`" + fromClass
-									+ "` is in `" + from + "`, `" + toClass + "` is in `" + to
-									+ "`), and a cross-source graph query is not supported"));
-				}
+		Map<String, Set<String>> physicalNamesBySource = new HashMap<>();
+		relationshipRule(jsonRule).forEach((name, value) -> {
+			Map<String, Object> relationshipDef = (Map<String, Object>) value;
+			String fromClass = (String) relationshipDef.get("fromclass");
+			String toClass = (String) relationshipDef.get("toclass");
+			String from = resolveSourceOfClass(fromClass);
+			String to = resolveSourceOfClass(toClass);
+			String path = "relationship_rule[" + name + "]";
+			if (from == null || to == null) {
+				return; // the unrouted end class is already reported above
 			}
-		}
-		return violations;
+			if (!from.equals(to)) {
+				problems.add(new ConfigurationProblem(path, "the relationship `" + name + "` crosses data sources (`"
+						+ fromClass + "` is in `" + from + "`, `" + toClass + "` is in `" + to
+						+ "`), and a cross-source graph query is not supported"));
+			} else if (!physicalNamesBySource.computeIfAbsent(from, id -> new HashSet<>()).add(router.physicalEdgeName(name))) {
+				problems.add(new ConfigurationProblem(path, "the relationship `" + name + "` uses the physical edge name `"
+						+ router.physicalEdgeName(name) + "`, which another relationship in `" + from + "` already uses"));
+			}
+		});
+		return problems;
 	}
 }

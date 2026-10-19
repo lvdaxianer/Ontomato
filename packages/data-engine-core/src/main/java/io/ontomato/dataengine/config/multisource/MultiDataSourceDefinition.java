@@ -12,9 +12,9 @@ import lombok.Data;
  * behaviour: {@code DataAdapterRegistry.create} returns the one adapter of {@code dataAdapter}. Setting
  * {@code dataAdapter = "multi"} plus this block switches the domain to routed multi-source mode.</p>
  *
- * <p>It lives in the business config rather than in the ontomap because routing must be decidable from
- * the business config alone: the sandbox write path builds its adapter with
- * {@code create(businessConfig, null)} (no ontomap in scope).</p>
+ * <p>It lives in the business config rather than in the ontomap because where a class's data lives is a
+ * deployment fact, not ontology meaning: the same ontomap can be served from different sources. A
+ * relationship's source is not stored here; it follows from its endpoint classes in the ontomap.</p>
  */
 @Data
 public class MultiDataSourceDefinition {
@@ -25,7 +25,7 @@ public class MultiDataSourceDefinition {
 	/** Class routes; {@code forOntoMap} values must be unique. */
 	private List<ClassRoute> classes = new ArrayList<>();
 
-	/** Relationship routes; {@code forOntoMap} values must be unique. Only needed for graph sources. */
+	/** Physical edge names; {@code forOntoMap} values must be unique. Only needed where a physical name differs. */
 	private List<RelationshipRoute> relationships = new ArrayList<>();
 
 	/** Convenience: the source with this id, or {@code null}. */
