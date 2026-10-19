@@ -9,6 +9,10 @@ import java.util.List;
 import java.util.UUID;
 
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
@@ -136,6 +140,35 @@ public class ActionController {
 			List<Action> actions = actionService.queryList(status, null, className, user.getDomainId());
 			ret.put("success", true);
 			ret.put("data", actions);
+		} catch (Exception e) {
+			log.error(e.getMessage(), e);
+			ret.put("success", false);
+			ret.put("message", e.getMessage());
+		}
+		return ret;
+	}
+
+	@GetMapping("/action/export")
+	public ResponseEntity<byte[]> exportActions(@RequestHeader(value = ControllerConst.LANG_HEADER_KEY, required = false) String lang) {
+		try {
+			byte[] data = actionService.exportActions(lang);
+			return ResponseEntity.ok()
+					.header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"actions.zip\"")
+					.contentType(MediaType.APPLICATION_OCTET_STREAM)
+					.body(data);
+		} catch (Exception e) {
+			log.error(e.getMessage(), e);
+			return ResponseEntity.internalServerError().build();
+		}
+	}
+
+	@PostMapping("/action/import")
+	@ResponseBody
+	public JSONObject importActions(@RequestHeader(value = ControllerConst.LANG_HEADER_KEY, required = false) String lang,
+			@RequestParam("file") MultipartFile file) {
+		JSONObject ret = new JSONObject();
+		try {
+			ret = actionService.importActions(file.getBytes(), lang);
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 			ret.put("success", false);

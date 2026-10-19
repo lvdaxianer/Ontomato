@@ -22,6 +22,10 @@ public interface ActionService {
 	public List<Action> queryList(String status, String functionId, String className, String domainId);
 	
 	public List<Action> find(String question, String className, String domainId);
+
+	public byte[] exportActions(String lang) throws Exception;
+
+	public JSONObject importActions(byte[] zipData, String lang) throws Exception;
 	
 	public PythonExecuteResult execute(String id, JSONObject param, String lang, User user, UserDataPermission permission, int timeoutMinutes) throws Exception;
 	

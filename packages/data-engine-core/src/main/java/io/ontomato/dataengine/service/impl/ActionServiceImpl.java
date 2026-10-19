@@ -2,6 +2,7 @@ package io.ontomato.dataengine.service.impl;
 
 import java.io.File;
 import java.io.FileOutputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -11,8 +12,10 @@ import java.util.UUID;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
+import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONArray;
 import com.alibaba.fastjson2.JSONObject;
+import com.alibaba.fastjson2.JSONWriter.Feature;
 import io.ontomato.dataengine.bean.OriginalQuestion;
 import io.ontomato.dataengine.bean.PythonExecuteResult;
 import io.ontomato.dataengine.bean.action.Action;
@@ -40,7 +43,9 @@ import io.ontomato.dataengine.service.sys.bean.permission.UserDataPermission;
 import io.ontomato.dataengine.tools.ActionSubmitTools;
 import io.ontomato.dataengine.util.DBSchemaUtil;
 import io.ontomato.dataengine.util.ShortCodeGenerator;
+import io.ontomato.dataengine.util.SystemUtils;
 import io.ontomato.dataengine.util.UserMessageUtil;
+import io.ontomato.dataengine.util.ZipBundleUtil;
 
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
@@ -346,6 +351,55 @@ public class ActionServiceImpl implements ActionService {
 			actions.add(action);
 		}
 		return actions;
+	}
+
+	@Override
+	public byte[] exportActions(String lang) throws Exception {
+		List<Action> actions = queryList(null, null, null, null);
+		String json = JSON.toJSONString(actions, Feature.WriteMapNullValue);
+		return ZipBundleUtil.zip("actions.json", json.getBytes(StandardCharsets.UTF_8));
+	}
+
+	@Override
+	public JSONObject importActions(byte[] zipData, String lang) throws Exception {
+		byte[] jsonBytes = ZipBundleUtil.unzipFirstJson(zipData);
+		JSONArray array = JSON.parseArray(new String(jsonBytes, StandardCharsets.UTF_8));
+		User user = SystemUtils.getCurUser();
+		String domainId = user == null ? null : user.getDomainId();
+		int successCount = 0;
+		JSONArray failures = new JSONArray();
+		for (int i = 0; i < array.size(); i++) {
+			String actionId = null;
+			try {
+				JSONObject json = array.getJSONObject(i);
+				actionId = json.getString("id");
+				Action action = json.to(Action.class);
+				Function function = action.getFunction();
+				if (function == null || function.getId() == null) {
+					throw new Exception("Action " + actionId + " has no embedded function");
+				}
+				if (domainId != null) {
+					action.setDomainId(domainId);
+					function.setDomainId(domainId);
+				}
+				functionDao.save(function);
+				actionDao.save(action);
+				successCount++;
+			} catch (Exception e) {
+				log.error("Failed to import action {}: {}", actionId, e.getMessage(), e);
+				JSONObject failure = new JSONObject();
+				failure.put("index", i);
+				failure.put("id", actionId);
+				failure.put("message", e.getMessage());
+				failures.add(failure);
+			}
+		}
+		JSONObject ret = new JSONObject();
+		ret.put("success", failures.isEmpty());
+		ret.put("successCount", successCount);
+		ret.put("failureCount", failures.size());
+		ret.put("failures", failures);
+		return ret;
 	}
 
 	@Override
