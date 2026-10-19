@@ -17,6 +17,24 @@ docker compose up -d --wait --wait-timeout 600
 Update `ONTOMATO_VERSION`, then repeat pull and up. Images come from GHCR. Build
 and publication happen before deployment; Compose has no build step.
 
+### Automatic updates (optional)
+
+A development or test deployment that should always follow a tag, usually `edge`, can add
+`docker-compose.autoupdate.yml` to the end of `COMPOSE_FILE` and run `docker compose up -d`:
+
+```bash
+COMPOSE_FILE=docker-compose.yml:docker-compose.ghcr.yml:docker-compose.autoupdate.yml
+ONTOMATO_VERSION=edge
+```
+
+This adds a Watchtower container (`nickfedor/watchtower`). Every 5 minutes it checks whether
+the tags of the workbench, data engine and ontology manager containers point to new images on
+GHCR; if so it pulls them, recreates those containers with their existing configuration and
+removes the replaced images. PostgreSQL is not touched, and only this Compose project's
+containers are watched. The three images update independently, and changes to the deployment
+templates still need a manual update. Keep fixed versions without automatic updates for
+production sites.
+
 ## Offline delivery
 
 On the connected build host, after CI has published the final images:

@@ -23,11 +23,18 @@ import org.springframework.stereotype.Service;
 import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONArray;
 import com.alibaba.fastjson2.JSONObject;
+import com.alibaba.fastjson2.JSONWriter.Feature;
 import io.ontomato.dataengine.bean.VectorResource;
+import io.ontomato.dataengine.bean.action.Action;
+import io.ontomato.dataengine.bean.function.Function;
+import io.ontomato.dataengine.bean.metricView.MetricView;
 import io.ontomato.dataengine.config.BusinessConfig;
 import io.ontomato.dataengine.config.DataRagConfig;
 import io.ontomato.dataengine.core.bean.User;
 import io.ontomato.dataengine.core.utils.ProductionLoginCipher;
+import io.ontomato.dataengine.dao.ActionDao;
+import io.ontomato.dataengine.dao.FunctionDao;
+import io.ontomato.dataengine.dao.MetricViewDao;
 import io.ontomato.dataengine.dao.VectorResourceDao;
 import io.ontomato.dataengine.dataAdapter.DataAdapter;
 import io.ontomato.dataengine.dataAdapter.DataAdapterRegistry;
@@ -36,8 +43,10 @@ import io.ontomato.dataengine.service.BusinessConfigService;
 import io.ontomato.dataengine.service.EnvService;
 import io.ontomato.dataengine.service.ProductionEnvironmentLoginPolicy;
 import io.ontomato.dataengine.service.VectorResourceService;
+import io.ontomato.dataengine.util.CodeHashUtil;
 import io.ontomato.dataengine.util.DslUtil;
 import io.ontomato.dataengine.util.HttpRequestUtil;
+import io.ontomato.dataengine.util.ZipBundleUtil;
 
 import lombok.extern.slf4j.Slf4j;
 import io.ontomato.dataengine.service.SchemaImportAuthorization;
@@ -71,8 +80,20 @@ public class EnvServiceImpl implements EnvService {
 	@Autowired
 	private VectorResourceService vectorResourceService;
 
+	@Autowired
+	private ActionDao actionDao;
+
+	@Autowired
+	private MetricViewDao metricViewDao;
+
+	@Autowired
+	private FunctionDao functionDao;
+
 	@Override
 	public void importSchema(User user) throws Exception {
+		if (!isProductionEnvConfigured()) {
+			throw new Exception("Production environment is not configured (BACKEND_PRODUCTION_ENV_URL is empty)");
+		}
 		String domainId = user.getDomainId();
 		
 		String tk = null;
@@ -162,6 +183,88 @@ public class EnvServiceImpl implements EnvService {
 		return ret.getJSONObject("data").getString("tk");
 	}
 	
+
+	@Override
+	public boolean isProductionEnvConfigured() {
+		String url = dataRagConfig.getProductionEnvUrl();
+		return url != null && !url.trim().isEmpty();
+	}
+
+	@Override
+	public JSONObject syncAssetsToProduction(List<String> actionIds, List<String> metricViewIds, boolean dryRun) throws Exception {
+		if (!isProductionEnvConfigured()) {
+			throw new Exception("Production environment is not configured (BACKEND_PRODUCTION_ENV_URL is empty)");
+		}
+		JSONArray actions = new JSONArray();
+		JSONArray missingExplanations = new JSONArray();
+		for (String id : actionIds) {
+			Object[] row = actionDao.queryById(id);
+			if (row == null) {
+				throw new Exception("Action not found: " + id);
+			}
+			Action action = (Action) row[0];
+			action.setFunction(functionDao.queryById((String) row[1]));
+			String codeHash = CodeHashUtil.sha256(action.getFunction() == null ? null : action.getFunction().getCode());
+			boolean ready = action.getCodeSegments() != null && !action.getCodeSegments().isEmpty()
+					&& codeHash != null && codeHash.equals(action.getCodeHash())
+					&& Integer.valueOf(Action.EXPLANATION_VERSION).equals(action.getExplanationVersion());
+			if (!ready) {
+				missingExplanations.add(id);
+			}
+			actions.add(action);
+		}
+		JSONArray metricViews = new JSONArray();
+		for (String id : metricViewIds) {
+			Object[] row = metricViewDao.queryById(id);
+			if (row == null) {
+				throw new Exception("MetricView not found: " + id);
+			}
+			MetricView metricView = (MetricView) row[0];
+			metricView.setFunction(functionDao.queryById((String) row[1]));
+			metricViews.add(metricView);
+		}
+		JSONObject ret = new JSONObject();
+		ret.put("success", true);
+		if (dryRun) {
+			ret.put("dryRun", true);
+			ret.put("actions", summarizeAssets(actions));
+			ret.put("metricViews", summarizeAssets(metricViews));
+			ret.put("missingExplanations", missingExplanations);
+			return ret;
+		}
+		if (!missingExplanations.isEmpty()) {
+			throw new Exception("Actions missing a current code explanation: " + missingExplanations.toJSONString() + "; run action re-explain before syncing");
+		}
+		String baseUrl = dataRagConfig.getProductionEnvUrl().trim();
+		if (baseUrl.endsWith("/")) {
+			baseUrl = baseUrl.substring(0, baseUrl.length() - 1);
+		}
+		Map<String, String> headers = new HashMap<String, String>();
+		headers.put("tk", getProductionEnvTk());
+		if (!actions.isEmpty()) {
+			byte[] zip = ZipBundleUtil.zip("actions.json", JSON.toJSONString(actions, Feature.WriteMapNullValue).getBytes(StandardCharsets.UTF_8));
+			String response = HttpRequestUtil.postProductionEnvMultipart(baseUrl + "/action/import", headers, "file", "actions.zip", zip);
+			ret.put("actionsResult", JSON.parseObject(response));
+		}
+		if (!metricViews.isEmpty()) {
+			byte[] zip = ZipBundleUtil.zip("metricViews.json", JSON.toJSONString(metricViews, Feature.WriteMapNullValue).getBytes(StandardCharsets.UTF_8));
+			String response = HttpRequestUtil.postProductionEnvMultipart(baseUrl + "/metricView/import", headers, "file", "metricViews.zip", zip);
+			ret.put("metricViewsResult", JSON.parseObject(response));
+		}
+		return ret;
+	}
+
+	private JSONArray summarizeAssets(JSONArray assets) {
+		JSONArray list = new JSONArray();
+		for (int i = 0; i < assets.size(); i++) {
+			JSONObject asset = assets.getJSONObject(i);
+			JSONObject item = new JSONObject();
+			item.put("id", asset.getString("id"));
+			item.put("name", asset.getString("name"));
+			list.add(item);
+		}
+		return list;
+	}
 
 	@Override
 	public void importTestData(InputStream is, String domainId) throws Exception {

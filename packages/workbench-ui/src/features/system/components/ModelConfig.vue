@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { ZodError } from "zod";
 import { MODEL_ROLES, type ModelSettingsData } from "@ontomato/contracts/model-settings";
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
@@ -189,43 +190,60 @@ async function saveEmbeddingConfig(model: EmbeddingModelConfig): Promise<boolean
 }
 
 // This domain's vector rebuild: the backend decides whether it is needed and runs it; the page shows its status,
-// polling while a rebuild runs and stopping when it ends or the page is left.
+// polling while a run is alive and stopping when it ends or the page is left. A reload reads the same status again.
 const REBUILD_POLL_MS = 3000;
 const rebuildStatus = shallowRef<VectorRebuildStatus | null>(null);
 let rebuildPollTimer: ReturnType<typeof setTimeout> | undefined;
 let unmounted = false;
+// Reads overlap (polling, then a start or pause): only the latest one may write the status and schedule the next.
+let rebuildReadSeq = 0;
 
 async function loadRebuildStatus() {
+  const seq = ++rebuildReadSeq;
   let status: VectorRebuildStatus;
   try {
-    status = (await adminApi.getVectorRebuildStatus()).data as VectorRebuildStatus;
+    status = await adminApi.getVectorRebuildStatus();
   } catch (e: any) {
-    // A failed read stops polling; the next save or rebuild reads again.
-    ElMessage.error(e.message || t("admin.loadConfigFailed"));
+    if (seq !== rebuildReadSeq) return;
+    // A failed or malformed read stops polling; the next save or rebuild reads again.
+    ElMessage.error(e instanceof ZodError ? t("admin.loadConfigFailed") : e.message || t("admin.loadConfigFailed"));
     return;
   }
+  if (seq !== rebuildReadSeq) return;
   rebuildStatus.value = status;
   // Overlapping reads (a save or rebuild during polling) each replace the pending timer, so at most one is scheduled.
   clearTimeout(rebuildPollTimer);
-  if (status.running && !unmounted) rebuildPollTimer = setTimeout(loadRebuildStatus, REBUILD_POLL_MS);
+  const alive = status.state === "RUNNING" || status.state === "PAUSING";
+  if (alive && !unmounted) rebuildPollTimer = setTimeout(loadRebuildStatus, REBUILD_POLL_MS);
 }
 
 async function rebuildVectors() {
-  const confirmed = await ElMessageBox.confirm(t("admin.vectorRebuildConfirm"), t("admin.rebuildVectors"), {
-    type: "warning",
-    confirmButtonText: t("admin.rebuildVectors"),
-    cancelButtonText: t("common.cancel"),
-  }).then(
-    () => true,
-    () => false
-  );
-  if (!confirmed) return;
+  // Only a new round clears the existing vectors; resuming continues one already confirmed.
+  if (rebuildStatus.value?.state === "PENDING") {
+    const confirmed = await ElMessageBox.confirm(t("admin.vectorRebuildConfirm"), t("admin.rebuildVectors"), {
+      type: "warning",
+      confirmButtonText: t("admin.rebuildVectors"),
+      cancelButtonText: t("common.cancel"),
+    }).then(
+      () => true,
+      () => false
+    );
+    if (!confirmed) return;
+  }
+  await rebuildAction(adminApi.rebuildVectors);
+}
+
+async function pauseVectorRebuild() {
+  await rebuildAction(adminApi.pauseVectorRebuild);
+}
+
+async function rebuildAction(request: () => Promise<unknown>) {
   try {
-    await adminApi.rebuildVectors();
+    await request();
   } catch (e: any) {
     ElMessage.error(e.message || t("admin.operationFailed"));
   }
-  // Read again either way: a started rebuild shows its progress, and a rejection means the shown status was stale.
+  // Read again either way: an accepted action shows its progress, and a rejection means the shown status was stale.
   await loadRebuildStatus();
 }
 
@@ -310,6 +328,7 @@ onMounted(() => {
       @test="openEmbeddingTest"
       @retry="loadEmbedding"
       @rebuild="rebuildVectors"
+      @pause="pauseVectorRebuild"
     />
 
     <TestResultDialog

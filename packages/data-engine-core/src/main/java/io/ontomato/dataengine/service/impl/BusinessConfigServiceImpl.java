@@ -48,6 +48,11 @@ public class BusinessConfigServiceImpl implements BusinessConfigService {
 	}
 
 	@Override
+	public void setEmbeddingModel(BusinessConfig.EmbeddingModelProperties properties, String domainId) {
+		businessConfigDao.saveEmbeddingModel(properties, domainId);
+	}
+
+	@Override
 	public BusinessConfig get(String domainId) {
 		BusinessConfig businessConfig = businessConfigDao.query(domainId);
 		if (businessConfig == null) {

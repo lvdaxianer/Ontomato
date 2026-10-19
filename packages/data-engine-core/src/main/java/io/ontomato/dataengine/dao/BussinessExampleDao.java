@@ -55,10 +55,14 @@ public class BussinessExampleDao extends BaseDao {
     }
 
     public List<BussinessExampleEntity> findBussinessExample(String question, int maxResult, String domainId) {
+        return retrievalGate.read(domainId, () -> searchBussinessExample(question, maxResult, domainId));
+    }
+
+    /** Runs inside the read boundary: the query vector and the rows belong to one generation. */
+    private List<BussinessExampleEntity> searchBussinessExample(String question, int maxResult, String domainId) {
         List<BussinessExampleEntity> bussinessExampleEntities = new ArrayList<>();
         float[] findVector = null;
         String queryString = "";
-        retrievalGate.requireRetrievable(domainId);
         try {
             Response<Embedding> embeddingResponse = embeddingService.embedding(question, domainId);
             findVector = embeddingResponse.content().vector();
@@ -97,15 +101,13 @@ public class BussinessExampleDao extends BaseDao {
                 bussinessExampleEntity.getExampleA(), bussinessExampleEntity.getExampleB(),
                 bussinessExampleEntity.getExampleC(), bussinessExampleEntity.getExampleImportant());
 
-        Response<Embedding> embeddingResponse = embeddingService.embedding(embeddedText, domainId);
-        float[] embededVector = embeddingResponse.content().vector();
-        PGvector pgVector = new PGvector(embededVector);
-
         Timestamp modifyTimestamp = bussinessExampleEntity.getModifyTime() != null
                 ? new Timestamp(bussinessExampleEntity.getModifyTime().getTime())
                 : new Timestamp(System.currentTimeMillis());
 
-        jdbcTemplate.update(
+        retrievalGate.write(domainId, () -> {
+            PGvector pgVector = new PGvector(embeddingService.embedding(embeddedText, domainId).content().vector());
+            return jdbcTemplate.update(
                 "INSERT INTO " + TABLE_NAME + " (" + COLUMNS + ", example_vector) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?::vector) "
                         + "ON CONFLICT (example_id) DO UPDATE SET example_question = EXCLUDED.example_question, "
                         + "example_a = EXCLUDED.example_a, example_b = EXCLUDED.example_b, "
@@ -116,6 +118,7 @@ public class BussinessExampleDao extends BaseDao {
                 bussinessExampleEntity.getExampleB(), bussinessExampleEntity.getExampleC(),
                 bussinessExampleEntity.getExampleImportant(), bussinessExampleEntity.getStatus(),
                 modifyTimestamp, domainId, pgVector);
+        });
     }
 
     public void deleteKnowledge(String exampleID) {
@@ -138,9 +141,16 @@ public class BussinessExampleDao extends BaseDao {
                 "SELECT COUNT(*) FROM " + TABLE_NAME + " WHERE domain_id = ?", Integer.class, domainId);
     }
 
-    public List<VectorRebuildItem> listDomainVectors(String domainId) {
+    public int countDomainPending(String domainId) {
+        return jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM " + TABLE_NAME + " WHERE domain_id = ? AND example_vector IS NULL",
+                Integer.class, domainId);
+    }
+
+    public List<VectorRebuildItem> listDomainPending(String domainId) {
         return jdbcTemplate.query(
-                "SELECT example_id, example_question, example_a, example_b, example_c, example_important FROM " + TABLE_NAME + " WHERE domain_id = ?",
+                "SELECT example_id, example_question, example_a, example_b, example_c, example_important FROM " + TABLE_NAME
+                        + " WHERE domain_id = ? AND example_vector IS NULL",
                 (rs, rowNum) -> new VectorRebuildItem(rs.getString("example_id"),
                         embeddingText(rs.getString("example_question"), rs.getString("example_a"),
                                 rs.getString("example_b"), rs.getString("example_c"),
@@ -152,8 +162,9 @@ public class BussinessExampleDao extends BaseDao {
         jdbcTemplate.update("UPDATE " + TABLE_NAME + " SET example_vector = NULL WHERE domain_id = ?", domainId);
     }
 
-    public void updateDomainVector(String exampleId, float[] vector) {
-        jdbcTemplate.update("UPDATE " + TABLE_NAME + " SET example_vector = ?::vector WHERE example_id = ?",
+    /** Fill a pending row only: a row written meanwhile keeps the vector of its newer content. */
+    public void fillDomainVector(String exampleId, float[] vector) {
+        jdbcTemplate.update("UPDATE " + TABLE_NAME + " SET example_vector = ?::vector WHERE example_id = ? AND example_vector IS NULL",
                 new PGvector(vector), exampleId);
     }
 

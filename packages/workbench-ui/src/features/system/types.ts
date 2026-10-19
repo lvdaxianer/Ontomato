@@ -1,3 +1,4 @@
+import { z } from "zod";
 import type {
   BackendAgentConfig,
   BackendModelConfig,
@@ -39,15 +40,34 @@ export interface EmbeddingModelConfig {
   customHeaders?: Record<string, string> | null;
 }
 
-/** GET /businessConfig/vectorRebuildStatus: whether this domain's vectors need rebuilding and the current or last rebuild. */
-export interface VectorRebuildStatus {
-  needed: boolean;
-  running: boolean;
-  total: number;
-  done: number;
-  /** Reason of the last failed rebuild; null after a success or when none has run. */
-  error: string | null;
-}
+// Java omits null fields from the response; the boundary normalizes an absent value to null.
+const nullable = <T extends z.ZodTypeAny>(schema: T) => schema.nullish().transform((value) => value ?? null);
+const vectorRebuildProgress = { total: z.number().int().nonnegative(), done: z.number().int().nonnegative() };
+
+/** Where and why the latest round failed; CLEAR covers the whole domain, CLEAR and READ have no item id. */
+const vectorRebuildFailureSchema = z.object({
+  phase: z.enum(["CLEAR", "READ", "EMBED", "SAVE"]),
+  itemType: nullable(z.enum(["KNOWLEDGE", "EXAMPLE", "SPLIT_EXAMPLE", "ACTION", "METRIC_VIEW", "RESOURCE"])),
+  itemId: nullable(z.string()),
+  reason: z.string(),
+});
+
+/**
+ * GET /businessConfig/vectorRebuildStatus, validated where the page reads it: a failure is reported exactly when
+ * the state is FAILED. Vector search is open only when READY; PAUSING means the run stops after its current item,
+ * INTERRUPTED that the service stopped during a round.
+ */
+export const vectorRebuildStatusSchema = z.union([
+  z.object({ ...vectorRebuildProgress, state: z.literal("FAILED"), error: vectorRebuildFailureSchema }),
+  z.object({
+    ...vectorRebuildProgress,
+    state: z.enum(["READY", "PENDING", "RUNNING", "PAUSING", "PAUSED", "INTERRUPTED"]),
+    error: z.null().optional().transform(() => null),
+  }),
+]);
+
+export type VectorRebuildStatus = z.output<typeof vectorRebuildStatusSchema>;
+export type VectorRebuildState = VectorRebuildStatus["state"];
 
 /** The saved connection of one adapter (a value of the business config dataAdapterConnections). */
 export type DataAdapterConnection = Partial<Record<DataAdapterField, string>>;

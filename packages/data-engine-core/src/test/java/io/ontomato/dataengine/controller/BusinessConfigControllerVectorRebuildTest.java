@@ -25,6 +25,7 @@ import io.ontomato.dataengine.config.AgentConfig;
 import io.ontomato.dataengine.config.AgentRole;
 import io.ontomato.dataengine.config.BusinessConfig;
 import io.ontomato.dataengine.core.bean.User;
+import io.ontomato.dataengine.dao.VectorRebuildState;
 import io.ontomato.dataengine.service.BusinessConfigService;
 import io.ontomato.dataengine.service.IdentityService;
 import io.ontomato.dataengine.service.LangService;
@@ -87,13 +88,14 @@ class BusinessConfigControllerVectorRebuildTest {
     }
 
     @Test
-    void saveEmbeddingModelPersistsDimensions() {
+    void saveEmbeddingModelHandsTheDimensionsToTheVectorService() {
         JSONObject response = controller.saveEmbeddingModel("zh-CN", embeddingInput(2048));
 
         assertTrue(response.getBooleanValue("success"), response.toJSONString());
-        ArgumentCaptor<BusinessConfig> captor = ArgumentCaptor.forClass(BusinessConfig.class);
-        verify(businessConfigService).set(captor.capture(), eq("d1"));
-        assertEquals(2048, captor.getValue().getEmbeddingModelProperties().getDimensions());
+        ArgumentCaptor<BusinessConfig.EmbeddingModelProperties> captor =
+                ArgumentCaptor.forClass(BusinessConfig.EmbeddingModelProperties.class);
+        verify(vectorRebuildService).saveEmbeddingModel(eq("d1"), eq("zh-CN"), captor.capture());
+        assertEquals(2048, captor.getValue().getDimensions());
     }
 
     @Test
@@ -106,15 +108,14 @@ class BusinessConfigControllerVectorRebuildTest {
     }
 
     @Test
-    void saveEmbeddingModelRefusesWhileARebuildRuns() {
-        when(vectorRebuildService.isRunning("d1")).thenReturn(true);
+    void saveEmbeddingModelReportsARefusalWhileARebuildRuns() {
+        org.mockito.Mockito.doThrow(new IllegalStateException("Vector.saveRefusedWhileRebuilding"))
+                .when(vectorRebuildService).saveEmbeddingModel(eq("d1"), eq("zh-CN"), any());
 
         JSONObject response = controller.saveEmbeddingModel("zh-CN", embeddingInput(2048));
 
         assertFalse(response.getBooleanValue("success"));
         assertTrue(response.getString("message").contains("Vector.saveRefusedWhileRebuilding"), response.toJSONString());
-        verify(langService).get(eq("zh-CN"), eq("Vector.saveRefusedWhileRebuilding"));
-        verify(businessConfigService, org.mockito.Mockito.never()).set(any(), anyString());
     }
 
     @Test
@@ -144,24 +145,30 @@ class BusinessConfigControllerVectorRebuildTest {
     }
 
     @Test
-    void vectorRebuildStatusReportsNeededRunningAndProgress() {
+    void vectorRebuildStatusReportsStateProgressAndTheFailure() {
         VectorRebuildStatus status = new VectorRebuildStatus();
-        status.setNeeded(true);
-        status.setRunning(true);
+        status.setState(VectorRebuildStatus.State.FAILED);
         status.setTotal(7);
         status.setDone(3);
-        status.setError(null);
+        VectorRebuildState.Failure failure = new VectorRebuildState.Failure();
+        failure.setPhase(VectorRebuildState.Phase.EMBED);
+        failure.setItemType(VectorRebuildState.ItemType.ACTION);
+        failure.setItemId("a1");
+        failure.setReason("timeout");
+        status.setError(failure);
         when(vectorRebuildService.status("d1")).thenReturn(status);
 
         JSONObject response = controller.vectorRebuildStatus();
 
         assertTrue(response.getBooleanValue("success"));
         JSONObject data = response.getJSONObject("data");
-        assertTrue(data.getBooleanValue("needed"));
-        assertTrue(data.getBooleanValue("running"));
+        assertEquals("FAILED", data.getString("state"));
         assertEquals(7, data.getIntValue("total"));
         assertEquals(3, data.getIntValue("done"));
-        assertTrue(data.getString("error") == null);
+        assertEquals("EMBED", data.getJSONObject("error").getString("phase"));
+        assertEquals("ACTION", data.getJSONObject("error").getString("itemType"));
+        assertEquals("a1", data.getJSONObject("error").getString("itemId"));
+        assertEquals("timeout", data.getJSONObject("error").getString("reason"));
     }
 
     @Test
@@ -181,6 +188,18 @@ class BusinessConfigControllerVectorRebuildTest {
 
         assertTrue(response.getBooleanValue("success"));
         verify(vectorRebuildService).start("d1", "zh-CN");
+    }
+
+    @Test
+    void pauseVectorRebuildPausesThisDomainOrReportsTheRefusal() {
+        assertTrue(controller.pauseVectorRebuild("zh-CN").getBooleanValue("success"));
+        verify(vectorRebuildService).pause("d1", "zh-CN");
+
+        org.mockito.Mockito.doThrow(new IllegalStateException("Vector.rebuildNotRunning"))
+                .when(vectorRebuildService).pause(eq("d1"), anyString());
+        JSONObject response = controller.pauseVectorRebuild("zh-CN");
+        assertFalse(response.getBooleanValue("success"));
+        assertTrue(response.getString("message").contains("Vector.rebuildNotRunning"), response.toJSONString());
     }
 
 }

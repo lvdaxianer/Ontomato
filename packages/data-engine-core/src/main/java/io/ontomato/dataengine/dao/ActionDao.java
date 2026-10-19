@@ -46,7 +46,7 @@ public class ActionDao extends BaseDao {
 
 	private static final String TABLE_NAME = "action";
 
-	private static final String COLUMNS = "id, name, description, origin, function_id, code_segments, business_meaning, status, class_names, domain_id, create_timestamp, modify_timestamp";
+	private static final String COLUMNS = "id, name, description, origin, function_id, code_segments, business_meaning, code_hash, explanation_version, status, class_names, domain_id, create_timestamp, modify_timestamp";
 
 	@PostConstruct
 	public void initIndex() {
@@ -64,6 +64,8 @@ public class ActionDao extends BaseDao {
 						+ "function_id VARCHAR(64), "
 						+ "code_segments TEXT, "
 						+ "business_meaning TEXT, "
+						+ "code_hash VARCHAR(64), "
+						+ "explanation_version INTEGER, "
 						+ "status VARCHAR(64), "
 						+ "class_names TEXT, "
 						+ "domain_id VARCHAR(64), "
@@ -72,6 +74,8 @@ public class ActionDao extends BaseDao {
 						+ "brief TEXT, "
 						+ "brief_vector vector"
 						+ ")");
+		jdbcTemplate.execute("ALTER TABLE " + TABLE_NAME + " ADD COLUMN IF NOT EXISTS code_hash VARCHAR(64)");
+		jdbcTemplate.execute("ALTER TABLE " + TABLE_NAME + " ADD COLUMN IF NOT EXISTS explanation_version INTEGER");
 		jdbcTemplate.execute("CREATE INDEX IF NOT EXISTS idx_" + TABLE_NAME + "_domain_id ON " + TABLE_NAME + "(domain_id)");
 	}
 
@@ -90,21 +94,21 @@ public class ActionDao extends BaseDao {
 		String classNamesStr = buildClassNamesStr(function);
 		String brief = buildBrief(action.getName(), action.getDescription());
 
-		Response<Embedding> embeddingResponse = embeddingService.embedding(brief, function.getDomainId());
-		float[] embededVector = embeddingResponse.content().vector();
-		PGvector pgVector = new PGvector(embededVector);
-
-		jdbcTemplate.update(
-				"INSERT INTO " + TABLE_NAME + " (" + COLUMNS + ", brief, brief_vector) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::vector) "
+		retrievalGate.write(domainId, () -> {
+			PGvector pgVector = new PGvector(embeddingService.embedding(brief, domainId).content().vector());
+			return jdbcTemplate.update(
+				"INSERT INTO " + TABLE_NAME + " (" + COLUMNS + ", brief, brief_vector) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::vector) "
 						+ "ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, description = EXCLUDED.description, "
-						+ "origin = EXCLUDED.origin, function_id = EXCLUDED.function_id, code_segments = EXCLUDED.code_segments, business_meaning = EXCLUDED.business_meaning, "
+						+ "origin = EXCLUDED.origin, function_id = EXCLUDED.function_id, code_segments = EXCLUDED.code_segments, business_meaning = EXCLUDED.business_meaning, code_hash = EXCLUDED.code_hash, explanation_version = EXCLUDED.explanation_version, "
 						+ "status = EXCLUDED.status, class_names = EXCLUDED.class_names, domain_id = EXCLUDED.domain_id, "
 						+ "create_timestamp = EXCLUDED.create_timestamp, modify_timestamp = EXCLUDED.modify_timestamp, "
 						+ "brief = EXCLUDED.brief, brief_vector = EXCLUDED.brief_vector",
 				action.getId(), action.getName(), action.getDescription(), action.getOrigin(),
 				function.getId(), JSON.toJSONString(action.getCodeSegments(), Feature.WriteMapNullValue), JSON.toJSONString(action.getBusinessMeaning(), Feature.WriteMapNullValue),
+				action.getCodeHash(), action.getExplanationVersion(),
 				action.getStatus(), classNamesStr, action.getDomainId(),
 				action.getCreateTimestamp(), action.getModifyTimestamp(), brief, pgVector);
+		});
 		return action;
 	}
 
@@ -149,9 +153,15 @@ public class ActionDao extends BaseDao {
 				"SELECT COUNT(*) FROM " + TABLE_NAME + " WHERE domain_id = ?", Integer.class, domainId);
 	}
 
-	public List<VectorRebuildItem> listDomainVectors(String domainId) {
+	public int countDomainPending(String domainId) {
+		return jdbcTemplate.queryForObject(
+				"SELECT COUNT(*) FROM " + TABLE_NAME + " WHERE domain_id = ? AND brief_vector IS NULL",
+				Integer.class, domainId);
+	}
+
+	public List<VectorRebuildItem> listDomainPending(String domainId) {
 		return jdbcTemplate.query(
-				"SELECT id, name, description FROM " + TABLE_NAME + " WHERE domain_id = ?",
+				"SELECT id, name, description FROM " + TABLE_NAME + " WHERE domain_id = ? AND brief_vector IS NULL",
 				(rs, rowNum) -> new VectorRebuildItem(rs.getString("id"),
 						buildBrief(rs.getString("name"), rs.getString("description"))),
 				domainId);
@@ -161,8 +171,9 @@ public class ActionDao extends BaseDao {
 		jdbcTemplate.update("UPDATE " + TABLE_NAME + " SET brief_vector = NULL WHERE domain_id = ?", domainId);
 	}
 
-	public void updateDomainVector(String id, String brief, float[] vector) {
-		jdbcTemplate.update("UPDATE " + TABLE_NAME + " SET brief = ?, brief_vector = ?::vector WHERE id = ?",
+	/** Fill a pending row only: a row written meanwhile keeps the vector of its newer content. */
+	public void fillDomainVector(String id, String brief, float[] vector) {
+		jdbcTemplate.update("UPDATE " + TABLE_NAME + " SET brief = ?, brief_vector = ?::vector WHERE id = ? AND brief_vector IS NULL",
 				brief, new PGvector(vector), id);
 	}
 
@@ -226,8 +237,12 @@ public class ActionDao extends BaseDao {
 	}
 
 	public List<Object[]> find(String question, String className, int maxResult, double minScore, String domainId) {
+		return retrievalGate.read(domainId, () -> search(question, className, maxResult, minScore, domainId));
+	}
+
+	/** Runs inside the read boundary: the query vector and the rows belong to one generation. */
+	private List<Object[]> search(String question, String className, int maxResult, double minScore, String domainId) {
 		List<Object[]> oList = new ArrayList<Object[]>();
-		retrievalGate.requireRetrievable(domainId);
 		try {
 			Response<Embedding> embeddingResponse = embeddingService.embedding(question, domainId);
 			float[] findVector = embeddingResponse.content().vector();
@@ -296,6 +311,8 @@ public class ActionDao extends BaseDao {
 		action.setCodeSegments(codeSegments == null ? null : JSONArray.parseArray(codeSegments));
 		String business_meaning = rs.getString("business_meaning");
 		action.setBusinessMeaning(business_meaning == null ? null : JSONObject.parseObject(business_meaning, BusinessMeaning.class));
+		action.setCodeHash(rs.getString("code_hash"));
+		action.setExplanationVersion(rs.getObject("explanation_version") == null ? null : rs.getInt("explanation_version"));
 		action.setStatus(rs.getString("status"));
 		action.setCreateTimestamp(rs.getObject("create_timestamp") == null ? null : rs.getLong("create_timestamp"));
 		action.setModifyTimestamp(rs.getObject("modify_timestamp") == null ? null : rs.getLong("modify_timestamp"));

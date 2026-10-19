@@ -185,7 +185,13 @@ public class WriteFunctionOperationServiceImpl implements WriteFunctionOperation
 
 		Map<String, Object> result = adapter.query(dsl, sandboxId, domainId, vectorResourceDao, dataRagConfig);
 		List<String> ids = new ArrayList<String>();
-		JSONArray dataArr = result == null ? null : (JSONArray) result.get("data");
+		Object dataObj = result == null ? null : result.get("data");
+		JSONArray dataArr = null;
+		if (dataObj instanceof JSONArray) {
+			dataArr = (JSONArray) dataObj;
+		} else if (dataObj instanceof List) {
+			dataArr = new JSONArray((List<?>) dataObj);
+		}
 		if (dataArr != null && !dataArr.isEmpty()) {
 			JSONObject first = dataArr.getJSONObject(0);
 			JSONArray rows = first == null ? null : first.getJSONArray("answer");

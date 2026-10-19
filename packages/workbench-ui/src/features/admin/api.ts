@@ -1,6 +1,7 @@
 import { apiGet, apiPost, nodeApiGet, nodeApiPost } from "../../utils/api";
 import type { SystemModelConfig } from "@ontomato/contracts/system-model";
 import type { DataAdapterConnection, GeneralConfigKey, ModelEntry, RoleModels } from "../system";
+import { vectorRebuildStatusSchema } from "../system";
 
 const generalConfigSaveEndpoints: Record<GeneralConfigKey, string> = {
   knowledgeMaxResult: "/businessConfig/saveKnowledgeMaxResult",
@@ -29,8 +30,10 @@ export const adminApi = {
   testDataAdapter: (payload: { type: string } & DataAdapterConnection) =>
     apiPost("/businessConfig/testDataAdapter", payload),
   testEmbeddingModel: (payload: unknown) => apiPost("/businessConfig/testEmbeddingModel", payload),
-  getVectorRebuildStatus: () => apiGet("/businessConfig/vectorRebuildStatus"),
+  getVectorRebuildStatus: async () =>
+    vectorRebuildStatusSchema.parse((await apiGet("/businessConfig/vectorRebuildStatus")).data),
   rebuildVectors: () => apiPost("/businessConfig/rebuildVectors"),
+  pauseVectorRebuild: () => apiPost("/businessConfig/pauseVectorRebuild"),
   getSystemModelConfig: () => nodeApiGet("/system-model-config"),
   saveSystemModelConfig: (payload: SystemModelConfig) =>
     nodeApiPost("/system-model-config/save", payload),

@@ -10,6 +10,7 @@ import SkillDirConfigCard from "../business-config/SkillDirConfigCard.vue";
 import QuerySettingsCard from "../business-config/QuerySettingsCard.vue";
 import BusinessConfig from "../BusinessConfig.vue";
 import ModelConfig from "../ModelConfig.vue";
+import { vectorRebuildStatusSchema } from "../../types";
 import type { EmbeddingModelConfig, ModelEntry, RoleModels, VectorRebuildStatus } from "../../types";
 import { adminApi } from "../../../admin";
 import { workbenchI18n } from "../../../../i18n";
@@ -83,7 +84,7 @@ const fixtures = vi.hoisted(() => ({
     dimensions: 2048,
     customHeaders: { "X-Embed-Key": "keep" },
   },
-  rebuildIdle: { needed: false, running: false, total: 0, done: 0, error: null },
+  rebuildIdle: { state: "READY", total: 0, done: 0, error: null } as VectorRebuildStatus,
 }));
 
 function settingsData() {
@@ -175,8 +176,9 @@ vi.mock("../../../admin", () => ({
       sent.embeddingTest = JSON.parse(JSON.stringify(payload));
       return { success: true };
     }),
-    getVectorRebuildStatus: vi.fn(async () => ({ success: true, data: { ...fixtures.rebuildIdle } })),
+    getVectorRebuildStatus: vi.fn(async () => ({ ...fixtures.rebuildIdle })),
     rebuildVectors: vi.fn(async () => ({ success: true })),
+    pauseVectorRebuild: vi.fn(async () => ({ success: true })),
   },
 }));
 
@@ -581,39 +583,70 @@ describe("embedding model card", () => {
     expect(wrapper.find("section").exists()).toBe(true);
   });
 
-  // Design item 4 / contract 4: the rebuild button follows only the backend's needed/running, never a page-side comparison.
+  // The action follows only the state the backend reports, never a page-side comparison of configs.
   it.each([
-    ["not read yet", null, false],
-    ["not needed", { needed: false, running: false }, false],
-    ["needed", { needed: true, running: false }, true],
-    ["needed while running", { needed: true, running: true }, false],
-    ["running after the config was rebuilt", { needed: false, running: true }, false],
-  ] as const)("enables the rebuild button only when needed and not running: %s", async (_name, flags, enabled) => {
-    const rebuildStatus = flags && { ...fixtures.rebuildIdle, ...flags };
+    ["not read yet", null, "admin.rebuildVectors", false, null],
+    ["ready", "READY", "admin.rebuildVectors", false, null],
+    ["pending", "PENDING", "admin.rebuildVectors", true, "rebuild"],
+    ["running", "RUNNING", "admin.pauseVectorRebuild", true, "pause"],
+    ["pausing", "PAUSING", "admin.pauseVectorRebuild", false, null],
+    ["paused", "PAUSED", "admin.resumeVectorRebuild", true, "rebuild"],
+    ["interrupted", "INTERRUPTED", "admin.resumeVectorRebuild", true, "rebuild"],
+  ] as const)("offers the action of the reported state: %s", async (_name, state, label, enabled, event) => {
+    const rebuildStatus = state && { ...fixtures.rebuildIdle, state };
     const { wrapper } = mountEmbedding({ rebuildStatus });
-    const rebuild = button(wrapper, t("admin.rebuildVectors"))!;
-    expect(rebuild.attributes("disabled") === undefined).toBe(enabled);
-    expect(wrapper.text().includes(t("admin.vectorRebuildNeeded"))).toBe(enabled);
-    if (enabled) {
-      await rebuild.trigger("click");
-      expect(wrapper.emitted("rebuild")).toHaveLength(1);
+    const action = button(wrapper, t(label))!;
+    expect(action.attributes("disabled") === undefined).toBe(enabled);
+    if (event) {
+      await action.trigger("click");
+      expect(wrapper.emitted(event)).toHaveLength(1);
     }
   });
 
-  // Contract 4: progress while running, and the last failure reason when there is one.
-  it("shows the rebuild progress and the last failure", () => {
-    const running = mountEmbedding({
-      rebuildStatus: { needed: true, running: true, total: 120, done: 45, error: null },
-    }).wrapper;
-    expect(running.text()).toContain(t("admin.vectorRebuildRunning", { done: 45, total: 120 }));
-    expect(running.text()).not.toContain(t("admin.vectorRebuildNeeded"));
+  // Each state that keeps vector search paused says so with its progress and the way to recover.
+  it("shows the progress, a pause or interruption, and where and why a round failed", () => {
+    const text = (rebuildStatus: VectorRebuildStatus) => mountEmbedding({ rebuildStatus }).wrapper.text();
+    const progress = { total: 120, done: 45 };
+    expect(text({ ...progress, state: "PENDING", error: null })).toContain(t("admin.vectorRebuildNeeded"));
+    expect(text({ ...progress, state: "RUNNING", error: null })).toContain(t("admin.vectorRebuildRunning", progress));
+    expect(text({ ...progress, state: "PAUSING", error: null })).toContain(t("admin.vectorRebuildPausing", progress));
+    expect(text({ ...progress, state: "PAUSED", error: null })).toContain(t("admin.vectorRebuildPaused", progress));
+    expect(text({ ...progress, state: "INTERRUPTED", error: null })).toContain(
+      t("admin.vectorRebuildInterrupted", progress)
+    );
+    expect(text({ ...fixtures.rebuildIdle })).not.toContain(t("admin.vectorRebuildNeeded"));
 
     const failed = mountEmbedding({
-      rebuildStatus: { needed: true, running: false, total: 120, done: 30, error: "embedding service timed out" },
+      rebuildStatus: {
+        ...progress,
+        state: "FAILED",
+        error: { phase: "EMBED", itemType: "ACTION", itemId: "a-17", reason: "Read timed out" },
+      },
     }).wrapper;
-    expect(failed.text()).toContain(t("admin.vectorRebuildFailed", { error: "embedding service timed out" }));
-    expect(failed.text()).toContain(t("admin.vectorRebuildNeeded"));
-    expect(button(failed, t("admin.rebuildVectors"))!.attributes("disabled")).toBeUndefined();
+    expect(failed.text()).toContain(
+      t("admin.vectorRebuildFailed", {
+        ...progress,
+        step: t("admin.vectorRebuildStep.EMBED", { type: t("admin.vectorRebuildType.ACTION"), id: "a-17" }),
+        reason: "Read timed out",
+      })
+    );
+    expect(failed.text()).toContain("a-17");
+    expect(button(failed, t("admin.resumeVectorRebuild"))!.attributes("disabled")).toBeUndefined();
+
+    const clearFailed = text({
+      ...progress,
+      state: "FAILED",
+      error: { phase: "CLEAR", itemType: null, itemId: null, reason: "connection refused" },
+    });
+    expect(clearFailed).toContain(t("admin.vectorRebuildStep.CLEAR"));
+    expect(clearFailed).toContain("connection refused");
+
+    const readFailed = text({
+      ...progress,
+      state: "FAILED",
+      error: { phase: "READ", itemType: "METRIC_VIEW", itemId: null, reason: "relation is locked" },
+    });
+    expect(readFailed).toContain(t("admin.vectorRebuildStep.READ", { type: t("admin.vectorRebuildType.METRIC_VIEW") }));
   });
 });
 
@@ -1018,12 +1051,12 @@ describe("model config page", () => {
 });
 
 describe("vector rebuild and embedding test on the model config page", () => {
-  const status = (extra: Partial<VectorRebuildStatus>) => ({
-    success: true,
-    data: { ...fixtures.rebuildIdle, ...extra },
-  });
-  const rebuildButton = (page: ReturnType<typeof mount>) =>
-    button(page.findComponent(EmbeddingModelConfigCard), t("admin.rebuildVectors"))!;
+  // The api parses the wire data with the schema; the mocks hand it the same parsed shape.
+  const status = (extra: Partial<Pick<VectorRebuildStatus, "state" | "total" | "done">>) =>
+    vectorRebuildStatusSchema.parse({ ...fixtures.rebuildIdle, ...extra });
+  const cardButton = (page: ReturnType<typeof mount>, label: string) =>
+    button(page.findComponent(EmbeddingModelConfigCard), t(label));
+  const rebuildButton = (page: ReturnType<typeof mount>) => cardButton(page, "admin.rebuildVectors")!;
 
   afterEach(() => {
     vi.useRealTimers();
@@ -1032,7 +1065,7 @@ describe("vector rebuild and embedding test on the model config page", () => {
   // Design item 3/4: rebuilding is a separate, confirmed step; cancelling the confirmation starts nothing.
   it("confirms before rebuilding with the cost explained", async () => {
     const confirm = vi.spyOn(ElMessageBox, "confirm");
-    vi.mocked(adminApi.getVectorRebuildStatus).mockResolvedValue(status({ needed: true }));
+    vi.mocked(adminApi.getVectorRebuildStatus).mockResolvedValue(status({ state: "PENDING" }));
     const page = await mountModelPage();
     confirm.mockRejectedValueOnce("cancel");
     await rebuildButton(page).trigger("click");
@@ -1052,16 +1085,16 @@ describe("vector rebuild and embedding test on the model config page", () => {
     vi.spyOn(ElMessageBox, "confirm").mockResolvedValueOnce("confirm" as never);
     const read = vi.mocked(adminApi.getVectorRebuildStatus);
     read
-      .mockResolvedValueOnce(status({ needed: true }))
-      .mockResolvedValueOnce(status({ needed: true, running: true, total: 10, done: 0 }))
-      .mockResolvedValueOnce(status({ needed: true, running: true, total: 10, done: 6 }))
+      .mockResolvedValueOnce(status({ state: "PENDING" }))
+      .mockResolvedValueOnce(status({ state: "RUNNING", total: 10, done: 0 }))
+      .mockResolvedValueOnce(status({ state: "RUNNING", total: 10, done: 6 }))
       .mockResolvedValueOnce(status({ total: 10, done: 10 }));
     const page = await mountModelPage();
     await rebuildButton(page).trigger("click");
     await flushPromises();
     const card = page.findComponent(EmbeddingModelConfigCard);
     expect(card.text()).toContain(t("admin.vectorRebuildRunning", { done: 0, total: 10 }));
-    expect(rebuildButton(page).attributes("disabled")).toBeDefined();
+    expect(cardButton(page, "admin.pauseVectorRebuild")).toBeDefined();
 
     await vi.advanceTimersByTimeAsync(3000);
     expect(card.text()).toContain(t("admin.vectorRebuildRunning", { done: 6, total: 10 }));
@@ -1073,11 +1106,81 @@ describe("vector rebuild and embedding test on the model config page", () => {
     expect(read).toHaveBeenCalledTimes(4);
   });
 
+  // Pausing keeps polling until the run stops; a reload shows the paused round, and resuming asks nothing again.
+  it("pauses, stops polling once paused, and resumes after a reload without a new confirmation", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const confirm = vi.spyOn(ElMessageBox, "confirm");
+    const read = vi.mocked(adminApi.getVectorRebuildStatus);
+    read
+      .mockResolvedValueOnce(status({ state: "RUNNING", total: 10, done: 4 }))
+      .mockResolvedValueOnce(status({ state: "PAUSING", total: 10, done: 4 }))
+      .mockResolvedValueOnce(status({ state: "PAUSED", total: 10, done: 5 }));
+    const page = await mountModelPage();
+    await cardButton(page, "admin.pauseVectorRebuild")!.trigger("click");
+    await flushPromises();
+    expect(adminApi.pauseVectorRebuild).toHaveBeenCalledTimes(1);
+    expect(cardButton(page, "admin.pauseVectorRebuild")!.attributes("disabled")).toBeDefined();
+    await vi.advanceTimersByTimeAsync(3000);
+    const card = page.findComponent(EmbeddingModelConfigCard);
+    expect(card.text()).toContain(t("admin.vectorRebuildPaused", { done: 5, total: 10 }));
+    await vi.advanceTimersByTimeAsync(30000);
+    expect(read).toHaveBeenCalledTimes(3);
+    page.unmount();
+
+    read.mockResolvedValue(status({ state: "PAUSED", total: 10, done: 5 }));
+    const reloaded = await mountModelPage();
+    await cardButton(reloaded, "admin.resumeVectorRebuild")!.trigger("click");
+    await flushPromises();
+    expect(confirm).not.toHaveBeenCalled();
+    expect(adminApi.rebuildVectors).toHaveBeenCalledTimes(1);
+  });
+
+  // Java omits null fields; a malformed status is a load failure, not a crash or a silent state.
+  it("normalizes omitted nulls and reports a malformed status as a load failure", async () => {
+    expect(vectorRebuildStatusSchema.parse({ state: "READY", total: 0, done: 0 }).error).toBeNull();
+    const failed = vectorRebuildStatusSchema.parse({
+      state: "FAILED", total: 3, done: 1, error: { phase: "CLEAR", reason: "refused" },
+    });
+    expect(failed.error).toEqual({ phase: "CLEAR", itemType: null, itemId: null, reason: "refused" });
+
+    const error = vi.spyOn(ElMessage, "error");
+    for (const raw of [{ state: "FAILED", total: 3, done: 1 }, { state: "MIGRATING", total: 3, done: 1 }]) {
+      error.mockClear();
+      vi.mocked(adminApi.getVectorRebuildStatus).mockImplementationOnce(async () => vectorRebuildStatusSchema.parse(raw));
+      const page = await mountModelPage();
+      expect(error).toHaveBeenCalledWith(t("admin.loadConfigFailed"));
+      expect(page.findComponent(EmbeddingModelConfigCard).find(".vector-rebuild-status").exists()).toBe(false);
+      page.unmount();
+    }
+  });
+
+  // A poll answered after a newer read (here the one after pausing) must not overwrite it or keep polling.
+  it("ignores a stale status response that arrives after a newer one", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    let answerPoll: (value: VectorRebuildStatus) => void = () => {};
+    const read = vi.mocked(adminApi.getVectorRebuildStatus);
+    read
+      .mockResolvedValueOnce(status({ state: "RUNNING", total: 10, done: 4 }))
+      .mockImplementationOnce(() => new Promise((resolve) => (answerPoll = resolve)))
+      .mockResolvedValueOnce(status({ state: "PAUSED", total: 10, done: 5 }));
+    const page = await mountModelPage();
+    await vi.advanceTimersByTimeAsync(3000);
+    await cardButton(page, "admin.pauseVectorRebuild")!.trigger("click");
+    await flushPromises();
+    answerPoll(status({ state: "RUNNING", total: 10, done: 4 }));
+    await flushPromises();
+
+    const card = page.findComponent(EmbeddingModelConfigCard);
+    expect(card.text()).toContain(t("admin.vectorRebuildPaused", { done: 5, total: 10 }));
+    await vi.advanceTimersByTimeAsync(30000);
+    expect(read).toHaveBeenCalledTimes(3);
+  });
+
   // Task item 3: leaving the page stops the polling.
   it("stops polling when the page is left", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const read = vi.mocked(adminApi.getVectorRebuildStatus);
-    read.mockResolvedValue(status({ needed: true, running: true, total: 10, done: 1 }));
+    read.mockResolvedValue(status({ state: "RUNNING", total: 10, done: 1 }));
     const page = await mountModelPage();
     await vi.advanceTimersByTimeAsync(3000);
     expect(read).toHaveBeenCalledTimes(2);
@@ -1095,7 +1198,7 @@ describe("vector rebuild and embedding test on the model config page", () => {
     expect(read).toHaveBeenCalledTimes(1);
     expect(rebuildButton(page).attributes("disabled")).toBeDefined();
 
-    read.mockResolvedValueOnce(status({ needed: true }));
+    read.mockResolvedValueOnce(status({ state: "PENDING" }));
     const embedding = page.findComponent(EmbeddingModelConfigCard);
     await button(embedding, t("common.edit"))!.trigger("click");
     await embedding.find("section").findAll(".el-input-number input")[1]!.setValue("1024");

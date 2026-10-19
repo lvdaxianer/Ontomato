@@ -93,11 +93,9 @@ public class MetricViewDao extends BaseDao {
 		String classNamesStr = buildClassNamesStr(function);
 		String brief = buildBrief(metricView.getName(), metricView.getDescription(), metricView.getMatchQuestions());
 
-		Response<Embedding> embeddingResponse = embeddingService.embedding(brief, function.getDomainId());
-		float[] embededVector = embeddingResponse.content().vector();
-		PGvector pgVector = new PGvector(embededVector);
-
-		jdbcTemplate.update(
+		retrievalGate.write(domainId, () -> {
+			PGvector pgVector = new PGvector(embeddingService.embedding(brief, domainId).content().vector());
+			return jdbcTemplate.update(
 				"INSERT INTO " + TABLE_NAME + " (" + COLUMNS + ", brief, brief_vector) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::vector) "
 						+ "ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, origin = EXCLUDED.origin, type = EXCLUDED.type, "
 						+ "function_id = EXCLUDED.function_id, description = EXCLUDED.description, status = EXCLUDED.status, "
@@ -111,6 +109,7 @@ public class MetricViewDao extends BaseDao {
 				classNamesStr, metricView.getDomainId(), metricView.getCreateTimestamp(), metricView.getModifyTimestamp(),
 				metricView.getOriginCheckResult() == null ? null : JSON.toJSONString(metricView.getOriginCheckResult(), Feature.WriteMapNullValue),
 				metricView.getOriginQuestion(), brief, pgVector);
+		});
 		return metricView;
 	}
 
@@ -160,9 +159,15 @@ public class MetricViewDao extends BaseDao {
 				"SELECT COUNT(*) FROM " + TABLE_NAME + " WHERE domain_id = ?", Integer.class, domainId);
 	}
 
-	public List<VectorRebuildItem> listDomainVectors(String domainId) {
+	public int countDomainPending(String domainId) {
+		return jdbcTemplate.queryForObject(
+				"SELECT COUNT(*) FROM " + TABLE_NAME + " WHERE domain_id = ? AND brief_vector IS NULL",
+				Integer.class, domainId);
+	}
+
+	public List<VectorRebuildItem> listDomainPending(String domainId) {
 		return jdbcTemplate.query(
-				"SELECT id, name, description, match_questions FROM " + TABLE_NAME + " WHERE domain_id = ?",
+				"SELECT id, name, description, match_questions FROM " + TABLE_NAME + " WHERE domain_id = ? AND brief_vector IS NULL",
 				(rs, rowNum) -> new VectorRebuildItem(rs.getString("id"),
 						buildBrief(rs.getString("name"), rs.getString("description"),
 								parseMatchQuestions(rs.getString("match_questions")))),
@@ -173,8 +178,9 @@ public class MetricViewDao extends BaseDao {
 		jdbcTemplate.update("UPDATE " + TABLE_NAME + " SET brief_vector = NULL WHERE domain_id = ?", domainId);
 	}
 
-	public void updateDomainVector(String id, String brief, float[] vector) {
-		jdbcTemplate.update("UPDATE " + TABLE_NAME + " SET brief = ?, brief_vector = ?::vector WHERE id = ?",
+	/** Fill a pending row only: a row written meanwhile keeps the vector of its newer content. */
+	public void fillDomainVector(String id, String brief, float[] vector) {
+		jdbcTemplate.update("UPDATE " + TABLE_NAME + " SET brief = ?, brief_vector = ?::vector WHERE id = ? AND brief_vector IS NULL",
 				brief, new PGvector(vector), id);
 	}
 
@@ -250,8 +256,12 @@ public class MetricViewDao extends BaseDao {
 	}
 
 	public List<Object[]> find(String question, String type, String className, int maxResult, double minScore, String domainId) {
+		return retrievalGate.read(domainId, () -> search(question, type, className, maxResult, minScore, domainId));
+	}
+
+	/** Runs inside the read boundary: the query vector and the rows belong to one generation. */
+	private List<Object[]> search(String question, String type, String className, int maxResult, double minScore, String domainId) {
 		List<Object[]> oList = new ArrayList<Object[]>();
-		retrievalGate.requireRetrievable(domainId);
 		try {
 			Response<Embedding> embeddingResponse = embeddingService.embedding(question, domainId);
 			float[] findVector = embeddingResponse.content().vector();

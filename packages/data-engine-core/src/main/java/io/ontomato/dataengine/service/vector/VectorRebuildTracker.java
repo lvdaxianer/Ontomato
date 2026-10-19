@@ -1,87 +1,100 @@
 package io.ontomato.dataengine.service.vector;
 
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
+import java.util.function.Supplier;
 
 import org.springframework.stereotype.Component;
 
 /**
- * In-memory vector rebuild progress per domain. A single instance holds it, so a restart clears
- * every running state while the recorded vector source still reports a rebuild as needed.
+ * The in-process side of the vector rebuild per domain: whether a run is alive, whether a pause was
+ * requested, and the lock between vector writes or searches and generation changes. A single instance holds it,
+ * so a restart leaves no live run and the persisted state reports the round as interrupted.
  */
 @Component
 public class VectorRebuildTracker {
 
-    public static class Progress {
-
-        private volatile boolean running;
-        private volatile int total;
-        private volatile int done;
-        private volatile String error;
-
-        public boolean isRunning() {
-            return running;
-        }
-
-        public int getTotal() {
-            return total;
-        }
-
-        public int getDone() {
-            return done;
-        }
-
-        public String getError() {
-            return error;
-        }
-
+    private static class Entry {
+        private boolean running;
+        private boolean pauseRequested;
+        // Fair, so a generation change is not postponed indefinitely by a stream of writes.
+        private final ReentrantReadWriteLock lock = new ReentrantReadWriteLock(true);
     }
 
-    private final ConcurrentHashMap<String, Progress> states = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, Entry> entries = new ConcurrentHashMap<>();
 
-    public Progress progressOf(String domainId) {
-        return states.computeIfAbsent(domainId, key -> new Progress());
+    private Entry entryOf(String domainId) {
+        return entries.computeIfAbsent(domainId, key -> new Entry());
     }
 
     public boolean isRunning(String domainId) {
-        Progress progress = states.get(domainId);
-        return progress != null && progress.isRunning();
+        Entry entry = entryOf(domainId);
+        synchronized (entry) {
+            return entry.running;
+        }
     }
 
-    /** Claim the single rebuild slot of this domain; false when one already runs. */
+    public boolean isPauseRequested(String domainId) {
+        Entry entry = entryOf(domainId);
+        synchronized (entry) {
+            return entry.pauseRequested;
+        }
+    }
+
+    /** Claim the single run of this domain; false when one is alive. */
     public boolean tryStart(String domainId) {
-        Progress progress = progressOf(domainId);
-        synchronized (progress) {
-            if (progress.running) {
+        Entry entry = entryOf(domainId);
+        synchronized (entry) {
+            if (entry.running) {
                 return false;
             }
-            progress.running = true;
-            progress.total = 0;
-            progress.done = 0;
-            progress.error = null;
+            entry.running = true;
+            entry.pauseRequested = false;
             return true;
         }
     }
 
-    public void addTotal(String domainId, int count) {
-        Progress progress = progressOf(domainId);
-        synchronized (progress) {
-            progress.total += count;
+    /** Ask the live run to stop before its next item; false when none is alive. */
+    public boolean requestPause(String domainId) {
+        Entry entry = entryOf(domainId);
+        synchronized (entry) {
+            if (!entry.running) {
+                return false;
+            }
+            entry.pauseRequested = true;
+            return true;
         }
     }
 
-    public void addDone(String domainId, int count) {
-        Progress progress = progressOf(domainId);
-        synchronized (progress) {
-            progress.done += count;
+    public void finish(String domainId) {
+        Entry entry = entryOf(domainId);
+        synchronized (entry) {
+            entry.running = false;
+            entry.pauseRequested = false;
         }
     }
 
-    /** Stop the rebuild of this domain: null error means every row was re-vectorized. */
-    public void finish(String domainId, String error) {
-        Progress progress = progressOf(domainId);
-        synchronized (progress) {
-            progress.running = false;
-            progress.error = error;
+    /**
+     * Run a vector write or an admitted search under the shared side: a generation change waits until
+     * it has finished, so no vector of the previous generation lands after the change and no search
+     * compares a query vector of one generation with rows of another.
+     */
+    public <T> T shared(String domainId, Supplier<T> body) {
+        return locked(entryOf(domainId).lock.readLock(), body);
+    }
+
+    /** Change the generation or claim the run with no vector write or search in flight. */
+    public <T> T exclusively(String domainId, Supplier<T> change) {
+        return locked(entryOf(domainId).lock.writeLock(), change);
+    }
+
+    private static <T> T locked(Lock lock, Supplier<T> body) {
+        lock.lock();
+        try {
+            return body.get();
+        } finally {
+            lock.unlock();
         }
     }
 
