@@ -4,7 +4,15 @@ import type {
   BackendModelConfig,
   ModelRole,
 } from "@ontomato/contracts/model-settings";
-import type { DataAdapterField, DataAdapterTestResult } from "@ontomato/contracts/data-adapters";
+import type {
+  ConfigurationProblem,
+  DataAdapterConnection,
+  DataAdapterInfo,
+  DataAdapterRequest,
+  DataAdapterTestResult,
+  DataSourceEntry,
+  MultiDataSourceDefinition,
+} from "@ontomato/contracts/data-adapters";
 
 /**
  * A model entry edited on the model configuration page: based on the entry read by getModelSettings, with fields that
@@ -69,12 +77,29 @@ export const vectorRebuildStatusSchema = z.union([
 export type VectorRebuildStatus = z.output<typeof vectorRebuildStatusSchema>;
 export type VectorRebuildState = VectorRebuildStatus["state"];
 
-/** The saved connection of one adapter (a value of the business config dataAdapterConnections). */
-export type DataAdapterConnection = Partial<Record<DataAdapterField, string>>;
+/** Save and test send the same request: the adapter type plus the current values of only the connection fields it declares. */
+export function dataAdapterRequest(
+  adapter: DataAdapterInfo,
+  connection: DataAdapterConnection
+): DataAdapterRequest {
+  return {
+    type: adapter.type,
+    ...Object.fromEntries(adapter.fields.map((field) => [field, connection[field]])),
+  };
+}
 
 /** Outcome of the last connection test of the data adapter form: the adapter's report, or the failure message. */
 export type DataAdapterTestOutcome =
   { ok: true; result: DataAdapterTestResult } | { ok: false; message: string };
+
+/** Tests a candidate connection without saving it; resolves to the outcome, never rejects. */
+export type TestConnection = (request: DataAdapterRequest) => Promise<DataAdapterTestOutcome>;
+
+/** Why the last multi-source save failed: the located problems the data engine found, or only a message. */
+export interface MultiDataSourceSaveFailure {
+  message: string;
+  problems: ConfigurationProblem[];
+}
 
 /** General parameters, language and data adapter edited on the system config page. */
 export interface SystemSettings {
@@ -93,6 +118,67 @@ export interface SystemSettings {
 export interface BusinessConfig extends SystemSettings {
   agents: Record<ModelRole, BackendAgentConfig>;
   embeddingModelProperties: EmbeddingModelConfig | null;
+  /** The saved multi-source definition; Java omits it until one is saved. */
+  multiDataSource?: MultiDataSourceDefinition;
+}
+
+/**
+ * The parts of GET /admin/getSchema the multi-source editor lists: every ontology class, and every relationship with
+ * its end classes. Validated where it is read.
+ */
+export const ontologyOutlineSchema = z
+  .object({
+    classDefs: z.array(z.object({ name: z.string() })),
+    relationshipDefs: z.record(z.string(), z.object({ fromClass: z.string(), toClass: z.string() })),
+  })
+  .transform(({ classDefs, relationshipDefs }) => ({
+    classNames: classDefs.map(({ name }) => name),
+    relationships: Object.entries(relationshipDefs).map(([name, { fromClass, toClass }]) => ({
+      name,
+      fromClass,
+      toClass,
+    })),
+  }));
+
+export type OntologyOutline = z.output<typeof ontologyOutlineSchema>;
+
+/**
+ * Draft of the multi-source editor: the data sources, the chosen source id per class name and the physical edge name
+ * per relationship name. It keeps entries of classes and relationships the ontology no longer has; only the
+ * definition built for saving is limited to the current ontology.
+ */
+export interface MultiDataSourceDraft {
+  dataSources: DataSourceEntry[];
+  classSources: Record<string, string | undefined>;
+  realEdges: Record<string, string | undefined>;
+}
+
+export function multiDataSourceDraft(
+  definition: MultiDataSourceDefinition = { dataSources: [], classes: [], relationships: [] }
+): MultiDataSourceDraft {
+  return {
+    dataSources: definition.dataSources,
+    classSources: Object.fromEntries(definition.classes.map((route) => [route.forOntoMap, route.sourceId])),
+    realEdges: Object.fromEntries(
+      definition.relationships.map((route) => [route.forOntoMap, route.realEdge])
+    ),
+  };
+}
+
+/** The definition saved from a draft: routes of the current ontology's classes, and the edge names given for its relationships (blank means the relationship name). */
+export function multiDataSourceDefinition(
+  draft: MultiDataSourceDraft,
+  ontology: OntologyOutline
+): MultiDataSourceDefinition {
+  const classes = ontology.classNames.flatMap((name) => {
+    const sourceId = draft.classSources[name];
+    return sourceId ? [{ forOntoMap: name, sourceId }] : [];
+  });
+  const relationships = ontology.relationships.flatMap(({ name }) => {
+    const realEdge = draft.realEdges[name]?.trim();
+    return realEdge ? [{ forOntoMap: name, realEdge }] : [];
+  });
+  return { dataSources: draft.dataSources, classes, relationships };
 }
 
 export type GeneralConfigKey =

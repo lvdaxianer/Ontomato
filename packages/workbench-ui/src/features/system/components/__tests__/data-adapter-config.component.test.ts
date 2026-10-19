@@ -3,9 +3,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import ElementPlus from "element-plus";
 import BusinessConfig from "../BusinessConfig.vue";
 import DataAdapterConfigCard from "../business-config/DataAdapterConfigCard.vue";
-import type { DataAdapterInfo, DataAdapterTestResult } from "@ontomato/contracts/data-adapters";
-import type { DataAdapterConnection } from "../../types";
+import type {
+  DataAdapterConnection,
+  DataAdapterInfo,
+  DataAdapterTestResult,
+  MultiDataSourceDefinition,
+} from "@ontomato/contracts/data-adapters";
 import { adminApi } from "../../../admin";
+import { ApiBusinessError } from "../../../../utils/api";
 import { workbenchI18n } from "../../../../i18n";
 import { businessConfig } from "../../../../../../../apps/workbench/web/src/business-config";
 
@@ -103,49 +108,69 @@ const backend = vi.hoisted(() => ({
   adapters: [] as unknown[],
   dataAdapter: "",
   connections: {} as Record<string, unknown>,
+  multiDataSource: undefined as unknown,
+  schema: {} as unknown,
   used: [] as unknown[],
+  multiUsed: [] as unknown[],
   tested: [] as unknown[],
 }));
 
-vi.mock("../../../admin", () => ({
-  adminApi: {
-    getBusinessConfig: vi.fn(async () => ({
-      success: true,
-      data: JSON.parse(
-        JSON.stringify({
-          agents: { coding: { model: null } },
-          lang: "en",
-          dataAdapter: backend.dataAdapter,
-          dataAdapterConnections: backend.connections,
-        })
-      ),
-    })),
-    listDataAdapters: vi.fn(async () => ({
-      success: true,
-      data: { currentType: backend.dataAdapter, adapters: backend.adapters },
-    })),
-    useDataAdapter: vi.fn(async (payload: unknown) => {
-      backend.used.push(JSON.parse(JSON.stringify(payload)));
-      return { success: true };
-    }),
-    testDataAdapter: vi.fn(async (payload: unknown) => {
-      backend.tested.push(JSON.parse(JSON.stringify(payload)));
-      return { success: true, data: postgresReport };
-    }),
-    getSystemModelConfig: vi.fn(async () => ({ success: false, message: "not under test" })),
-  },
-}));
+vi.mock("../../../admin", async () => {
+  const { ontologyOutlineSchema } =
+    await vi.importActual<typeof import("../../types")>("../../types");
+  return {
+    adminApi: {
+      getBusinessConfig: vi.fn(async () => ({
+        success: true,
+        data: JSON.parse(
+          JSON.stringify({
+            agents: { coding: { model: null } },
+            lang: "en",
+            dataAdapter: backend.dataAdapter,
+            dataAdapterConnections: backend.connections,
+            multiDataSource: backend.multiDataSource,
+          })
+        ),
+      })),
+      listDataAdapters: vi.fn(async () => ({
+        success: true,
+        data: { currentType: backend.dataAdapter, adapters: backend.adapters },
+      })),
+      useDataAdapter: vi.fn(async (payload: unknown) => {
+        backend.used.push(JSON.parse(JSON.stringify(payload)));
+        return { success: true };
+      }),
+      useMultiDataSource: vi.fn(async (payload: unknown) => {
+        backend.multiUsed.push(JSON.parse(JSON.stringify(payload)));
+        return { success: true };
+      }),
+      // The real boundary parse of GET /admin/getSchema runs on the stored schema.
+      getOntologyOutline: vi.fn(async () => ontologyOutlineSchema.parse(backend.schema)),
+      testDataAdapter: vi.fn(async (payload: unknown) => {
+        backend.tested.push(JSON.parse(JSON.stringify(payload)));
+        return { success: true, data: postgresReport };
+      }),
+      getSystemModelConfig: vi.fn(async () => ({ success: false, message: "not under test" })),
+    },
+  };
+});
 
 const i18n = workbenchI18n();
 const t = i18n.global.t as (key: string, params?: Record<string, unknown>) => string;
 const global = { plugins: [i18n, ElementPlus], stubs: { teleport: true } };
 
 const wrappers: ReturnType<typeof mount>[] = [];
-afterEach(() => wrappers.splice(0).forEach((wrapper) => wrapper.unmount()));
+afterEach(() => {
+  wrappers.splice(0).forEach((wrapper) => wrapper.unmount());
+  document.body.innerHTML = "";
+});
 beforeEach(() => {
+  vi.clearAllMocks();
   backend.used = [];
+  backend.multiUsed = [];
   backend.tested = [];
   backend.connections = {};
+  backend.multiDataSource = undefined;
 });
 
 async function mountCard(
@@ -513,5 +538,321 @@ describe("testing the data adapter connection", () => {
 
     expect(card.find(".el-alert--success").exists()).toBe(false);
     expect(card.find("pre.adapter-test-message").text()).toBe(t("admin.dataAdapterInvalidReport"));
+  });
+});
+
+/** Installed adapters of an edition with a graph adapter and the multi-source adapter (which has no connection of its own). */
+const multiAdapters: DataAdapterInfo[] = [
+  {
+    type: "multi",
+    label: "Multi-Source",
+    requiresJoinFields: true,
+    fields: [],
+    examples: {},
+  },
+  {
+    type: "neo4j",
+    label: "Neo4j",
+    requiresJoinFields: false,
+    fields: ["url", "user", "password"],
+    examples: { url: "bolt://host:7687", user: "neo4j" },
+  },
+  ...openSourceAdapters,
+];
+
+/** GET /admin/getSchema `data` (other fields trimmed): three classes and three relationships. */
+const ontologySchema = {
+  datasetDesc: "Sales",
+  classDefs: [
+    { name: "Person", showName: "Person", attrs: [] },
+    { name: "Company", showName: "Company", attrs: [] },
+    { name: "Order", showName: "Order", attrs: [] },
+  ],
+  relationshipDefs: {
+    knows: { fromClass: "Person", toClass: "Person", desc: "", fromField: null, toField: null },
+    works_at: { fromClass: "Person", toClass: "Company", desc: "", fromField: null, toField: null },
+    placed: { fromClass: "Person", toClass: "Order", desc: "", fromField: "id", toField: "buyer" },
+  },
+};
+
+/**
+ * A saved definition: people and companies in a graph, orders in PostgreSQL. It still routes a class and names an
+ * edge that the ontology no longer has; the graph connection carries a field Neo4j does not declare.
+ */
+const savedDefinition: MultiDataSourceDefinition = {
+  dataSources: [
+    {
+      id: "graph",
+      label: "Graph",
+      adapterType: "neo4j",
+      readOnly: false,
+      connection: { url: "bolt://g:7687", user: "neo4j", password: "g-pw", company: "stale" },
+    },
+    {
+      id: "sales",
+      label: "Sales DB",
+      adapterType: "postgresql",
+      readOnly: true,
+      connection: { url: "jdbc:postgresql://db/sales", user: "pg", password: "pg-pw" },
+    },
+  ],
+  classes: [
+    { forOntoMap: "Person", sourceId: "graph" },
+    { forOntoMap: "Company", sourceId: "graph" },
+    { forOntoMap: "Order", sourceId: "sales" },
+    { forOntoMap: "Legacy", sourceId: "sales" },
+  ],
+  relationships: [
+    { forOntoMap: "knows", realEdge: "KNOWS" },
+    { forOntoMap: "gone", realEdge: "GONE" },
+  ],
+};
+
+async function mountMulti(dataAdapter: string, connections: Record<string, DataAdapterConnection> = {}) {
+  backend.multiDataSource = JSON.parse(JSON.stringify(savedDefinition));
+  backend.schema = ontologySchema;
+  const card = await mountCard(multiAdapters, dataAdapter, connections);
+  await flushPromises();
+  return card;
+}
+
+const entries = (card: Card) => card.findAll(".multi-source-entry");
+const inputValues = (scope: ReturnType<Card["find"]>) =>
+  scope.findAll("input.el-input__inner").map((input) => (input.element as HTMLInputElement).value);
+const relationshipRow = (card: Card, name: string) => card.find(`tr[data-relationship="${name}"]`);
+const saveButton = (card: Card) => card.find("button.el-button--primary");
+const buttonIn = (scope: ReturnType<Card["find"]>, label: string) =>
+  scope.findAll("button").find((button) => button.text() === label)!;
+
+describe("the multi-source mode of the data adapter card", () => {
+  it("selecting Multi-Source replaces the connection fields and connection test with data sources, class routing and relationships", async () => {
+    const card = await mountMulti("postgresql", {
+      postgresql: { url: "jdbc:postgresql://db/app", user: "pg", password: "secret" },
+    });
+    expect(card.find(".multi-source-section").exists()).toBe(false);
+    expect(adminApi.getOntologyOutline).not.toHaveBeenCalled();
+
+    await selectAdapter(card, "Multi-Source");
+    await flushPromises();
+
+    expect(card.findAll(".multi-source-heading").map((heading) => heading.text())).toEqual([
+      t("admin.multiSourceDataSources"),
+      t("admin.multiSourceClassRoutes"),
+      t("admin.multiSourceRelationships"),
+    ]);
+    expect(card.findAll(".multi-source-table tbody tr").map((row) => row.find("td").text())).toEqual([
+      "Person",
+      "Company",
+      "Order",
+      "knows",
+      "works_at",
+      "placed",
+    ]);
+    // Only the per-source test buttons remain, one per data source.
+    expect(card.findAll("button").filter((button) => button.text() === t("common.testConnection"))).toHaveLength(2);
+    expect(vi.mocked(adminApi.getOntologyOutline)).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows each saved source with its type's fields and examples; a new source starts without a type", async () => {
+    const card = await mountMulti("multi");
+
+    const [graph, sales] = entries(card);
+    expect(inputValues(graph)).toEqual(["graph", "Graph", "bolt://g:7687", "neo4j", "g-pw"]);
+    expect(graph.findAll("input.el-input__inner")[4].attributes("type")).toBe("password");
+    expect(inputValues(sales)).toEqual(["sales", "Sales DB", "jdbc:postgresql://db/sales", "pg", "pg-pw"]);
+    expect(graph.findAll("input.el-input__inner")[2].attributes("placeholder")).toBe("bolt://host:7687");
+    expect((sales.find(".el-switch input").element as HTMLInputElement).checked).toBe(true);
+
+    await card.find(".multi-source-add").trigger("click");
+    const added = entries(card)[2];
+    expect(inputValues(added)).toEqual(["", ""]);
+    expect(buttonIn(added, t("common.delete"))).toBeTruthy();
+    expect(added.findAll("button").some((button) => button.text() === t("common.testConnection"))).toBe(false);
+  });
+
+  it("offers the installed adapters other than Multi-Source as a source type", async () => {
+    backend.multiDataSource = savedDefinition;
+    backend.schema = ontologySchema;
+    backend.adapters = multiAdapters;
+    backend.dataAdapter = "multi";
+    // The dropdown is teleported to the body; the select's input names it through aria-controls.
+    const page = mount(BusinessConfig, {
+      props: businessConfig,
+      global: { plugins: [i18n, ElementPlus] },
+      attachTo: document.body,
+    });
+    wrappers.push(page);
+    await flushPromises();
+    const graph = page.find(".multi-source-entry");
+    await graph.find(".el-select__wrapper").trigger("click");
+    await flushPromises();
+
+    const list = document.getElementById(graph.find(".el-select input").attributes("aria-controls")!)!;
+    expect([...list.querySelectorAll(".el-select-dropdown__item")].map((item) => item.textContent?.trim())).toEqual([
+      "Neo4j",
+      "PostgreSQL",
+    ]);
+    expect(graph.find(".el-select__selection").text()).toBe("Neo4j");
+  });
+
+  it("derives each relationship's source from its end classes: same-source graph relationships take an edge name, cross-source ones are marked", async () => {
+    const card = await mountMulti("multi");
+
+    const knows = relationshipRow(card, "knows");
+    expect(knows.findAll("td")[1].text()).toBe("Person → Person");
+    expect(knows.findAll("td")[2].text()).toBe("graph");
+    expect((knows.find("input").element as HTMLInputElement).value).toBe("KNOWS");
+    expect(knows.find("input").attributes("placeholder")).toBe("knows");
+
+    const worksAt = relationshipRow(card, "works_at");
+    expect(worksAt.findAll("td")[2].text()).toBe("graph");
+    expect((worksAt.find("input").element as HTMLInputElement).value).toBe("");
+
+    const placed = relationshipRow(card, "placed");
+    expect(placed.find(".el-tag").text()).toBe(t("admin.multiSourceCrossSource"));
+    expect(placed.findAll("td")[2].text()).toContain("graph → sales");
+    expect(placed.find("input").exists()).toBe(false);
+  });
+
+  it("with a single data source, unrouted classes are shown falling back to it", async () => {
+    const card = await mountMulti("multi");
+    expect(card.find(".multi-source-hint").exists()).toBe(false);
+
+    await buttonIn(entries(card)[1], t("common.delete")).trigger("click");
+
+    expect(entries(card)).toHaveLength(1);
+    expect(card.find(".multi-source-hint").text()).toBe(
+      t("admin.multiSourceSingleFallback", { id: "graph" })
+    );
+  });
+
+  it("tests one source with its type and only that type's fields, and shows the report on that source alone", async () => {
+    const card = await mountMulti("multi");
+
+    await buttonIn(entries(card)[0], t("common.testConnection")).trigger("click");
+    await flushPromises();
+
+    expect(backend.tested).toEqual([
+      { type: "neo4j", url: "bolt://g:7687", user: "neo4j", password: "g-pw" },
+    ]);
+    expect(backend.multiUsed).toEqual([]);
+    expect(backend.used).toEqual([]);
+    expect(entries(card)[0].find(".adapter-test-result .el-alert--success").exists()).toBe(true);
+    expect(entries(card)[1].find(".adapter-test-result").exists()).toBe(false);
+
+    // The report describes the values it ran with: editing the source's connection hides it.
+    await entries(card)[0].findAll("input.el-input__inner")[2].setValue("bolt://other:7687");
+    expect(entries(card)[0].find(".adapter-test-result").exists()).toBe(false);
+  });
+
+  it("saves through useMultiDataSource only: every source, routes and non-blank edge names of the current ontology", async () => {
+    const card = await mountMulti("multi");
+    await relationshipRow(card, "works_at").find("input").setValue(" WORKS_AT ");
+    await saveButton(card).trigger("click");
+    await flushPromises();
+
+    expect(backend.multiUsed).toEqual([
+      {
+        dataSources: savedDefinition.dataSources,
+        classes: [
+          { forOntoMap: "Person", sourceId: "graph" },
+          { forOntoMap: "Company", sourceId: "graph" },
+          { forOntoMap: "Order", sourceId: "sales" },
+        ],
+        relationships: [
+          { forOntoMap: "knows", realEdge: "KNOWS" },
+          { forOntoMap: "works_at", realEdge: "WORKS_AT" },
+        ],
+      },
+    ]);
+    expect(backend.used).toEqual([]);
+    expect(card.find(".multi-source-failure").exists()).toBe(false);
+  });
+
+  it("a rejected save lists every located problem; a failure without problems shows its message", async () => {
+    const card = await mountMulti("multi");
+    const message = "Invalid multi-source configuration: a; b";
+    vi.mocked(adminApi.useMultiDataSource).mockRejectedValueOnce(
+      new ApiBusinessError(message, {
+        success: false,
+        message,
+        data: {
+          problems: [
+            { path: "dataSources[sales]", detail: "duplicate id" },
+            { path: "relationship_rule[placed]", detail: "ends in different sources" },
+          ],
+        },
+      })
+    );
+    await saveButton(card).trigger("click");
+    await flushPromises();
+
+    const failure = card.find(".multi-source-failure");
+    expect(failure.text()).toContain(t("admin.multiSourceSaveRejected"));
+    expect(
+      failure.findAll(".multi-source-problems li").map((item) => [item.find("code").text(), item.find("span").text()])
+    ).toEqual([
+      ["dataSources[sales]", "duplicate id"],
+      ["relationship_rule[placed]", "ends in different sources"],
+    ]);
+
+    vi.mocked(adminApi.useMultiDataSource).mockRejectedValueOnce(new Error("java down"));
+    await saveButton(card).trigger("click");
+    await flushPromises();
+
+    expect(card.find(".multi-source-problems").exists()).toBe(false);
+    expect(card.find(".multi-source-failure pre").text()).toBe("java down");
+
+    await saveButton(card).trigger("click");
+    await flushPromises();
+    expect(card.find(".multi-source-failure").exists()).toBe(false);
+  });
+
+  it("the ontology failing to load shows the error with retry, and the multi-source save waits for it", async () => {
+    vi.mocked(adminApi.getOntologyOutline).mockRejectedValueOnce(new Error("schema down"));
+    const card = await mountMulti("multi");
+
+    expect(card.find(".load-error").text()).toContain("schema down");
+    expect(entries(card)).toHaveLength(2);
+    expect(saveButton(card).attributes("disabled")).toBeDefined();
+
+    await buttonIn(card.find(".load-error"), t("common.retry")).trigger("click");
+    await flushPromises();
+
+    expect(card.find(".load-error").exists()).toBe(false);
+    expect(relationshipRow(card, "knows").exists()).toBe(true);
+    expect(saveButton(card).attributes("disabled")).toBeUndefined();
+  });
+
+  it("the single-source save and test are unchanged, and switching modes keeps both drafts", async () => {
+    const card = await mountMulti("multi", {
+      postgresql: { url: "jdbc:postgresql://db/app", user: "pg", password: "secret" },
+    });
+    await entries(card)[0].findAll("input.el-input__inner")[1].setValue("Graph DB");
+
+    await selectAdapter(card, "PostgreSQL");
+    expect(card.find(".multi-source-section").exists()).toBe(false);
+    expect(inputValues(card.find(".config-form"))).toEqual(["jdbc:postgresql://db/app", "pg", "secret"]);
+    await card.find("input.el-input__inner").setValue("jdbc:postgresql://db/other");
+    await runTest(card);
+    await saveButton(card).trigger("click");
+    await flushPromises();
+
+    expect(backend.tested).toEqual([
+      { type: "postgresql", url: "jdbc:postgresql://db/other", user: "pg", password: "secret" },
+    ]);
+    expect(backend.used).toEqual([
+      { type: "postgresql", url: "jdbc:postgresql://db/other", user: "pg", password: "secret" },
+    ]);
+    expect(backend.multiUsed).toEqual([]);
+
+    await selectAdapter(card, "Multi-Source");
+    expect(inputValues(entries(card)[0]).slice(0, 2)).toEqual(["graph", "Graph DB"]);
+    await saveButton(card).trigger("click");
+    await flushPromises();
+
+    expect(backend.used).toHaveLength(1);
+    expect((backend.multiUsed[0] as MultiDataSourceDefinition).dataSources[0].label).toBe("Graph DB");
+    expect(vi.mocked(adminApi.getOntologyOutline)).toHaveBeenCalledTimes(1);
   });
 });
