@@ -148,6 +148,49 @@ class EsAdapterHttpTest {
 	}
 
 	@Test
+	void elasticsearchWithoutShardDocFallsBackToThePrimaryKeyAndRemembersIt() throws Exception {
+		// Elasticsearch 7.10 has PIT but rejects _shard_doc ("No mapping found for [_shard_doc]").
+		// The first page probes it, then the adapter pages by the class primary key for this cluster;
+		// a second query, even through a new adapter, must not probe again.
+		setPitHandler(EsDialect.ELASTICSEARCH, "orders", "{\"count\": 1}", keywordCaps(), req -> {
+			JSONObject body = JSONObject.parseObject(req.body());
+			if ("_shard_doc".equals(firstSortKey(body))) {
+				return new MockResponse(400, "{\"error\":{\"root_cause\":[{\"type\":\"query_shard_exception\","
+						+ "\"reason\":\"No mapping found for [_shard_doc] in order to sort on\"}]}}");
+			}
+			JSONObject hit = JSONObject.of("_source", JSONObject.of("id", "ord_0000"),
+					"sort", JSONArray.of("ord_0000"));
+			return ok(JSONObject.of("hits", JSONObject.of("hits", JSONArray.of(hit))).toJSONString());
+		});
+		EsAdapter adapter = adapter(EsDialect.ELASTICSEARCH, classDef("orders"));
+
+		assertEquals(1, rows(adapter, "orders").size());
+		assertEquals(1, rows(adapter, "orders").size());
+		// A new adapter for the same cluster reuses the cached capability: no second probe.
+		assertEquals(1, rows(adapter(EsDialect.ELASTICSEARCH, classDef("orders")), "orders").size());
+
+		List<JSONObject> searches = searchRequests();
+		assertEquals(4, searches.size());
+		assertEquals("_shard_doc", firstSortKey(searches.get(0)));
+		assertEquals("id", firstSortKey(searches.get(1)));
+		assertEquals("id", firstSortKey(searches.get(2)));
+		assertEquals("id", firstSortKey(searches.get(3)));
+	}
+
+	@Test
+	void aGenericSearch400IsNotRetriedAsAShardDocFallback() {
+		setPitHandler(EsDialect.ELASTICSEARCH, "orders", "{\"count\": 1}", keywordCaps(),
+				req -> new MockResponse(400, "{\"error\":{\"reason\":\"some other bad request\"}}"));
+
+		EsAdapter adapter = adapter(EsDialect.ELASTICSEARCH, classDef("orders"));
+		Exception failure = assertThrows(Exception.class,
+				() -> adapter.executeDsl(singleClassDsl("orders"), "s", null, new ArrayList<>()));
+
+		assertTrue(failure.getMessage().contains("some other bad request"), failure.getMessage());
+		assertEquals(1, searchRequests().size(), "only the rejected _shard_doc attempt, no blind retry");
+	}
+
+	@Test
 	void searchFailuresCloseTheOpenPit() {
 		for (MockResponse failure : List.of(new MockResponse(500, "{\"error\":\"search failed\"}"),
 				new MockResponse(200, "{\"pit_id\":\"p1\"}"),
