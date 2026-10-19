@@ -291,7 +291,7 @@ public class MetricViewController {
 			}
 			JSONArray data = metricViewService.execute(id, p, lang, user, curUserDataPermission, timeoutMinutes);
 			ret.put("success", true);
-			ret.put("data", data);
+			ret.put("data", data != null && data.size() == 1 ? data.get(0) : data);
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 			ret.put("success", false);
