@@ -9,7 +9,7 @@
 ## 2. Manager Artifact and Deployment
 
 - [x] 2.1 Build the amd64 standalone Ontology Manager image from this public checkout and verify image identity, compiled assets, and the focused test suite.
-- [ ] 2.2 Deploy only the Ontology Manager image to 10.100.31.37, preserving the existing data engine and Nginx timeout configuration; verify the service, route, and relation-field bundle behavior.
+- [x] 2.2 Deploy only the Ontology Manager image to 10.100.31.37, preserving the existing data engine and Nginx timeout configuration; verify the service, route, and relation-field bundle behavior.
 
 ## Workflow follow-up
 
