@@ -92,6 +92,7 @@ let nodeInfoRequest = 0;
 let graphRequest = 0;
 let resizeObserver: ResizeObserver | null = null;
 let generationTimer: ReturnType<typeof setTimeout> | undefined;
+let overviewRelationsUpdate = Promise.resolve();
 
 function saveOverviewLayout() {
   if (!overview.value || !graph || !summary.value || rendering.value) return;
@@ -219,25 +220,30 @@ function edgeLabel(data: any) {
   return data?.aggregated ? `${label} · ${Number(data.count).toLocaleString(context.locale)}` : label;
 }
 
-async function updateOverviewRelations() {
-  const target = graph;
-  if (!target || !overview.value) return;
-  const positions = Object.fromEntries(target.getNodeData().filter((node) => !node.data?.anchor)
-    .map((node) => [node.id, { x: Number(node.style?.x || 0), y: Number(node.style?.y || 0) }]));
-  const aggregated = overviewRelations(nodes.value, edges.value, positions, selectedNode.value?.id);
-  const existingAnchors = target.getNodeData().filter((node) => node.data?.anchor);
-  if (!existingAnchors.length) target.addData({ nodes: aggregated.nodes });
-  else target.updateNodeData(aggregated.nodes);
-  target.removeEdgeData(target.getEdgeData().flatMap((edge) => edge.id ? [edge.id] : []));
-  if (aggregateRelations.value) target.addData({ edges: aggregated.edges });
-  else {
-    const geometry = instanceEdgeGeometry(edges.value);
-    target.addData({ edges: edges.value.map((edge, index) => ({
-      id: `edge:${index}:${edge.source}:${edge.target}`, source: edge.source, target: edge.target,
-      data: { type: edge.type, label: edge.label }, ...geometry[index],
-    })) });
-  }
-  await target.draw();
+function updateOverviewRelations() {
+  // Canvas clicks can arrive while a node selection is still drawing. Queue the
+  // updates so a stale redraw cannot remove the newly restored relation lines.
+  overviewRelationsUpdate = overviewRelationsUpdate.then(async () => {
+    const target = graph;
+    if (!target || !overview.value) return;
+    const positions = Object.fromEntries(target.getNodeData().filter((node) => !node.data?.anchor)
+      .map((node) => [node.id, { x: Number(node.style?.x || 0), y: Number(node.style?.y || 0) }]));
+    const aggregated = overviewRelations(nodes.value, edges.value, positions, selectedNode.value?.id);
+    const existingAnchors = target.getNodeData().filter((node) => node.data?.anchor);
+    if (!existingAnchors.length) target.addData({ nodes: aggregated.nodes });
+    else target.updateNodeData(aggregated.nodes);
+    const nextEdges = aggregateRelations.value ? aggregated.edges : (() => {
+      const geometry = instanceEdgeGeometry(edges.value);
+      return edges.value.map((edge, index) => ({
+        id: `edge:${index}:${edge.source}:${edge.target}`, source: edge.source, target: edge.target,
+        data: { type: edge.type, label: edge.label }, ...geometry[index],
+      }));
+    })();
+    target.removeEdgeData(target.getEdgeData().flatMap((edge) => edge.id ? [edge.id] : []));
+    target.addData({ edges: nextEdges });
+    await target.draw();
+  });
+  return overviewRelationsUpdate;
 }
 
 async function toggleAggregation() {
