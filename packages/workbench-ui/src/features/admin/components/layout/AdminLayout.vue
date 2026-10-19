@@ -717,11 +717,11 @@ function openObserve() {
   flex-wrap: wrap;
   align-items: baseline;
   column-gap: var(--spacing-md);
-  padding: var(--spacing-xl) var(--spacing-xl) 0;
+  padding: var(--spacing-xl) var(--spacing-xl) var(--spacing-lg);
 }
 
 .admin-page-heading + .admin-main {
-  padding-top: var(--spacing-lg);
+  padding-top: 0;
 }
 
 .admin-page-heading h1 {
@@ -767,7 +767,7 @@ function openObserve() {
   }
 
   .admin-page-heading {
-    padding: var(--spacing-md) var(--spacing-md) 0;
+    padding: var(--spacing-md) var(--spacing-md) var(--spacing-lg);
   }
 }
 
