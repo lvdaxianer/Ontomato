@@ -124,9 +124,9 @@ const newEdgeToFieldModel = computed({
     v-model="nodeVisibleModel"
     :lock-scroll="false"
     :title="t('hotData.addPencilClass')"
-    width="400px"
+    width="480px"
   >
-    <el-form label-width="110px">
+    <el-form class="object-type-form" label-width="auto">
       <el-form-item :label="t('hotData.className')" required>
         <el-input
           v-model="newNodeNameModel"
@@ -234,3 +234,9 @@ const newEdgeToFieldModel = computed({
     </template>
   </el-dialog>
 </template>
+
+<style scoped>
+.object-type-form :deep(.el-form-item__label) {
+  white-space: nowrap;
+}
+</style>
