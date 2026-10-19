@@ -1,13 +1,13 @@
-import { englishMessages } from "@ontomato/ontology-manager/i18n";
+import { chineseMessages, englishMessages } from "@ontomato/ontology-manager/i18n";
 import type { ManagerShellProfile } from "./shell";
 import { ossPresentation } from "./presentation";
 
 export const ossProfile: ManagerShellProfile = {
   noCredential: { type: "anonymous" },
   themeMessage: "ontomato-theme",
-  locale: "en",
-  localeSync: null,
-  messages: { en: englishMessages },
+  locale: "zh-CN",
+  localeSync: { messageType: "ontomato-locale" },
+  messages: { "zh-CN": chineseMessages, en: englishMessages },
   dataFallbacks: {
     noBusinessDescription: "No business description provided",
     unnamedAsset: "Unnamed asset",

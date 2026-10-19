@@ -1,6 +1,7 @@
 import en from "element-plus/es/locale/lang/en";
 import type { Language as ElementLocale } from "element-plus/es/locale";
 import sharedEn from "./locales/en";
+import { chineseMessages } from "./locales/zh-CN";
 
 export type TextParams = Record<string, string | number>;
 
@@ -462,6 +463,8 @@ export interface ManagerMessages {
 }
 
 export const englishMessages: ManagerMessages = { ontology: ontologyEn, shared: sharedEn, element: en };
+
+export { chineseMessages };
 
 export function ontologyText(messages: ManagerMessages, key: MessageKey, params?: TextParams) {
   return interpolate(messages.ontology[key] ?? ontologyEn[key], params);

@@ -34,7 +34,7 @@ vi.mock("@ontomato/ontology-manager", async () => {
   return { OntologyManager };
 });
 
-const { englishMessages } = await import("@ontomato/ontology-manager/i18n");
+const { chineseMessages, englishMessages } = await import("@ontomato/ontology-manager/i18n");
 const { isolateShellPerTest } = await import("./isolation");
 const { ossProfile } = await import("../profile");
 const { ossPresentation } = await import("../presentation");
@@ -58,14 +58,14 @@ describe("open-source standalone shell", () => {
     window.__ONTOLOGY_MANAGER_CONFIG__ = { API_BASE: "/custom-base/api/", INITIAL_ROUTE: "" };
   });
 
-  it("without parameters: explicit anonymous, fixed en with English messages and open-source data defaults, apiBase from config.js", () => {
+  it("without parameters: explicit anonymous, Chinese messages and open-source data defaults, apiBase from config.js", () => {
     start("/?view=assets");
     expect(host.props).toMatchObject({
       // A relative or root-relative API_BASE resolves against the page URL, so one image serves any gateway prefix.
       apiBase: new URL("/custom-base/api", window.location.href).href,
       credential: { type: "anonymous" },
-      locale: "en",
-      messages: englishMessages,
+      locale: "zh-CN",
+      messages: chineseMessages,
       theme: "light",
       view: "/assets/metrics",
       dataFallbacks: {
@@ -110,18 +110,15 @@ describe("open-source standalone shell", () => {
     expect(host.props?.credential).toEqual({ type: "apiKey", apiKey: "k1" });
   });
 
-  it("locale is fixed to en: URL parameters, stored preference and locale messages change nothing and no preference is written", async () => {
-    localStorage.setItem("app-locale", "zh-CN");
-    start("/?locale=zh-CN");
-    for (const type of ["data-agent-locale", "ontomato-locale"]) {
-      window.dispatchEvent(
-        new MessageEvent("message", { data: { type, locale: "zh-CN" }, source: window })
-      );
-    }
-    window.dispatchEvent(new StorageEvent("storage", { key: "app-locale", newValue: "ja" }));
-    await nextTick();
+  it("defaults to Chinese and accepts an explicit English locale", () => {
+    start("/");
+    expect(host.props?.locale).toBe("zh-CN");
+    expect(host.props?.messages).toBe(chineseMessages);
+    expect(document.documentElement.lang).toBe("zh-CN");
+
+    start("/?locale=en");
     expect(host.props?.locale).toBe("en");
-    expect(localStorage.getItem("app-locale")).toBe("zh-CN");
+    expect(host.props?.messages).toBe(englishMessages);
     expect(document.documentElement.lang).toBe("en");
   });
 
@@ -150,7 +147,7 @@ describe("open-source standalone shell", () => {
     await nextTick();
     expect(sessionStorage.length).toBe(0);
     expect(document.querySelector(".manager-double")).toBeNull();
-    expect(document.querySelector('[role="alert"]')?.textContent).toBe("Request failed (401)");
+    expect(document.querySelector('[role="alert"]')?.textContent).toBe("请求失败（401）");
     start("/");
     expect(host.props?.credential).toEqual({ type: "anonymous" });
   });
