@@ -7,6 +7,7 @@ import {
   formatTimeout,
   type EmbeddingModelConfig,
   type SaveAction,
+  type VectorRebuildState,
   type VectorRebuildStatus,
 } from "../../types";
 import { workbenchContent } from "../../../../content";
@@ -29,16 +30,43 @@ const emit = defineEmits<{
   /** Test this config: the saved one from the row, or the dialog draft before saving. */
   test: [model: EmbeddingModelConfig];
   retry: [];
+  /** Start a new round or resume the current one: the backend decides which. */
   rebuild: [];
+  pause: [];
 }>();
 
 // While loading or after a failed load, no model row is rendered and test/edit are not allowed.
 const writable = computed(() => !props.loading && !props.loadError);
 
-// Whether a rebuild can be started is the backend's judgement (needed and not running); the page does not compare configs.
-const rebuildEnabled = computed(
-  () => props.rebuildStatus !== null && props.rebuildStatus.needed && !props.rebuildStatus.running
+// The reported state is the backend's judgement; the page does not compare configs. It only picks the action and message.
+const rebuildState = computed(() => props.rebuildStatus?.state ?? null);
+const running = computed(() => rebuildState.value === "RUNNING" || rebuildState.value === "PAUSING");
+const resumable = computed(
+  () => rebuildState.value === "PAUSED" || rebuildState.value === "FAILED" || rebuildState.value === "INTERRUPTED"
 );
+
+type AlertType = "info" | "warning" | "error";
+const stateAlerts: Record<Exclude<VectorRebuildState, "READY" | "FAILED">, { type: AlertType; key: string }> = {
+  PENDING: { type: "warning", key: "admin.vectorRebuildNeeded" },
+  RUNNING: { type: "info", key: "admin.vectorRebuildRunning" },
+  PAUSING: { type: "info", key: "admin.vectorRebuildPausing" },
+  PAUSED: { type: "warning", key: "admin.vectorRebuildPaused" },
+  INTERRUPTED: { type: "warning", key: "admin.vectorRebuildInterrupted" },
+};
+
+const rebuildAlert = computed((): { type: AlertType; title: string } | null => {
+  const status = props.rebuildStatus;
+  if (!status || status.state === "READY") return null;
+  const progress = { done: status.done, total: status.total };
+  if (status.state === "FAILED") {
+    const { phase, itemType, itemId, reason } = status.error;
+    const type = itemType === null ? "" : t(`admin.vectorRebuildType.${itemType}`);
+    const step = t(`admin.vectorRebuildStep.${phase}`, { type, id: itemId ?? "" });
+    return { type: "error", title: t("admin.vectorRebuildFailed", { ...progress, step, reason }) };
+  }
+  const alert = stateAlerts[status.state];
+  return { type: alert.type, title: t(alert.key, progress) };
+});
 
 const dialogVisible = ref(false);
 
@@ -129,34 +157,26 @@ async function saveDialog() {
               <el-button link type="primary" :disabled="props.saving" @click="openEditDialog">
                 {{ t("common.edit") }}
               </el-button>
-              <el-button link type="primary" :disabled="!rebuildEnabled" @click="emit('rebuild')">
+              <el-button
+                v-if="running"
+                link
+                type="primary"
+                :disabled="rebuildState === 'PAUSING'"
+                @click="emit('pause')"
+              >
+                {{ t("admin.pauseVectorRebuild") }}
+              </el-button>
+              <el-button v-else-if="resumable" link type="primary" @click="emit('rebuild')">
+                {{ t("admin.resumeVectorRebuild") }}
+              </el-button>
+              <el-button v-else link type="primary" :disabled="rebuildState !== 'PENDING'" @click="emit('rebuild')">
                 {{ t("admin.rebuildVectors") }}
               </el-button>
             </div>
           </li>
         </ul>
-        <div v-if="props.rebuildStatus" class="vector-rebuild-status">
-          <el-alert
-            v-if="props.rebuildStatus.running"
-            type="info"
-            :title="t('admin.vectorRebuildRunning', { done: props.rebuildStatus.done, total: props.rebuildStatus.total })"
-            :closable="false"
-            show-icon
-          />
-          <el-alert
-            v-else-if="props.rebuildStatus.needed"
-            type="warning"
-            :title="t('admin.vectorRebuildNeeded')"
-            :closable="false"
-            show-icon
-          />
-          <el-alert
-            v-if="props.rebuildStatus.error !== null"
-            type="error"
-            :title="t('admin.vectorRebuildFailed', { error: props.rebuildStatus.error })"
-            :closable="false"
-            show-icon
-          />
+        <div v-if="rebuildAlert" class="vector-rebuild-status">
+          <el-alert :type="rebuildAlert.type" :title="rebuildAlert.title" :closable="false" show-icon />
         </div>
       </template>
 

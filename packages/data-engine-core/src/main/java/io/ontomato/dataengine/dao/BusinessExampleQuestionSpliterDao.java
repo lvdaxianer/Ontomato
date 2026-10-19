@@ -58,10 +58,6 @@ public class BusinessExampleQuestionSpliterDao extends BaseDao {
 		String exampleID = bussinessExampleEntity.getId();
 		String embeddedText = embeddingText(bussinessExampleEntity.getQuestion(), bussinessExampleEntity.getContent());
 
-		Response<Embedding> embeddingResponse = embeddingService.embedding(embeddedText, domainId);
-		float[] embededVector = embeddingResponse.content().vector();
-		PGvector pgVector = new PGvector(embededVector);
-
 		if (bussinessExampleEntity.getCreateTimestamp() == null) {
 			bussinessExampleEntity.setCreateTimestamp(System.currentTimeMillis());
 		}
@@ -69,7 +65,9 @@ public class BusinessExampleQuestionSpliterDao extends BaseDao {
 			bussinessExampleEntity.setModifyTimestamp(System.currentTimeMillis());
 		}
 
-		jdbcTemplate.update(
+		retrievalGate.write(domainId, () -> {
+			PGvector pgVector = new PGvector(embeddingService.embedding(embeddedText, domainId).content().vector());
+			return jdbcTemplate.update(
 				"INSERT INTO " + TABLE_NAME + " (" + COLUMNS + ", example_vector) VALUES (?, ?, ?, ?, ?, ?, ?, ?::vector) "
 						+ "ON CONFLICT (id) DO UPDATE SET question = EXCLUDED.question, content = EXCLUDED.content, "
 						+ "status = EXCLUDED.status, create_timestamp = EXCLUDED.create_timestamp, "
@@ -78,6 +76,7 @@ public class BusinessExampleQuestionSpliterDao extends BaseDao {
 				exampleID, bussinessExampleEntity.getQuestion(), bussinessExampleEntity.getContent(),
 				bussinessExampleEntity.getStatus(), bussinessExampleEntity.getCreateTimestamp(),
 				bussinessExampleEntity.getModifyTimestamp(), domainId, pgVector);
+		});
 	}
 
 	public void deleteKnowledge(String exampleID) {
@@ -97,9 +96,15 @@ public class BusinessExampleQuestionSpliterDao extends BaseDao {
 				"SELECT COUNT(*) FROM " + TABLE_NAME + " WHERE domain_id = ?", Integer.class, domainId);
 	}
 
-	public List<VectorRebuildItem> listDomainVectors(String domainId) {
+	public int countDomainPending(String domainId) {
+		return jdbcTemplate.queryForObject(
+				"SELECT COUNT(*) FROM " + TABLE_NAME + " WHERE domain_id = ? AND example_vector IS NULL",
+				Integer.class, domainId);
+	}
+
+	public List<VectorRebuildItem> listDomainPending(String domainId) {
 		return jdbcTemplate.query(
-				"SELECT id, question, content FROM " + TABLE_NAME + " WHERE domain_id = ?",
+				"SELECT id, question, content FROM " + TABLE_NAME + " WHERE domain_id = ? AND example_vector IS NULL",
 				(rs, rowNum) -> new VectorRebuildItem(rs.getString("id"),
 						embeddingText(rs.getString("question"), rs.getString("content"))),
 				domainId);
@@ -109,16 +114,21 @@ public class BusinessExampleQuestionSpliterDao extends BaseDao {
 		jdbcTemplate.update("UPDATE " + TABLE_NAME + " SET example_vector = NULL WHERE domain_id = ?", domainId);
 	}
 
-	public void updateDomainVector(String exampleId, float[] vector) {
-		jdbcTemplate.update("UPDATE " + TABLE_NAME + " SET example_vector = ?::vector WHERE id = ?",
+	/** Fill a pending row only: a row written meanwhile keeps the vector of its newer content. */
+	public void fillDomainVector(String exampleId, float[] vector) {
+		jdbcTemplate.update("UPDATE " + TABLE_NAME + " SET example_vector = ?::vector WHERE id = ? AND example_vector IS NULL",
 				new PGvector(vector), exampleId);
 	}
 
 	public List<BusinessExampleQuestionSpliterEntity> findBussinessExample(String question, int maxResult, String domainId) {
+		return retrievalGate.read(domainId, () -> searchBussinessExample(question, maxResult, domainId));
+	}
+
+	/** Runs inside the read boundary: the query vector and the rows belong to one generation. */
+	private List<BusinessExampleQuestionSpliterEntity> searchBussinessExample(String question, int maxResult, String domainId) {
 		List<BusinessExampleQuestionSpliterEntity> bussinessExampleEntities = new ArrayList<>();
 		float[] findVector = null;
 		String queryString = "";
-		retrievalGate.requireRetrievable(domainId);
 		try {
 			Response<Embedding> embeddingResponse = embeddingService.embedding(question, domainId);
 			findVector = embeddingResponse.content().vector();

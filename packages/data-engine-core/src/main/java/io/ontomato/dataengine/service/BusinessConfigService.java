@@ -5,7 +5,11 @@ import io.ontomato.dataengine.config.BusinessConfig;
 
 public interface BusinessConfigService {
 
+	/** Save the whole config; an existing domain keeps its stored embedding configuration. */
 	public void set(BusinessConfig businessConfig, String domainId);
+
+	/** Replace only the embedding configuration; called by the vector rebuild service alone. */
+	public void setEmbeddingModel(BusinessConfig.EmbeddingModelProperties properties, String domainId);
 	
 	public BusinessConfig get(String domainId);
 	

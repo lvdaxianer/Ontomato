@@ -245,29 +245,12 @@ public class BusinessConfigController {
     	JSONObject ret = new JSONObject();
     	try {
     		User user = SystemUtils.getCurUser();
-    		BusinessConfig businessConfig = businessConfigService.get(user.getDomainId());
-    		if (vectorRebuildService.isRunning(user.getDomainId())) {
-    			throw new IllegalStateException(
-    					langService.get(lang, "Vector.saveRefusedWhileRebuilding"));
-    		}
     		EmbeddingModelProperties embeddingModelProperties = JSONObject.parseObject(JSON.toJSONString(input), EmbeddingModelProperties.class);
     		if (embeddingModelProperties == null || embeddingModelProperties.getDimensions() == null
     				|| embeddingModelProperties.getDimensions() <= 0) {
     			throw new IllegalArgumentException("dimensions must be a positive integer");
     		}
-    		EmbeddingModelProperties oldEmbeddingModelProperties = businessConfig.getEmbeddingModelProperties();
-			// In getConfig, embeddingModelProperties:null means not configured; in that case create the existing object before writing.
-			if (oldEmbeddingModelProperties == null) {
-				oldEmbeddingModelProperties = businessConfig.new EmbeddingModelProperties();
-				businessConfig.setEmbeddingModelProperties(oldEmbeddingModelProperties);
-			}
-    		oldEmbeddingModelProperties.setBaseUrl(embeddingModelProperties.getBaseUrl());
-    		oldEmbeddingModelProperties.setApiKey(embeddingModelProperties.getApiKey());
-    		oldEmbeddingModelProperties.setModelName(embeddingModelProperties.getModelName());
-    		oldEmbeddingModelProperties.setDimensions(embeddingModelProperties.getDimensions());
-    		oldEmbeddingModelProperties.setTimeout(embeddingModelProperties.getTimeout());
-    		oldEmbeddingModelProperties.setCustomHeaders(embeddingModelProperties.getCustomHeaders());
-    		businessConfigService.set(businessConfig, user.getDomainId());
+			vectorRebuildService.saveEmbeddingModel(user.getDomainId(), lang, embeddingModelProperties);
     		ret.put("success", true);
     	} catch (Exception e) {
     		log.error(e.getMessage(), e);
@@ -310,6 +293,22 @@ public class BusinessConfigController {
 		return ret;
 	}
 	
+    @PostMapping("/businessConfig/pauseVectorRebuild")
+    @ResponseBody
+    public JSONObject pauseVectorRebuild(@RequestHeader(ControllerConst.LANG_HEADER_KEY) String lang) {
+        JSONObject ret = new JSONObject();
+        try {
+            User user = SystemUtils.getCurUser();
+            vectorRebuildService.pause(user.getDomainId(), lang);
+            ret.put("success", true);
+        } catch (Exception e) {
+            log.error(e.getMessage(), e);
+            ret.put("success", false);
+            ret.put("message", e.getMessage());
+        }
+        return ret;
+    }
+
 	@PostMapping("/businessConfig/saveKnowledgeMaxResult")
     @ResponseBody
     public JSONObject saveKnowledgeMaxResult(@RequestBody JSONObject input) {

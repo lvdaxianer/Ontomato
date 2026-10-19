@@ -22,7 +22,11 @@ public class BusinessConfig {
 	
 	private EmbeddingModelProperties EmbeddingModelProperties;
 
-	/** The embedding connection, model name and dimensions the vectors of this domain were generated with. */
+	/**
+	 * The embedding connection, model name and dimensions the vectors of this domain were generated with,
+	 * as stored before vector_rebuild_state existed. Read only to seed that state the first time; the state
+	 * then owns the generation and this value is no longer updated.
+	 */
 	private EmbeddingVectorSource embeddingVectorSource;
 	
 	private int knowledgeMaxResult;

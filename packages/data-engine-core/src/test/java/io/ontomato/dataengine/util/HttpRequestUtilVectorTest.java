@@ -107,7 +107,9 @@ class HttpRequestUtilVectorTest {
 		when(embeddingService.embedding(anyString(), anyString())).thenThrow(new RuntimeException(errorMessage));
 		ReflectionTestUtils.setField(vectorResourceDao, "jdbcTemplate", jdbcTemplate);
 		ReflectionTestUtils.setField(vectorResourceDao, "embeddingService", embeddingService);
-		ReflectionTestUtils.setField(vectorResourceDao, "retrievalGate", mock(VectorRetrievalGate.class));
+		VectorRetrievalGate retrievalGate = mock(VectorRetrievalGate.class);
+		when(retrievalGate.read(anyString(), any())).thenAnswer(inv -> inv.<java.util.function.Supplier<?>>getArgument(1).get());
+		ReflectionTestUtils.setField(vectorResourceDao, "retrievalGate", retrievalGate);
 		return vectorResourceDao;
 	}
 

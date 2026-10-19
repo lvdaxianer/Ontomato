@@ -142,11 +142,8 @@ public class VectorResourceDao extends BaseDao {
 
 			String brief = vectorResource.getContent();
 			String replaceBrief = this.replace(brief);
-			float[] embededVector = this.briefToVector(replaceBrief, domainId);
 			vectorResource.setContent(replaceBrief);
-			PGvector pgVector = new PGvector(embededVector);
-
-			jdbcTemplate.update(
+			retrievalGate.write(domainId, () -> jdbcTemplate.update(
 					"INSERT INTO " + quotedTable(indexName) + " (id, brief, path, class_name, attr_name, object_id, brief_vector) "
 							+ "VALUES (?, ?, ?, ?, ?, ?, ?::vector) "
 							+ "ON CONFLICT (id) DO UPDATE SET brief = EXCLUDED.brief, path = EXCLUDED.path, "
@@ -154,7 +151,7 @@ public class VectorResourceDao extends BaseDao {
 							+ "object_id = EXCLUDED.object_id, brief_vector = EXCLUDED.brief_vector",
 					vectorResource.getId(), vectorResource.getContent(), vectorResource.getPath(),
 					vectorResource.getClassName(), vectorResource.getAttrName(), vectorResource.getObjectId(),
-					pgVector);
+					new PGvector(this.briefToVector(replaceBrief, domainId))));
 
 			return vectorResource;
 		} catch (Exception e) {
@@ -170,12 +167,16 @@ public class VectorResourceDao extends BaseDao {
 	}
 
 	public List<VectorResource> find(String question, int maxResult, String className, String attrName, String domainId) {
+		return retrievalGate.read(domainId, () -> search(question, maxResult, className, attrName, domainId));
+	}
+
+	/** Runs inside the read boundary: the query vector and the rows belong to one generation. */
+	private List<VectorResource> search(String question, int maxResult, String className, String attrName, String domainId) {
 		String indexName = this.generateIndexName(className, attrName, domainId);
 		String tableName = quotedTable(indexName);
 		List<VectorResource> vectorResources = new ArrayList<VectorResource>();
 		float[] findVector = null;
 		String queryString = "";
-		retrievalGate.requireRetrievable(domainId);
 		try {
 			ensureTable(indexName);
 
@@ -342,9 +343,9 @@ public class VectorResourceDao extends BaseDao {
 			}
 		}
 		String replaceBrief = this.replace(content);
-		float[] embededVector = this.briefToVector(replaceBrief, domainId);
-		PGvector pgVector = new PGvector(embededVector);
-		int updated = jdbcTemplate.update("UPDATE " + quotedTable(indexName) + " SET brief = ?, brief_vector = ?::vector WHERE object_id = ? AND path = ?", replaceBrief, pgVector, objectId, path);
+		int updated = retrievalGate.write(domainId, () -> jdbcTemplate.update(
+				"UPDATE " + quotedTable(indexName) + " SET brief = ?, brief_vector = ?::vector WHERE object_id = ? AND path = ?",
+				replaceBrief, new PGvector(this.briefToVector(replaceBrief, domainId)), objectId, path));
 		if (updated == 0) {
 			throw new IllegalArgumentException("Vector resource not found for object " + objectId + ": " + path);
 		}
@@ -388,11 +389,16 @@ public class VectorResourceDao extends BaseDao {
 		return jdbcTemplate.queryForObject("SELECT COUNT(*) FROM " + quotedTable(indexName), Integer.class);
 	}
 
+	public int countTablePending(String indexName) {
+		return jdbcTemplate.queryForObject(
+				"SELECT COUNT(*) FROM " + quotedTable(indexName) + " WHERE brief_vector IS NULL", Integer.class);
+	}
+
 	/**
 	 * The stored brief is the exact text the write path embedded, so the rebuild re-embeds it as is.
 	 */
-	public List<VectorRebuildItem> listTableVectors(String indexName) {
-		return jdbcTemplate.query("SELECT id, brief FROM " + quotedTable(indexName),
+	public List<VectorRebuildItem> listTablePending(String indexName) {
+		return jdbcTemplate.query("SELECT id, brief FROM " + quotedTable(indexName) + " WHERE brief_vector IS NULL",
 				(rs, rowNum) -> new VectorRebuildItem(rs.getString("id"), rs.getString("brief")));
 	}
 
@@ -400,8 +406,9 @@ public class VectorResourceDao extends BaseDao {
 		jdbcTemplate.execute("UPDATE " + quotedTable(indexName) + " SET brief_vector = NULL");
 	}
 
-	public void updateTableVector(String indexName, String id, float[] vector) {
-		jdbcTemplate.update("UPDATE " + quotedTable(indexName) + " SET brief_vector = ?::vector WHERE id = ?",
+	/** Fill a pending row only: a row written meanwhile keeps the vector of its newer content. */
+	public void fillTableVector(String indexName, String id, float[] vector) {
+		jdbcTemplate.update("UPDATE " + quotedTable(indexName) + " SET brief_vector = ?::vector WHERE id = ? AND brief_vector IS NULL",
 				new PGvector(vector), id);
 	}
 
