@@ -6,7 +6,19 @@ import { tApp } from "../../../i18n";
 interface SummaryInput {
   title: string;
   report: string;
+  userInstructions?: string;
+  cover?: { title: string; subtitle: string };
   sections: Array<{ id: string; heading: string; text: string; hasChart: boolean }>;
+}
+
+export function getPptDefaultInstructions(): string {
+  return tApp("analysis.delivery.ppt-summarizer.29").split("- sourceSectionIds")[0].trim();
+}
+
+export function buildPptSystemPrompt(instructions?: string): string {
+  const original = tApp("analysis.delivery.ppt-summarizer.29");
+  const contractStart = original.indexOf("- sourceSectionIds");
+  return `${instructions?.trim() || getPptDefaultInstructions()}\n\n${original.slice(contractStart)}`;
 }
 
 function extractJson(text: string): unknown {
@@ -73,7 +85,7 @@ export async function summarizeReportForPpt(input: SummaryInput): Promise<PptSum
   const response = await model.invoke([
     {
       role: "system",
-      content: tApp("analysis.delivery.ppt-summarizer.29"),
+      content: buildPptSystemPrompt(input.userInstructions),
     },
     {
       role: "user",
@@ -82,5 +94,9 @@ export async function summarizeReportForPpt(input: SummaryInput): Promise<PptSum
   ]);
   const outline = normalizeOutline(extractJson(String(response.content || "")), input);
   if (!outline) throw new Error(tApp("analysis.delivery.ppt-summarizer.30"));
+  if (input.cover) {
+    if (input.cover.title.trim()) outline.title = input.cover.title.trim();
+    if (input.cover.subtitle.trim()) outline.subtitle = input.cover.subtitle.trim();
+  }
   return outline;
 }

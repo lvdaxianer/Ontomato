@@ -571,6 +571,7 @@ export const analysisReportApi = {
   updateCardBusinessDescription: (id: string, businessDescription: string) =>
     nodeApiPut(`/analysis-reports/cards/${id}/business-description`, { businessDescription }),
   summarizePpt: (body: unknown) => nodeApiPost("/ppt/summarize", body),
+  pptDefaults: () => nodeApiGet("/ppt/defaults"),
 };
 
 export function cancelDeepAnalysisRun(threadId: string, runId?: string): Promise<Response> {
