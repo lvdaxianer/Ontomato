@@ -486,6 +486,35 @@ describe("requests used by data browsing and visual modeling", () => {
     });
   });
 
+  it("preserves relation join fields from ontology metadata", async () => {
+    respond = async () =>
+      json({
+        success: true,
+        data: {
+          relationship_rule: {
+            order_product: {
+              fromclass: "Order",
+              toclass: "Product",
+              desc: "Order refers to Product",
+              fromField: "product_id",
+              toField: "id",
+            },
+          },
+        },
+      });
+    const { client } = setup({ type: "token", token: "t" });
+
+    await expect(client.loadOntology()).resolves.toMatchObject({
+      relations: [
+        {
+          relationship: "order_product",
+          fromField: "product_id",
+          toField: "id",
+        },
+      ],
+    });
+  });
+
   it("both data defaults come from the host: empty descriptions and non-string names fall back, empty-string names are kept, independent of the UI locale", async () => {
     respond = async (url) =>
       url.endsWith("/admin/getMetas")
