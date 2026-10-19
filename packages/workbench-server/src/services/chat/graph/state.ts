@@ -17,6 +17,7 @@ export type ClarificationResult = {
 };
 
 const TaskPlannerReplyKindSchema = z.enum([
+  "generate_ppt",
   "greeting",
   "out_of_scope",
   "capability",

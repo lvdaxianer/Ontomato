@@ -56,6 +56,7 @@ export interface SkillInput {
   topN?: number;
   excludeCategoryValues?: ChartCategoryValue[];
   services?: {
+    generatePpt?: () => Promise<{ url: string; fileName: string; warnings: string[] }>;
     createModel?: (temperature?: number) => any;
     createLogger?: (name: string) => any;
   };

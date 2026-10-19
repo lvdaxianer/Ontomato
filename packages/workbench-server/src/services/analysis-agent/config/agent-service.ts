@@ -235,7 +235,8 @@ export class AnalysisAgentService {
     domainId?: string
   ): Promise<AnalysisAgent | null> {
     if (updates.enabledSkillIds !== undefined) {
-      await this.validateSkillSelections(updates.enabledSkillIds, SkillCategory.ANALYSIS, domainId);
+      const existing = await this.getAgent(id, domainId);
+      await this.validateSkillSelections(updates.enabledSkillIds, SkillCategory.ANALYSIS, domainId, existing?.enabledSkillIds);
     }
     if (updates.enabledVisualizationSkillIds !== undefined) {
       await this.validateSkillSelections(
@@ -392,7 +393,8 @@ export class AnalysisAgentService {
   private async validateSkillSelections(
     skillIds: string[],
     category: (typeof SkillCategory)[keyof typeof SkillCategory],
-    domainId?: string
+    domainId?: string,
+    previousSkillIds: readonly string[] = []
   ): Promise<void> {
     if (!Array.isArray(skillIds) || skillIds.some((skillId) => typeof skillId !== "string")) {
       throw new InvalidAgentSkillSelectionError(tApp("analysis.config.agent-service.8"));
@@ -410,6 +412,9 @@ export class AnalysisAgentService {
       const skill = catalog.get(skillId);
       if (!skill) {
         throw new InvalidAgentSkillSelectionError(tApp("analysis.config.agent-service.9", { skillId: skillId }));
+      }
+      if (skillId === "generate-ppt" && !registry.isSkillEnabled(skillId) && !previousSkillIds.includes(skillId)) {
+        throw new InvalidAgentSkillSelectionError(tApp("skills.resolve.disabled", {id: skillId}));
       }
       if (skill.manifest.category !== category) {
         throw new InvalidAgentSkillSelectionError(

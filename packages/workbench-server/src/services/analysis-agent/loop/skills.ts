@@ -24,6 +24,7 @@ export interface LoopSkillDeps {
   trajectory: Pick<DeepAnalysisArtifactStore, "start" | "settle">;
   domainId: string;
   selectedSkillIds: readonly string[];
+  generatePpt?: (signal?: AbortSignal) => Promise<{ url: string; fileName: string; warnings: string[] }>;
   resolveEvidence: (questionId: string) => LoopSkillEvidenceRecord | undefined;
 }
 
@@ -226,7 +227,7 @@ function createRunSkillTool(deps: LoopSkillDeps): AgentTool {
   return {
     name: "run_skill",
     description:
-      tApp("analysis.loop.skills.372"),
+      tApp("analysis.loop.skills.372") + " For generate-ppt, omit question_id: the host collects the whole conversation and returns a download link.",
     parameters: {
       type: "object",
       properties: {
@@ -240,14 +241,14 @@ function createRunSkillTool(deps: LoopSkillDeps): AgentTool {
           description: tApp("analysis.loop.skills.375"),
         },
       },
-      required: ["skill_id", "question_id"],
+      required: ["skill_id"],
     },
     async execute(_toolCallId: string, params: Record<string, unknown>, signal?: AbortSignal) {
       const skillId = requiredString(params, "skill_id");
       const questionId = requiredString(params, "question_id");
       const requestedEntry = requiredString(params, "entry");
       if (!skillId) return textResult(tApp("analysis.loop.skills.376"));
-      if (!questionId) return textResult(tApp("analysis.loop.skills.377"));
+      if (!questionId && skillId !== "generate-ppt") return textResult(tApp("analysis.loop.skills.377"));
       if (params.entry !== undefined && !requestedEntry) {
         return textResult(tApp("analysis.loop.skills.378"));
       }
@@ -277,7 +278,18 @@ function createRunSkillTool(deps: LoopSkillDeps): AgentTool {
           );
         }
 
-        const evidence = deps.resolveEvidence(questionId);
+        if (skillId === "generate-ppt") {
+          if (!deps.generatePpt) return result("Conversation PPT generation is unavailable in this context.");
+          const output = await skillRuntime.execute(deps.domainId, skillId,
+            { services: { generatePpt: () => deps.generatePpt!(signal) } },
+            { type: SkillType.EXECUTABLE, category: SkillCategory.ANALYSIS, selectedSkillIds: deps.selectedSkillIds },
+            { entry, maxRetries: 0, signal });
+          signal?.throwIfAborted();
+          const payload = unwrapSkillOutput(output);
+          const failure = declaredSkillError(payload);
+          return result(failure || JSON.stringify(payload), !failure);
+        }
+        const evidence = deps.resolveEvidence(questionId!);
         if (!evidence) {
           return result(
             tApp("analysis.loop.skills.381", { questionId: questionId })
