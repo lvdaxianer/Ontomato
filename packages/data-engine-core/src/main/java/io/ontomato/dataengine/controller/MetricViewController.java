@@ -324,7 +324,11 @@ public class MetricViewController {
 			}
 			Object[] o = metricViewService.execute(id, p, lang, user, curUserDataPermission, timeoutMinutes);
 			ret.put("success", true);
-			ret.put("data", o[0]);
+			Object resultData = o[0];
+			if (resultData instanceof JSONArray data && data.size() == 1) {
+				resultData = data.get(0);
+			}
+			ret.put("data", resultData);
 			((PythonExecuteResult)o[1]).markCompleteness(ret);
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
