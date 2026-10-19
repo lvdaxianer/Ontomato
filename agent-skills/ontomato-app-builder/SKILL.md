@@ -76,6 +76,7 @@ node ontomato.mjs metric-view save @metricView.json
 node ontomato.mjs metric-view delete <id>
 node ontomato.mjs action generate|execute|find|get|save|delete ...
 node ontomato.mjs action execute <id> [<param json|@file>] [--file <path> ...]
+node ontomato.mjs action re-explain [--missing] [--id <id> ...]
 node ontomato.mjs sync-production --action <id> [--action <id> ...] --metric-view <id> [--metric-view <id> ...] [--confirm]
 node ontomato.mjs ask "How many orders were placed last month?"
 ```
@@ -97,6 +98,7 @@ node ontomato.mjs ask "How many orders were placed last month?"
 | `distinct-values` | `POST /admin/queryDistinctAttrValue` | test | Same as `prod-distinct-values` |
 | `execute-dsl` | `POST /dsl/executeV1` | test | DSL result JSON |
 | `metric-view ...` / `action ...` | `/metricView/*`, `/action/*` | test | See below |
+| `action re-explain` | `POST /action/re-explain` | test | Regenerates missing or stale Action explanations; prints success/skipped/failure counts |
 | `sync-production` | `POST /productionEnv/sync` | test → production | Without `--confirm`: the exact plan, no writes. With `--confirm`: per-interface sync result |
 | `ask` | `POST /abcHarness` | test | Streamed events, then the data |
 
@@ -114,7 +116,7 @@ node ontomato.mjs ask "How many orders were placed last month?"
 5. Generate the interfaces the pages need with `metric-view generate` / `action generate`, and debug them with `execute`. Once you understand the structure, editing the definition from `get` and running `save` is usually faster than generating again from natural language.
 6. Run `import-test-data` again before each full test pass, so data changed by Actions in the previous pass does not confuse your checks (re-importing clears the vector resources of classes present in the file and re-attaches the ones in the zip).
 7. Build the pages on the tested MetricViews and Actions; see [Calling interfaces from a page](#calling-interfaces-from-a-page).
-8. In `two-env`, sync the interfaces the pages use to production with `sync-production`. Dry run first, show the user the exact list, and wait for explicit confirmation before running with `--confirm`; see [Sync interfaces back to production](#sync-interfaces-back-to-production).
+8. In `two-env`, run `action re-explain --missing`, then sync the interfaces the pages use to production with `sync-production`. Dry run first, show the user the exact list, and wait for explicit confirmation before running with `--confirm`; see [Sync interfaces back to production](#sync-interfaces-back-to-production).
 9. Deploy the application code to production with the customer's web server or hosting process.
 
 ## Test data
@@ -200,6 +202,15 @@ node ontomato.mjs sync-production --action <id> --metric-view <id> --confirm
 ```
 
 After a successful sync, verify the definitions in production with the read-only `prod-*` commands.
+
+## Action explanations
+
+Every Action stores a server-generated structured explanation (`codeSegments` and `businessMeaning`). It is bound to the action code by `codeHash` and `explanationVersion`:
+
+- `save` regenerates the explanation when the code changes or the stored explanation is missing; a failed generation is returned as an error instead of silently saving an empty explanation.
+- `action re-explain [--missing] [--id <id> ...]` regenerates explanations in the current environment. `--missing` skips actions whose explanation already matches the current code.
+- After bulk creating or importing Actions, run `action re-explain --missing` in the test environment before `sync-production`.
+- `sync-production` refuses Actions whose explanation is missing or does not match the current code. The dry run lists them under `missingExplanations`.
 
 ## Calling interfaces from a page
 

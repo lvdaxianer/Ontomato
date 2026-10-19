@@ -307,6 +307,7 @@ function usage() {
   metric-view save <json|@file>
   metric-view delete <id>
   action generate|execute|find|get|save|delete ...   (same arguments as metric-view)
+  action re-explain [--missing] [--id <id> ...]
   action execute <id> [<param json|@file>] [--file <path> ...]
   sync-production --action <id> [--action <id> ...] --metric-view <id> [--metric-view <id> ...] [--confirm]
   ask <question>`);
@@ -386,6 +387,14 @@ async function main() {
   if (cmd === "execute-dsl") {
     if (argv[1] == null) die("execute-dsl requires a DSL JSON");
     await printDslResult(await send(api, "POST", "/dsl/executeV1", JSON.parse(readInput(argv[1]))));
+    return;
+  }
+  if (cmd === "action" && argv[1] === "re-explain") {
+    const rest = argv.slice(2);
+    const missing = takeFlag(rest, "--missing");
+    const ids = [];
+    for (let v = takeOption(rest, "--id"); v != null; v = takeOption(rest, "--id")) ids.push(v);
+    printData(await requestJson(api, "POST", "/action/re-explain", { ids, missingOnly: missing }));
     return;
   }
   if (cmd === "metric-view") {
