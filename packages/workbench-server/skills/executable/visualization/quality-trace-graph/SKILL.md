@@ -4,13 +4,7 @@ description: Render batches, process executions, assembly events, recall decisio
 type: executable
 category: visualization
 title: Quality Traceability Graph
-tags:
-  - quality traceability
-  - relationship graph
-  - directed graph
-  - derived paths
-  - batch impact
-  - ECharts
+tags: quality traceability, relationship graph, directed graph, derived paths, batch impact, ECharts
 timeout: 15000
 outputType: html
 version: 1.0.0
