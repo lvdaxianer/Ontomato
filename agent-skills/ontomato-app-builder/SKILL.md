@@ -1,6 +1,6 @@
 ---
 name: ontomato-app-builder
-description: Build data applications on Ontomato. Import the production ontomap into a test environment, create test data modeled on production data and business knowledge, generate and debug MetricViews (query interfaces) and Actions (write interfaces) in the test environment, then build pages on top of them. Use when setting up a test environment, preparing test data, writing or debugging a MetricView or Action, or building a page that calls them.
+description: Build data applications on Ontomato. Detect whether the deployment is single-environment or test-plus-production, import the production ontomap into a test environment when there is one, create test data modeled on production data and business knowledge, generate and debug MetricViews (query interfaces) and Actions (write interfaces), build pages, then sync the interfaces the application uses back to production with explicit user confirmation. Use when setting up a test environment, preparing test data, writing or debugging a MetricView or Action, building a page that calls them, or syncing interfaces to production.
 ---
 
 # Ontomato app builder
@@ -9,15 +9,31 @@ Build data applications on Ontomato. Every query on a page calls a MetricView an
 
 ## Two environments
 
+Ontomato deployments come in two shapes. Decide which one you are in before doing anything else:
+
+- **Two-environment (two-env)**: a dedicated test deployment plus a production deployment. Import the production schema and sample its data, build and test interfaces in the test deployment, then sync the interfaces the application uses back to production.
+- **Single-environment (single-env)**: one deployment used for both building and serving. There is no production address, no `import-schema`, no `prod-*` commands and no sync step; build and test directly in that deployment. Users who choose this shape accept that they work on the live data.
+
+Run `env-mode` first. It asks the deployment whether `BACKEND_PRODUCTION_ENV_URL` is set:
+
+| `env-mode` output | Shape | What to do |
+| --- | --- | --- |
+| `two-env` | Test + production | Follow the full workflow, including `import-schema` and the final `sync-production` |
+| `single-env` | One deployment | Skip `import-schema`, `prod-*` and `sync-production`; work directly in `envUrl` |
+
+Do not infer the shape from a failed `import-schema`. The backend also fails it with a clear "Production environment is not configured" message, but `env-mode` is the authoritative, non-destructive check.
+
+### Two-environment details
+
 - **Test environment**: the Ontomato deployment at `envUrl`. This skill imports definitions and test data there, generates and debugs MetricViews and Actions there, and pages call its interfaces.
-- **Production environment**: another Ontomato deployment, read only. The test environment's backend reaches it through the environment variable `BACKEND_PRODUCTION_ENV_URL` (the production **backend** URL, such as `http://prod-host:18087`). An open-source production deployment needs no login, so leave `BACKEND_PRODUCTION_ENV_USER` and `BACKEND_PRODUCTION_ENV_PASSWORD` empty. `import-schema` and the `prod-*` commands go through the test backend to production; the script never calls production directly. Production must run the same Ontomato version as the test environment.
+- **Production environment**: another Ontomato deployment, read only until the final sync. The test environment's backend reaches it through the environment variable `BACKEND_PRODUCTION_ENV_URL` (the production **backend** URL, such as `http://prod-host:18087`). An open-source production deployment needs no login, so leave `BACKEND_PRODUCTION_ENV_USER` and `BACKEND_PRODUCTION_ENV_PASSWORD` empty. `import-schema`, the `prod-*` commands and `sync-production` go through the test backend to production; the script never calls production directly. Production must run the same Ontomato version as the test environment.
 
 **`import-schema` wipes data in the current test domain.** It drops and recreates the current domain's namespace and all its classes and replaces the domain's whole ontomap with the production class and relationship definitions. Run it only against a dedicated test deployment, never against a deployment with business data.
 
 ## Prerequisites
 
-- The test environment is deployed, and its backend has `BACKEND_PRODUCTION_ENV_URL` set and has been restarted.
-- You have the test environment's frontend base URL, such as `http://host:3000`.
+- The deployment is running and you have its frontend base URL, such as `http://host:3000`.
+- `env-mode` returns `two-env` or `single-env`. For `two-env`, the test backend has `BACKEND_PRODUCTION_ENV_URL` set and has been restarted.
 - Node.js 18 or newer. The script uses only Node built-ins.
 
 Every script call goes through the test environment's frontend: `<envUrl>/api/data-query/<backend path>`.
@@ -41,6 +57,7 @@ node ontomato.mjs dataset-desc
 node ontomato.mjs classes
 node ontomato.mjs schema <class> [<class> ...]
 node ontomato.mjs relationships <class> [<class> ...]
+node ontomato.mjs env-mode
 node ontomato.mjs import-schema
 node ontomato.mjs prod-distinct-values <class> <attribute> [--like <pattern>] [--limit <n>]
 node ontomato.mjs prod-query @query.json
@@ -59,6 +76,7 @@ node ontomato.mjs metric-view save @metricView.json
 node ontomato.mjs metric-view delete <id>
 node ontomato.mjs action generate|execute|find|get|save|delete ...
 node ontomato.mjs action execute <id> [<param json|@file>] [--file <path> ...]
+node ontomato.mjs sync-production --action <id> [--action <id> ...] --metric-view <id> [--metric-view <id> ...] [--confirm]
 node ontomato.mjs ask "How many orders were placed last month?"
 ```
 
@@ -68,6 +86,7 @@ node ontomato.mjs ask "How many orders were placed last month?"
 | `classes` | `GET /admin/getAllClassNames` | test | Class names |
 | `schema` | `POST /admin/getSchemaByClassName` | test | Per class: description, then each enabled attribute's name, type, primary-key flag and description |
 | `relationships` | `POST /admin/getRelationshipByClassNames` | test | Relationships that start or end at the classes: source class, relationship type, target class, description |
+| `env-mode` | `GET /testEnv/mode` | local | `two-env` or `single-env` |
 | `import-schema` | `GET /testEnv/importSchema` | production → test | Rebuilds the current test domain from the production class and relationship definitions (see the warning above) |
 | `prod-distinct-values` | `POST /productionEnv/queryDistinctAttrValue` | production | Distinct values of a `varchar` or `text` attribute |
 | `prod-query` | `POST /productionEnv/queryData` | production | DSL result JSON |
@@ -78,6 +97,7 @@ node ontomato.mjs ask "How many orders were placed last month?"
 | `distinct-values` | `POST /admin/queryDistinctAttrValue` | test | Same as `prod-distinct-values` |
 | `execute-dsl` | `POST /dsl/executeV1` | test | DSL result JSON |
 | `metric-view ...` / `action ...` | `/metricView/*`, `/action/*` | test | See below |
+| `sync-production` | `POST /productionEnv/sync` | test → production | Without `--confirm`: the exact plan, no writes. With `--confirm`: per-interface sync result |
 | `ask` | `POST /abcHarness` | test | Streamed events, then the data |
 
 - After `import-schema`, `dataset-desc`, `classes`, `schema` and `relationships` return the production definitions.
@@ -87,12 +107,15 @@ node ontomato.mjs ask "How many orders were placed last month?"
 
 ## Workflow
 
-1. `import-schema` to bring the production definitions into the test environment.
-2. `dataset-desc`, `classes`, `schema` and `relationships` to learn the dataset; `prod-knowledge` for business knowledge the application depends on; `prod-distinct-values` and `prod-query` (with a `limit`, to keep results small) to see what real production data looks like.
-3. Write a test data zip in the format below and load it with `import-test-data`; vector resources are declared inline in `data.json` (their files packed under `files/`) and imported automatically; check the result with `distinct-values` and `execute-dsl`.
-4. Generate the interfaces the pages need with `metric-view generate` / `action generate`, and debug them with `execute`. Once you understand the structure, editing the definition from `get` and running `save` is usually faster than generating again from natural language.
-5. Run `import-test-data` again before each full test pass, so data changed by Actions in the previous pass does not confuse your checks (re-importing clears the vector resources of classes present in the file and re-attaches the ones in the zip).
-6. Build the pages on the tested MetricViews and Actions; see [Calling interfaces from a page](#calling-interfaces-from-a-page).
+1. `env-mode`. If it returns `single-env`, skip steps 2 and 8 and work directly in `envUrl`.
+2. `import-schema` to bring the production definitions into the test environment.
+3. `dataset-desc`, `classes`, `schema` and `relationships` to learn the dataset; `prod-knowledge` for business knowledge the application depends on; `prod-distinct-values` and `prod-query` (with a `limit`, to keep results small) to see what real production data looks like.
+4. Write a test data zip in the format below and load it with `import-test-data`; vector resources are declared inline in `data.json` (their files packed under `files/`) and imported automatically; check the result with `distinct-values` and `execute-dsl`.
+5. Generate the interfaces the pages need with `metric-view generate` / `action generate`, and debug them with `execute`. Once you understand the structure, editing the definition from `get` and running `save` is usually faster than generating again from natural language.
+6. Run `import-test-data` again before each full test pass, so data changed by Actions in the previous pass does not confuse your checks (re-importing clears the vector resources of classes present in the file and re-attaches the ones in the zip).
+7. Build the pages on the tested MetricViews and Actions; see [Calling interfaces from a page](#calling-interfaces-from-a-page).
+8. In `two-env`, sync the interfaces the pages use to production with `sync-production`. Dry run first, show the user the exact list, and wait for explicit confirmation before running with `--confirm`; see [Sync interfaces back to production](#sync-interfaces-back-to-production).
+9. Deploy the application code to production with the customer's web server or hosting process.
 
 ## Test data
 
@@ -152,6 +175,31 @@ A MetricView is a read-only query interface and an Action is a write interface. 
 The core of a definition is `function`: `logic` says in natural language what the interface does, `parameters` are its inputs (`name`, `type`, `description`, `sample`), `code` is the program that runs, and `returnDef` describes the returned structure.
 
 > **Action code and vector attributes:** an Action's `code` is a Python write function. Its object writes use `/writeFunctionOperation/insert` and `/writeFunctionOperation/update`, which write **only non-vector attributes** — `insert` silently ignores any vector attribute and `update` raises an error. Write vector attributes only through the vector primitives `appendVector` / `updateVector` / `deleteVector`, never through `insert`/`update`.
+
+## Sync interfaces back to production
+
+Only in `two-env`. The pages call interfaces that currently exist only in the test environment, so those interfaces must exist in production before the application is deployed there.
+
+`sync-production` copies the named MetricViews and Actions by id to production, where they are upserted: a definition with the same id is overwritten, unrelated production interfaces are left alone. It does not copy data, pages, business knowledge or the ontomap.
+
+### Mandatory confirmation
+
+This command writes to production. The agent must not decide to run it on its own:
+
+1. Run the command **without** `--confirm`. It prints the exact ids and names, writes nothing, and exits non-zero.
+2. Show that plan to the user, state that same-id interfaces in production will be overwritten, and ask for explicit confirmation.
+3. Run again with `--confirm` **only after** the user explicitly approves this specific list. A general instruction to "finish the app", silence, or an earlier approval does not count.
+4. If the list changes, repeat the dry run and ask again.
+
+```bash
+# Dry run: show the plan to the user and wait.
+node ontomato.mjs sync-production --action <id> --metric-view <id>
+
+# Only after the user explicitly confirms this exact list:
+node ontomato.mjs sync-production --action <id> --metric-view <id> --confirm
+```
+
+After a successful sync, verify the definitions in production with the read-only `prod-*` commands.
 
 ## Calling interfaces from a page
 
