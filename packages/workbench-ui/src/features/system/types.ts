@@ -118,8 +118,8 @@ export interface SystemSettings {
 export interface BusinessConfig extends SystemSettings {
   agents: Record<ModelRole, BackendAgentConfig>;
   embeddingModelProperties: EmbeddingModelConfig | null;
-  /** The saved multi-source definition; Java omits it until one is saved. */
-  multiDataSource?: MultiDataSourceDefinition;
+  /** The saved multi-source definition; null until one is saved. */
+  multiDataSource: MultiDataSourceDefinition | null;
 }
 
 /**
@@ -153,9 +153,9 @@ export interface MultiDataSourceDraft {
   realEdges: Record<string, string | undefined>;
 }
 
-export function multiDataSourceDraft(
-  definition: MultiDataSourceDefinition = { dataSources: [], classes: [], relationships: [] }
-): MultiDataSourceDraft {
+/** The draft of a saved definition; with none saved (null), a draft without sources, routes or edge names. */
+export function multiDataSourceDraft(saved: MultiDataSourceDefinition | null): MultiDataSourceDraft {
+  const definition = saved ?? { dataSources: [], classes: [], relationships: [] };
   return {
     dataSources: definition.dataSources,
     classSources: Object.fromEntries(definition.classes.map((route) => [route.forOntoMap, route.sourceId])),

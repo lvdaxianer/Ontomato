@@ -108,7 +108,8 @@ const backend = vi.hoisted(() => ({
   adapters: [] as unknown[],
   dataAdapter: "",
   connections: {} as Record<string, unknown>,
-  multiDataSource: undefined as unknown,
+  // Java sends null until a multi-source definition is saved.
+  multiDataSource: null as unknown,
   schema: {} as unknown,
   used: [] as unknown[],
   multiUsed: [] as unknown[],
@@ -170,7 +171,7 @@ beforeEach(() => {
   backend.multiUsed = [];
   backend.tested = [];
   backend.connections = {};
-  backend.multiDataSource = undefined;
+  backend.multiDataSource = null;
 });
 
 async function mountCard(
@@ -651,6 +652,22 @@ describe("the multi-source mode of the data adapter card", () => {
     // Only the per-source test buttons remain, one per data source.
     expect(card.findAll("button").filter((button) => button.text() === t("common.testConnection"))).toHaveLength(2);
     expect(vi.mocked(adminApi.getOntologyOutline)).toHaveBeenCalledTimes(1);
+  });
+
+  it("a domain that never saved a definition (multiDataSource: null) loads and opens the editor with an empty draft", async () => {
+    backend.schema = ontologySchema;
+    const card = await mountCard(multiAdapters, "postgresql", {
+      postgresql: { url: "jdbc:postgresql://db/app", user: "pg", password: "secret" },
+    });
+    expect(card.find(".el-radio.is-checked").text()).toBe("PostgreSQL");
+
+    await selectAdapter(card, "Multi-Source");
+    await flushPromises();
+
+    expect(entries(card)).toHaveLength(0);
+    expect(card.find(".multi-source-section .card-empty").text()).toBe(t("admin.multiSourceNoSources"));
+    expect(card.findAll(".multi-source-table tbody tr")).toHaveLength(6);
+    expect(card.find(".multi-source-hint").exists()).toBe(false);
   });
 
   it("shows each saved source with its type's fields and examples; a new source starts without a type", async () => {

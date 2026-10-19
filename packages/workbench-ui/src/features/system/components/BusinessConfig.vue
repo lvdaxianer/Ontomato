@@ -213,7 +213,7 @@ async function testDataAdapter() {
 }
 
 // Multi-source draft: kept apart from the single-source connections, so neither mode's save or edits touch the other.
-const multiDraft = ref<MultiDataSourceDraft>(multiDataSourceDraft());
+const multiDraft = ref<MultiDataSourceDraft>(multiDataSourceDraft(null));
 const multiSaveFailure = ref<MultiDataSourceSaveFailure | null>(null);
 // The ontology is read for the multi-source editor only, the first time that mode is shown.
 const ontology = ref<OntologyOutline | null>(null);
