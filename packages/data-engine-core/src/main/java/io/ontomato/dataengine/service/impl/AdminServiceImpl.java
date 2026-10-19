@@ -1073,7 +1073,7 @@ public class AdminServiceImpl implements AdminService {
 	/**
 	 * Enforce the primary-key invariant that lets vector/row-permission DSL rewriting use a single
 	 * primary-key field name across adapters:
-	 * every class has exactly one enabled {@code primaryKey=true} attribute, and its type is {@code varchar}.
+	 * every class has exactly one {@code primaryKey=true} attribute, which must be enabled and of type {@code varchar}.
 	 */
 	private void validatePrimaryKey(Map<String, Object> jsonRule) {
 		List<Map<String, Object>> classDefs = (List<Map<String, Object>>)jsonRule.get("classDef");
@@ -1083,17 +1083,20 @@ public class AdminServiceImpl implements AdminService {
 			int pkCount = 0;
 			String pkName = null;
 			String pkType = null;
+			boolean pkEnabled = true;
 			for (Map<String, Object> attr : attrs) {
-				if (attr.get("enable") == null || (Boolean)attr.get("enable")) {
-					if (attr.get("primaryKey") != null && (Boolean)attr.get("primaryKey")) {
-						pkCount++;
-						pkName = (String)attr.get("name");
-						pkType = (String)attr.get("type");
-					}
+				if (attr.get("primaryKey") != null && (Boolean)attr.get("primaryKey")) {
+					pkCount++;
+					pkName = (String)attr.get("name");
+					pkType = (String)attr.get("type");
+					pkEnabled = attr.get("enable") == null || (Boolean)attr.get("enable");
 				}
 			}
 			if (pkCount != 1) {
-				throw new IllegalArgumentException("Class [" + className + "] must have exactly one primaryKey attribute, but found " + pkCount);
+				throw new IllegalArgumentException("Class [" + className + "] must have exactly one attribute marked primaryKey=true, but found " + pkCount);
+			}
+			if (!pkEnabled) {
+				throw new IllegalArgumentException("Primary key [" + pkName + "] of class [" + className + "] must be enabled (enable=false)");
 			}
 			if (!"varchar".equals(pkType)) {
 				throw new IllegalArgumentException("Primary key [" + pkName + "] of class [" + className + "] must be of type varchar, but was " + pkType);
