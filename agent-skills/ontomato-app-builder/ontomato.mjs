@@ -261,12 +261,36 @@ async function assetCommand(api, prefix, argv) {
   usage();
 }
 
+async function syncProduction(api, rest) {
+  const actionIds = [];
+  for (let v = takeOption(rest, "--action"); v != null; v = takeOption(rest, "--action")) actionIds.push(v);
+  const metricViewIds = [];
+  for (let v = takeOption(rest, "--metric-view"); v != null; v = takeOption(rest, "--metric-view")) metricViewIds.push(v);
+  const confirm = takeFlag(rest, "--confirm");
+  if (rest.length) die(`unknown arguments: ${rest.join(" ")}`);
+  if (actionIds.length === 0 && metricViewIds.length === 0) {
+    die("sync-production requires at least one --action <id> or --metric-view <id>");
+  }
+  const json = await requestJson(api, "POST", "/productionEnv/sync", {
+    actionIds,
+    metricViewIds,
+    dryRun: !confirm,
+  });
+  console.log(JSON.stringify(json, null, 2));
+  if (!confirm) {
+    console.error("DRY RUN ONLY: production was not changed.");
+    console.error("Show this plan to the user and ask for explicit confirmation. Run again with --confirm only after the user approves.");
+    process.exit(2);
+  }
+}
+
 function usage() {
   die(`usage: ontomato.mjs [--lang <tag>] <command>
   dataset-desc
   classes
   schema <class> [<class> ...]
   relationships <class> [<class> ...]
+  env-mode
   import-schema
   prod-distinct-values <class> <attribute> [--like <pattern>] [--limit <n>]
   prod-query <json|@file>
@@ -284,6 +308,7 @@ function usage() {
   metric-view delete <id>
   action generate|execute|find|get|save|delete ...   (same arguments as metric-view)
   action execute <id> [<param json|@file>] [--file <path> ...]
+  sync-production --action <id> [--action <id> ...] --metric-view <id> [--metric-view <id> ...] [--confirm]
   ask <question>`);
 }
 
@@ -307,6 +332,14 @@ async function main() {
     if (classNames.length === 0) die(`${cmd} requires at least one class name`);
     const backendPath = cmd === "schema" ? "/admin/getSchemaByClassName" : "/admin/getRelationshipByClassNames";
     printData(await requestJson(api, "POST", backendPath, { classNames }));
+    return;
+  }
+  if (cmd === "env-mode") {
+    printData(await requestJson(api, "GET", "/testEnv/mode"));
+    return;
+  }
+  if (cmd === "sync-production") {
+    await syncProduction(api, argv.slice(1));
     return;
   }
   if (cmd === "import-schema") {

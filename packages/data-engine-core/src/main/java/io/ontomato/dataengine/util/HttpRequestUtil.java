@@ -14,7 +14,10 @@ import io.ontomato.dataengine.dataAdapter.DslGrammarValidator;
 import io.ontomato.dataengine.service.sys.bean.permission.UserDataPermission;
 
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.core.io.ByteArrayResource;
 import org.springframework.http.*;
+import org.springframework.util.LinkedMultiValueMap;
+import org.springframework.util.MultiValueMap;
 import org.springframework.web.client.RestTemplate;
 
 import java.io.File;
@@ -329,6 +332,29 @@ public class HttpRequestUtil {
         return result;
     }
     
+    public static String postProductionEnvMultipart(String url, Map<String, String> headers, String fieldName, String filename, byte[] data) throws Exception {
+    	RestTemplate restTemplate = new RestTemplate();
+
+        HttpHeaders requestHeaders = new HttpHeaders();
+        requestHeaders.setContentType(MediaType.MULTIPART_FORM_DATA);
+        if (headers != null) {
+        	for (String key : headers.keySet()) {
+        		requestHeaders.add(key, headers.get(key));
+        	}
+        }
+        ByteArrayResource resource = new ByteArrayResource(data) {
+        	@Override
+        	public String getFilename() {
+        		return filename;
+        	}
+        };
+        MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
+        body.add(fieldName, resource);
+        HttpEntity<MultiValueMap<String, Object>> requestEntity = new HttpEntity<>(body, requestHeaders);
+        ResponseEntity<String> responseEntity = restTemplate.postForEntity(url, requestEntity, String.class);
+        return responseEntity.getBody();
+    }
+
     public static String getProductionEnv(String url, Map<String, String> headers) throws Exception {
     	RestTemplate restTemplate = new RestTemplate();
 
