@@ -28,9 +28,9 @@ class LiveInstanceGraphTest {
         var config = new BusinessConfig(); config.setDataAdapter("postgresql");
         when(configs.get("test")).thenReturn(config);
         when(admin.getJSONRule("test")).thenReturn(JSONObject.parseObject("""
-            {"classDef":[{"className":"entity","inStarChart":true,"attrs":[
-              {"name":"id","primaryKey":true},{"name":"name","bizzkey":true}]}],
-             "relationship_rule":{"parent":{"fromclass":"entity","toclass":"entity","fromField":"parent_id","toField":"id"}}}
+             {"classDef":[{"className":"/univ_demo/org","inStarChart":true,"attrs":[
+               {"name":"id","primaryKey":true},{"name":"name","bizzkey":true}]}],
+              "relationship_rule":{"parent":{"fromclass":"/univ_demo/org","toclass":"/univ_demo/org","fromField":"parent_id","toField":"id"}}}
             """));
         when(adapters.create(any(), any())).thenReturn(adapter);
         List<String> dsls = new ArrayList<>();
@@ -61,9 +61,13 @@ class LiveInstanceGraphTest {
         // Counts precede bounded node and edge reads.
         JSONObject nodeStep = JSON.parseArray(dsls.get(1)).getJSONObject(0).getJSONObject("answer").getJSONArray("steps").getJSONObject(0);
         assertEquals(1, nodeStep.getJSONObject("output").getJSONObject("limit").getIntValue("count"));
+        assertEquals("/univ_demo/org", nodeStep.getJSONObject("graph").getJSONArray("patterns").getJSONObject(0)
+                .getJSONArray("objects").getJSONObject(0).getString("class"));
         JSONObject edgeStep = JSON.parseArray(dsls.get(2)).getJSONObject(0).getJSONObject("answer").getJSONArray("steps").getJSONObject(0);
         assertEquals(2001, edgeStep.getJSONObject("output").getJSONObject("limit").getIntValue("count"));
         assertTrue(edgeStep.getJSONObject("graph").getJSONArray("patterns").getJSONObject(0).containsKey("relationship"));
+        assertEquals("/univ_demo/org", edgeStep.getJSONObject("graph").getJSONArray("patterns").getJSONObject(0)
+                .getJSONArray("objects").getJSONObject(1).getString("class"));
         assertEquals(1, service.query("statistics", new JSONObject(), "test").getJSONObject("data").getLongValue("nodeCount"));
         assertEquals(3, dsls.size());
         // Queries go through the generic DSL adapter, never raw JDBC.
