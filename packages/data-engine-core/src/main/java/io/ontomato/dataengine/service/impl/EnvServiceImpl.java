@@ -43,6 +43,7 @@ import io.ontomato.dataengine.service.BusinessConfigService;
 import io.ontomato.dataengine.service.EnvService;
 import io.ontomato.dataengine.service.ProductionEnvironmentLoginPolicy;
 import io.ontomato.dataengine.service.VectorResourceService;
+import io.ontomato.dataengine.util.CodeHashUtil;
 import io.ontomato.dataengine.util.DslUtil;
 import io.ontomato.dataengine.util.HttpRequestUtil;
 import io.ontomato.dataengine.util.ZipBundleUtil;
@@ -195,6 +196,7 @@ public class EnvServiceImpl implements EnvService {
 			throw new Exception("Production environment is not configured (BACKEND_PRODUCTION_ENV_URL is empty)");
 		}
 		JSONArray actions = new JSONArray();
+		JSONArray missingExplanations = new JSONArray();
 		for (String id : actionIds) {
 			Object[] row = actionDao.queryById(id);
 			if (row == null) {
@@ -202,6 +204,13 @@ public class EnvServiceImpl implements EnvService {
 			}
 			Action action = (Action) row[0];
 			action.setFunction(functionDao.queryById((String) row[1]));
+			String codeHash = CodeHashUtil.sha256(action.getFunction() == null ? null : action.getFunction().getCode());
+			boolean ready = action.getCodeSegments() != null && !action.getCodeSegments().isEmpty()
+					&& codeHash != null && codeHash.equals(action.getCodeHash())
+					&& Integer.valueOf(Action.EXPLANATION_VERSION).equals(action.getExplanationVersion());
+			if (!ready) {
+				missingExplanations.add(id);
+			}
 			actions.add(action);
 		}
 		JSONArray metricViews = new JSONArray();
@@ -220,7 +229,11 @@ public class EnvServiceImpl implements EnvService {
 			ret.put("dryRun", true);
 			ret.put("actions", summarizeAssets(actions));
 			ret.put("metricViews", summarizeAssets(metricViews));
+			ret.put("missingExplanations", missingExplanations);
 			return ret;
+		}
+		if (!missingExplanations.isEmpty()) {
+			throw new Exception("Actions missing a current code explanation: " + missingExplanations.toJSONString() + "; run action re-explain before syncing");
 		}
 		String baseUrl = dataRagConfig.getProductionEnvUrl().trim();
 		if (baseUrl.endsWith("/")) {

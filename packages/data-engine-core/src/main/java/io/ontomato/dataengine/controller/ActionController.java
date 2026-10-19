@@ -148,6 +148,30 @@ public class ActionController {
 		return ret;
 	}
 
+	@PostMapping("/action/re-explain")
+	@ResponseBody
+	public JSONObject reExplainActions(@RequestHeader(value = ControllerConst.LANG_HEADER_KEY, required = false) String lang,
+			@RequestBody(required = false) JSONObject param) {
+		JSONObject ret = new JSONObject();
+		try {
+			List<String> ids = new ArrayList<String>();
+			JSONArray array = param == null ? null : param.getJSONArray("ids");
+			if (array != null) {
+				for (int i = 0; i < array.size(); i++) {
+					ids.add(array.getString(i));
+				}
+			}
+			Boolean missingOnly = param == null ? null : param.getBoolean("missingOnly");
+			ret.put("success", true);
+			ret.put("data", actionService.reExplainActions(ids, missingOnly == null || missingOnly, lang));
+		} catch (Exception e) {
+			log.error(e.getMessage(), e);
+			ret.put("success", false);
+			ret.put("message", e.getMessage());
+		}
+		return ret;
+	}
+
 	@GetMapping("/action/export")
 	public ResponseEntity<byte[]> exportActions(@RequestHeader(value = ControllerConst.LANG_HEADER_KEY, required = false) String lang) {
 		try {
@@ -165,10 +189,11 @@ public class ActionController {
 	@PostMapping("/action/import")
 	@ResponseBody
 	public JSONObject importActions(@RequestHeader(value = ControllerConst.LANG_HEADER_KEY, required = false) String lang,
-			@RequestParam("file") MultipartFile file) {
+			@RequestParam("file") MultipartFile file,
+			@RequestParam(value = "allowMissingExplanation", required = false, defaultValue = "false") boolean allowMissingExplanation) {
 		JSONObject ret = new JSONObject();
 		try {
-			ret = actionService.importActions(file.getBytes(), lang);
+			ret = actionService.importActions(file.getBytes(), lang, allowMissingExplanation);
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 			ret.put("success", false);
