@@ -19,8 +19,18 @@ class InstanceGraphSamplingTest {
                 InstanceGraphSampling.quotas(Map.of("Places", 235L, "Utterances", 10415L)));
         assertEquals(Map.of("A", 400, "B", 100),
                 InstanceGraphSampling.quotas(Map.of("A", 8000L, "B", 2000L)));
-        assertEquals(Map.of("Large", 500, "Tiny", 0),
+        assertEquals(Map.of("Large", 499, "Tiny", 1),
                 InstanceGraphSampling.quotas(Map.of("Large", 1000000L, "Tiny", 1L)));
+    }
+
+    @Test void includesEveryNonemptyClassWithoutExceedingItsPopulationOrTheBudget() {
+        var counts = new LinkedHashMap<String, Long>();
+        counts.put("Large", 1000000L);
+        counts.put("Empty", 0L);
+        for (int i = 0; i < 499; i++) counts.put("Tiny" + i, 1L);
+        var quotas = InstanceGraphSampling.quotas(counts);
+        assertEquals(500, quotas.values().stream().mapToInt(Integer::intValue).sum());
+        counts.forEach((name, count) -> assertEquals(count == 0 ? 0 : 1, quotas.get(name)));
     }
 
     @Test void usesLargestRemaindersWithStableClassNameTies() {
