@@ -4,6 +4,7 @@ import java.util.List;
 import java.util.Map;
 
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Component;
 
 import io.ontomato.dataengine.config.BusinessConfig;
@@ -21,11 +22,11 @@ import io.ontomato.dataengine.config.DataRagConfig;
 public class MultiDataSourceAdapterProvider implements DataAdapterProvider {
 
 	/**
-	 * Package-private so tests in this package can wire a registry; Spring injects it as a field, which
-	 * also keeps the registry/provider cycle resolvable (a constructor dependency here would be circular:
-	 * the registry is built from the list of providers, this one included).
+	 * Resolve the registry only when creating a multi-source adapter, after all providers are registered.
+	 * Package-private so tests in this package can also wire a registry directly.
 	 */
 	@Autowired
+	@Lazy
 	DataAdapterRegistry registry;
 
 	@Override

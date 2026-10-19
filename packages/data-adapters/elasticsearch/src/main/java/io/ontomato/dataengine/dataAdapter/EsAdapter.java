@@ -5,6 +5,7 @@ import java.sql.Connection;
 import java.util.concurrent.TimeUnit;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -57,6 +58,12 @@ public class EsAdapter implements DataAdapter {
 	private final long maxMaterialize;
 	private final int maxTerms;
 	private final Map<String, Map<String, String>> fieldCaps = new HashMap<>();
+	/**
+	 * Whether a cluster accepts {@code _shard_doc} as the PIT tiebreaker. Keyed by connection URL
+	 * and dialect so an old cluster is probed once per JVM, not once per DSL execution; adapters
+	 * are cheap per-call shells and do not otherwise share state.
+	 */
+	private static final Map<String, Boolean> SHARD_DOC_SUPPORT = new ConcurrentHashMap<>();
 	private EsHttp http;
 
 	public EsAdapter(DataAdapterConnection connection, Map<String, Object> jsonRule, EsDialect dialect) {
@@ -1717,15 +1724,22 @@ public class EsAdapter implements DataAdapter {
 	}
 
 	private PageResult searchPage(String index, String pit, JSONObject query, JSONArray searchAfter) throws Exception {
-		JSONObject body = new JSONObject();
-		body.put("size", PAGE);
-		body.put("query", query);
-		body.put("sort", dialect.pitSort(openSearchSortField(index)));
-		if (searchAfter != null) {
-			body.put("search_after", searchAfter);
+		JSONObject response;
+		Boolean supported = shardDocSupported();
+		try {
+			response = http().post("/_search", pageBody(index, pit, query, searchAfter));
+			if (supported == null) {
+				rememberShardDoc(true);
+			}
+		} catch (java.io.IOException e) {
+			if (!shardDocUnsupported(e, supported)) {
+				throw e;
+			}
+			// Elasticsearch before 7.12 has PIT but no _shard_doc tiebreaker. Fall back to the class
+			// primary key once, then remember it for this cluster; a later page must not probe again.
+			rememberShardDoc(false);
+			response = http().post("/_search", pageBody(index, pit, query, searchAfter));
 		}
-		body.put("pit", new JSONObject(Map.of("id", pit, "keep_alive", "2m")));
-		JSONObject response = http().post("/_search", body);
 		// Elasticsearch may return a new pit_id per page; OpenSearch answers without one, so the
 		// current ID stays valid for the next page and for the final close.
 		String nextPit = response.getString("pit_id");
@@ -1743,24 +1757,69 @@ public class EsAdapter implements DataAdapter {
 		return new PageResult(nextPit, hits);
 	}
 
+	private JSONObject pageBody(String index, String pit, JSONObject query, JSONArray searchAfter) throws Exception {
+		JSONObject body = new JSONObject();
+		body.put("size", PAGE);
+		body.put("query", query);
+		body.put("sort", dialect.pitSort(pitSortField(index)));
+		if (searchAfter != null) {
+			body.put("search_after", searchAfter);
+		}
+		body.put("pit", new JSONObject(Map.of("id", pit, "keep_alive", "2m")));
+		return body;
+	}
+
+	/** True only for the exact "this cluster has no _shard_doc" failure, never for a generic 400. */
+	private boolean shardDocUnsupported(java.io.IOException failure, Boolean supported) {
+		if (dialect != EsDialect.ELASTICSEARCH || supported != null) {
+			return false;
+		}
+		String message = failure.getMessage();
+		return message != null && message.contains("No mapping found for [_shard_doc]");
+	}
+
+	private Boolean shardDocSupported() {
+		return SHARD_DOC_SUPPORT.get(clusterKey());
+	}
+
+	private void rememberShardDoc(boolean supported) {
+		SHARD_DOC_SUPPORT.put(clusterKey(), supported);
+	}
+
+	private String clusterKey() {
+		String url = connection == null || connection.getUrl() == null ? "" : connection.getUrl().trim();
+		return url + "\u0000" + dialect.type();
+	}
+
 	/**
-	 * The field OpenSearch pages by. Elasticsearch's {@code _shard_doc} needs none; OpenSearch has no
-	 * shard-document tiebreaker before 3.3, so it sorts by the class primary key, which must be a
-	 * sortable keyword field. The class is resolved through the physical index, because EsNaming may
-	 * change the class name's case and characters.
+	 * The PIT cursor field. Elasticsearch normally uses {@code _shard_doc}; clusters before 7.12 and
+	 * OpenSearch before 3.3 have no shard-document tiebreaker, so they sort by the class primary key,
+	 * which must be a sortable keyword field. The class is resolved through the physical index,
+	 * because EsNaming may change the class name's case and characters.
 	 */
-	private String openSearchSortField(String index) throws Exception {
-		if (dialect != EsDialect.OPENSEARCH) {
+	private String pitSortField(String index) throws Exception {
+		if (dialect == EsDialect.ELASTICSEARCH && !Boolean.FALSE.equals(shardDocSupported())) {
 			return null;
 		}
+		return primaryKeySortField(index);
+	}
+
+	private String primaryKeySortField(String index) throws Exception {
 		Map<String, Object> classDef = classDefOfIndex(index);
 		if (classDef == null) {
-			throw new IOException("No object class maps to index [" + index + "]");
+			throw new IOException("No object class maps to index [" + index
+					+ "], so " + dialect.label() + " cannot page it without _shard_doc");
 		}
-		String field = exactField(index, DslUtil.getPrimaryKey(classDef));
+		String primaryKey = DslUtil.getPrimaryKey(classDef);
+		if (primaryKey == null || primaryKey.isBlank()) {
+			throw new IOException("The object class for index [" + index
+					+ "] has no primary key, so " + dialect.label() + " cannot page it without _shard_doc");
+		}
+		String field = exactField(index, primaryKey);
 		if (!"keyword".equals(fieldCaps(index).get(field))) {
 			throw new IOException("The primary key field [" + field + "] of index [" + index
-					+ "] is not a sortable keyword field, so OpenSearch cannot page it");
+					+ "] is not a sortable keyword field, so " + dialect.label()
+					+ " cannot page it without _shard_doc");
 		}
 		return field;
 	}

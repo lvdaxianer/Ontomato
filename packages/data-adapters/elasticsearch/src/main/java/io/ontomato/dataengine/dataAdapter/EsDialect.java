@@ -61,14 +61,18 @@ public enum EsDialect {
 	}
 
 	/**
-	 * The search_after tiebreaker. Elasticsearch orders by {@code _shard_doc}; OpenSearch rejects
-	 * it before 3.3, so it orders by the class primary key field the caller resolved, which must be
-	 * a sortable keyword field to stay a unique cursor across shards.
+	 * The search_after tiebreaker. Elasticsearch normally orders by {@code _shard_doc}; when the
+	 * caller supplies a fallback field (clusters before 7.12 have no {@code _shard_doc}) it orders
+	 * by that field. OpenSearch rejects {@code _shard_doc} before 3.3, so it always orders by the
+	 * class primary key field the caller resolved, which must be a sortable keyword field to stay
+	 * a unique cursor across shards.
 	 */
-	public JSONArray pitSort(String openSearchSortField) {
+	public JSONArray pitSort(String fallbackField) {
 		return switch (this) {
-			case ELASTICSEARCH -> JSONArray.of(new JSONObject(Map.of("_shard_doc", "asc")));
-			case OPENSEARCH -> JSONArray.of(new JSONObject(Map.of(openSearchSortField, "asc")));
+			case ELASTICSEARCH -> fallbackField == null
+					? JSONArray.of(new JSONObject(Map.of("_shard_doc", "asc")))
+					: JSONArray.of(new JSONObject(Map.of(fallbackField, "asc")));
+			case OPENSEARCH -> JSONArray.of(new JSONObject(Map.of(fallbackField, "asc")));
 		};
 	}
 }
