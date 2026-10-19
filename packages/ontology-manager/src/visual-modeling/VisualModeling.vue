@@ -771,6 +771,8 @@ async function loadData() {
         toclass: rel.toclass,
         desc: rel.desc || "",
         isNew: false,
+        fromField: rel.fromField || "",
+        toField: rel.toField || "",
       })
     );
 

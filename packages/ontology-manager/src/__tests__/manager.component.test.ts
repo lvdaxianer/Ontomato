@@ -49,7 +49,9 @@ const metas = (classes: string[]) => ({
       classDesc: `${className} desc`,
       attrs: [{ name: "id", showName: "ID", type: "string" }],
     })),
-    relationship_rule: { has: { fromclass: "Order", toclass: "Item", desc: "has" } },
+    relationship_rule: {
+      has: { fromclass: "Order", toclass: "Item", desc: "has", fromField: "", toField: "" },
+    },
   },
 });
 
@@ -742,6 +744,24 @@ describe("OntologyManager root component with real pages", () => {
     await settle();
     expect(requests.find((request) => request.url.endsWith("/admin/addRelationship"))?.body)
       .toMatchObject({ relationDesc: "contains", fromField: "order_id", toField: "id" });
+  });
+
+  it("visual modeling restores persisted join fields when editing an SQL relation", async () => {
+    metasFor = () => {
+      const response = metas(["Order", "Item"]);
+      response.data.relationship_rule.has.fromField = "item_id";
+      response.data.relationship_rule.has.toField = "id";
+      return response;
+    };
+    mountHost({ ...base, view: "/visual-modeling?focus=object&id=Order&back=playground" });
+    await settle();
+
+    graphHandlers["edge:dblclick"]!({ edge: { id: "has" } });
+    await settle();
+
+    const inputs = [...openDialog("Rel Desc").querySelectorAll<HTMLInputElement>("input")];
+    expect(inputs.map((input) => input.value)).toContain("item_id");
+    expect(inputs.map((input) => input.value)).toContain("id");
   });
 
   it("when only locale/theme change, the open edit dialog and its input are kept without reloading", async () => {

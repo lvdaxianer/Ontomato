@@ -96,6 +96,8 @@ export interface OntologyRelation {
   fromclass: string;
   toclass: string;
   desc: string;
+  fromField?: string;
+  toField?: string;
 }
 
 /** A data instance node in the star-chart instance graph. */
@@ -316,6 +318,8 @@ export function createManagerClient(
       fromclass: item.fromclass,
       toclass: item.toclass,
       desc: item.desc || item.relationship,
+      fromField: item.fromField,
+      toField: item.toField,
     })) as OntologyRelation[];
     return { objects, relations };
   }
