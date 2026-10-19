@@ -223,9 +223,10 @@ function edgeLabel(data: any) {
 function updateOverviewRelations() {
   // Canvas clicks can arrive while a node selection is still drawing. Queue the
   // updates so a stale redraw cannot remove the newly restored relation lines.
-  overviewRelationsUpdate = overviewRelationsUpdate.then(async () => {
-    const target = graph;
-    if (!target || !overview.value) return;
+  const target = graph;
+  const request = graphRequest;
+  const update = overviewRelationsUpdate.then(async () => {
+    if (!target || target !== graph || request !== graphRequest || !overview.value) return;
     const positions = Object.fromEntries(target.getNodeData().filter((node) => !node.data?.anchor)
       .map((node) => [node.id, { x: Number(node.style?.x || 0), y: Number(node.style?.y || 0) }]));
     const aggregated = overviewRelations(nodes.value, edges.value, positions, selectedNode.value?.id);
@@ -239,11 +240,20 @@ function updateOverviewRelations() {
         data: { type: edge.type, label: edge.label }, ...geometry[index],
       }));
     })();
-    target.removeEdgeData(target.getEdgeData().flatMap((edge) => edge.id ? [edge.id] : []));
-    target.addData({ edges: nextEdges });
+    // Removing and adding the same ID before drawing leaves G6 with conflicting
+    // lifecycle operations. Keep existing edges and update them in place.
+    const currentIds = new Set(target.getEdgeData().map((edge) => edge.id));
+    const nextIds = new Set(nextEdges.map((edge) => edge.id));
+    const removed = [...currentIds].filter((id): id is string => !!id && !nextIds.has(id));
+    const updated = nextEdges.filter((edge) => currentIds.has(edge.id));
+    const added = nextEdges.filter((edge) => !currentIds.has(edge.id));
+    if (removed.length) target.removeEdgeData(removed);
+    if (updated.length) target.updateEdgeData(updated);
+    if (added.length) target.addData({ edges: added });
     await target.draw();
   });
-  return overviewRelationsUpdate;
+  overviewRelationsUpdate = update.catch(() => {});
+  return update;
 }
 
 async function toggleAggregation() {

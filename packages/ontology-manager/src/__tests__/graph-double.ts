@@ -78,6 +78,14 @@ export class GraphDouble {
           }
           if (key === "addData" || key === "updateNodeData" || key === "updateEdgeData" || key === "layout") {
             return (...args: unknown[]) => {
+              if (key === "updateEdgeData") {
+                for (const update of args[0] as any[]) {
+                  for (const batch of graphRecord.dataBatches) {
+                    const edge = batch.edges?.find((item: any) => item.id === update.id);
+                    if (edge) Object.assign(edge, update, { style: { ...edge.style, ...update.style } });
+                  }
+                }
+              }
               if (key === "layout") graphRecord.layouts.push(args);
               else graphRecord[key === "addData" ? "dataBatches" : key === "updateEdgeData" ? "edgeUpdates" : "nodeUpdates"].push(args[0]);
               return base;
