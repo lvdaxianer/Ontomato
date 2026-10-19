@@ -35,9 +35,13 @@ export async function proxyResponse(upstreamRes: globalThis.Response, res: Respo
     return;
   }
 
-  const body = await upstreamRes.text();
+  // Read as bytes: text() decodes and re-encodes the body as UTF-8, which corrupts binary
+  // payloads such as the action/metric-view export zips.
+  const body = Buffer.from(await upstreamRes.arrayBuffer());
   res.status(upstreamRes.status);
   res.setHeader("Content-Type", contentType);
+  const disposition = upstreamRes.headers.get("content-disposition");
+  if (disposition) res.setHeader("Content-Disposition", disposition);
   res.send(body);
 }
 
