@@ -6,6 +6,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+import io.ontomato.dataengine.config.multisource.MultiDataSourceDefinition;
 import io.ontomato.dataengine.dataAdapter.DataAdapterConnection;
 
 import org.springframework.beans.BeanUtils;
@@ -41,6 +42,16 @@ public class BusinessConfig {
     private String dataAdapter;
     /** Saved connection per data adapter type. */
     private Map<String, DataAdapterConnection> dataAdapterConnections = new LinkedHashMap<>();
+
+    /**
+     * Multi-source routing; {@code null} means a single-source domain.
+     *
+     * <p>Set together with {@code dataAdapter = "multi"}: the routing then decides which source each class
+     * and relationship belongs to. It lives here rather than in the ontomap because routing must be
+     * decidable from the business config alone (the sandbox write path builds its adapter with no ontomap
+     * in scope).</p>
+     */
+    private MultiDataSourceDefinition multiDataSource;
 
 	@Data
 	public class EmbeddingModelProperties {

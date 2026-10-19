@@ -37,10 +37,11 @@ public class DataAdapterRegistry {
 	/** The adapter of the business config's current type, with that type's saved connection. */
 	public DataAdapter create(BusinessConfig businessConfig, Map<String, Object> jsonRule) {
 		String type = businessConfig.getDataAdapter();
-		// A type never configured gets an empty connection, as the old per-database properties were always seeded
-		// empty: many callers create the adapter only for metadata, and only a query needs real values.
-		DataAdapterConnection connection = businessConfig.getDataAdapterConnections().getOrDefault(type, new DataAdapterConnection());
-		return provider(type).create(connection, dataRagConfig, jsonRule);
+		// The provider reads the whole config, so a type that needs more than one connection can build itself;
+		// the default implementation falls back to the connection saved under its own type, which keeps the
+		// historical single-connection shape: a type never configured has no connection, and only a query
+		// actually needs values.
+		return provider(type).create(businessConfig, dataRagConfig, jsonRule);
 	}
 
 	/** An adapter for a candidate connection, leaving the saved configuration untouched. */
