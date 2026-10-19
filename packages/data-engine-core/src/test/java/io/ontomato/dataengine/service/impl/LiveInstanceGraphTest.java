@@ -28,7 +28,7 @@ class LiveInstanceGraphTest {
         var config = new BusinessConfig(); config.setDataAdapter("postgresql");
         when(configs.get("test")).thenReturn(config);
         when(admin.getJSONRule("test")).thenReturn(JSONObject.parseObject("""
-             {"classDef":[{"className":"/univ_demo/org","inStarChart":true,"attrs":[
+             {"classDef":[{"className":"/univ_demo/org","inStarChart":false,"attrs":[
                {"name":"id","primaryKey":true},{"name":"name","bizzkey":true}]}],
               "relationship_rule":{"parent":{"fromclass":"/univ_demo/org","toclass":"/univ_demo/org","fromField":"parent_id","toField":"id"}}}
             """));
@@ -44,7 +44,7 @@ class LiveInstanceGraphTest {
             JSONArray answer = new JSONArray();
             JSONObject row = new JSONObject();
             if (count) { row.put("cnt", 1); }
-            else if (edge) { row.put("source", "1"); row.put("target", "1"); }
+            else if (edge) { row.put("source", "1"); row.put("target", "1"); row.put("pk", "1"); row.put("name", "Entity"); }
             else { row.put("pk", "1"); row.put("name", "Entity"); }
             answer.add(row);
             JSONObject envelope = new JSONObject();
@@ -70,6 +70,12 @@ class LiveInstanceGraphTest {
                 .getJSONArray("objects").getJSONObject(1).getString("class"));
         assertEquals(1, service.query("statistics", new JSONObject(), "test").getJSONObject("data").getLongValue("nodeCount"));
         assertEquals(3, dsls.size());
+        JSONObject search = service.query("search", JSONObject.of("class", "/univ_demo/org"), "test");
+        assertTrue(search.getBooleanValue("success"), search.toJSONString());
+        assertEquals("/univ_demo/org:1", search.getJSONObject("data").getJSONArray("nodes").getJSONObject(0).getString("id"));
+        JSONObject neighborhood = service.query("neighborhood", JSONObject.of("id", "/univ_demo/org:1"), "test");
+        assertTrue(neighborhood.getBooleanValue("success"), neighborhood.toJSONString());
+        assertFalse(neighborhood.getJSONObject("data").getJSONArray("edges").isEmpty());
         // Queries go through the generic DSL adapter, never raw JDBC.
         verify(adapter, never()).openConnection();
         assertThrows(IllegalArgumentException.class, () -> LiveInstanceGraph.identifier("entity; drop table entity"));
@@ -84,8 +90,8 @@ class LiveInstanceGraphTest {
         when(admin.getJSONRule("test")).thenReturn(JSONObject.parseObject("""
             {"classDef":[
               {"className":"A","inStarChart":true,"attrs":[{"name":"id","primaryKey":true}]},
-              {"className":"B","inStarChart":true,"attrs":[{"name":"id","primaryKey":true}]},
-              {"className":"Empty","inStarChart":true,"attrs":[{"name":"id","primaryKey":true}]}],
+              {"className":"B","inStarChart":false,"attrs":[{"name":"id","primaryKey":true}]},
+              {"className":"Empty","attrs":[{"name":"id","primaryKey":true}]}],
              "relationship_rule":{}}
             """));
         when(adapters.create(any(), any())).thenReturn(adapter);
@@ -111,5 +117,6 @@ class LiveInstanceGraphTest {
         assertEquals(java.util.Map.of("A", 400, "B", 100), limits);
         assertEquals(500, result.getJSONObject("data").getJSONArray("overviewNodes").size());
         assertEquals(10000, result.getJSONObject("data").getLongValue("nodeCount"));
+        assertEquals(3, result.getJSONObject("data").getJSONArray("classes").size());
     }
 }
