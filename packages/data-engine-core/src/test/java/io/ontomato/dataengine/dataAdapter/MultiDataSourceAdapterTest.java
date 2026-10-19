@@ -594,6 +594,83 @@ class MultiDataSourceAdapterTest {
 	}
 
 	// ----------------------------------------------------------------------------------
+	// Physical edge names on the read path
+	// ----------------------------------------------------------------------------------
+
+	/**
+	 * A graph source traverses the name the DSL carries, so a relationship whose ontology name is not its
+	 * physical edge name has to be rewritten before the element is handed over — otherwise the traversal
+	 * asks for an edge that does not exist.
+	 */
+	@Test
+	void rewritesARelationshipTypeToItsPhysicalEdgeName() throws Exception {
+		RecordingProvider pg = new RecordingProvider("postgresql");
+		RecordingAdapter graphSource = pg.adapter("jdbc:g", "gph");
+		providers.add(pg);
+
+		BusinessConfig businessConfig = new BusinessConfig();
+		businessConfig.setDataAdapter("multi");
+		businessConfig.getDataAdapterConnections().put("gph", connection("jdbc:g"));
+		MultiDataSourceDefinition definition = new MultiDataSourceDefinition();
+		definition.getDataSources().add(source("gph", "postgresql"));
+		definition.getClasses().add(classRoute("Person", "gph"));
+		definition.getClasses().add(classRoute("Org", "gph"));
+		RelationshipRoute relationshipRoute = new RelationshipRoute();
+		relationshipRoute.setForOntoMap("person_works_at");
+		relationshipRoute.setSourceId("gph");
+		relationshipRoute.setRealEdge("WORKS_AT");
+		definition.getRelationships().add(relationshipRoute);
+		businessConfig.setMultiDataSource(definition);
+
+		DataAdapterRegistry registry = new DataAdapterRegistry(providers, dataRagConfig);
+		multiProvider.registry = registry;
+		MultiDataSourceAdapter adapter = new MultiDataSourceAdapter(registry, businessConfig, dataRagConfig, null);
+
+		JSONObject first = new JSONObject().fluentPut("idx", 0).fluentPut("variable", "a").fluentPut("class", "Person");
+		JSONObject second = new JSONObject().fluentPut("idx", 1).fluentPut("variable", "b").fluentPut("class", "Org");
+		JSONObject relationship = new JSONObject().fluentPut("from", 0).fluentPut("to", 1)
+				.fluentPut("type", JSONArray.of("person_works_at"));
+		JSONObject pattern = new JSONObject().fluentPut("objects", JSONArray.of(first, second))
+				.fluentPut("relationship", JSONArray.of(relationship));
+		JSONObject graph = new JSONObject().fluentPut("patterns", JSONArray.of(pattern));
+		JSONObject field = new JSONObject().fluentPut("variable", "a").fluentPut("field", "name").fluentPut("as", "name");
+		JSONObject step = new JSONObject().fluentPut("graph", graph)
+				.fluentPut("output", new JSONObject().fluentPut("fields", JSONArray.of(field)));
+		String dslJson = JSONArray.of(new JSONObject().fluentPut("answer",
+				new JSONObject().fluentPut("steps", JSONArray.of(step)))).toJSONString();
+
+		adapter.executeDsl(dslJson, "s", DslExecutionMode.RAW, new ArrayList<>());
+
+		assertTrue(graphSource.lastDsl.contains("WORKS_AT"), graphSource.lastDsl);
+		assertFalse(graphSource.lastDsl.contains("person_works_at"),
+				"the ontology name must not reach the source when a physical edge name is configured");
+	}
+
+	/** With no configured physical name the element is forwarded exactly as it arrived. */
+	@Test
+	void leavesARelationshipTypeAloneWithoutAPhysicalEdgeName() throws Exception {
+		RecordingAdapter[] adapters = new RecordingAdapter[2];
+		MultiDataSourceAdapter adapter = twoSources(adapters);
+
+		JSONObject first = new JSONObject().fluentPut("idx", 0).fluentPut("variable", "a").fluentPut("class", "Person");
+		JSONObject second = new JSONObject().fluentPut("idx", 1).fluentPut("variable", "b").fluentPut("class", "Person");
+		JSONObject relationship = new JSONObject().fluentPut("from", 0).fluentPut("to", 1)
+				.fluentPut("type", JSONArray.of("person_manager"));
+		JSONObject pattern = new JSONObject().fluentPut("objects", JSONArray.of(first, second))
+				.fluentPut("relationship", JSONArray.of(relationship));
+		JSONObject graph = new JSONObject().fluentPut("patterns", JSONArray.of(pattern));
+		JSONObject field = new JSONObject().fluentPut("variable", "a").fluentPut("field", "name").fluentPut("as", "name");
+		JSONObject step = new JSONObject().fluentPut("graph", graph)
+				.fluentPut("output", new JSONObject().fluentPut("fields", JSONArray.of(field)));
+		String dslJson = JSONArray.of(new JSONObject().fluentPut("answer",
+				new JSONObject().fluentPut("steps", JSONArray.of(step)))).toJSONString();
+
+		adapter.executeDsl(dslJson, "s", DslExecutionMode.RAW, new ArrayList<>());
+
+		assertTrue(adapters[0].lastDsl.contains("person_manager"), adapters[0].lastDsl);
+	}
+
+	// ----------------------------------------------------------------------------------
 	// Ontomap validation hook
 	// ----------------------------------------------------------------------------------
 

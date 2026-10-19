@@ -257,7 +257,8 @@ public class MultiDataSourceAdapter implements DataAdapter {
 			JSONObject element = elements.getJSONObject(i);
 			String sourceId = singleSourceOf(element, "[" + i + "]");
 			DataAdapter delegate = factory.create(definition.source(sourceId), jsonRule);
-			String result = delegate.executeDsl(JSONArray.of(element).toJSONString(), sessionId, mode, generatedMqls);
+			String result = delegate.executeDsl(JSONArray.of(withPhysicalEdgeNames(element)).toJSONString(), sessionId, mode,
+					generatedMqls);
 			if (result != null && !result.isBlank()) {
 				merged.addAll(JSON.parseArray(result));
 			}
@@ -370,8 +371,54 @@ public class MultiDataSourceAdapter implements DataAdapter {
 	public Map<String, Object> query(JSONObject dsl, String sandboxId, String domainId,
 			VectorResourceDao vectorResourceDao, DataRagConfig dataRagConfig) throws Exception {
 		String sourceId = singleSourceOf(dsl, "query");
-		return factory.create(definition.source(sourceId), jsonRule).query(dsl, sandboxId, domainId, vectorResourceDao,
-				dataRagConfig);
+		return factory.create(definition.source(sourceId), jsonRule).query(withPhysicalEdgeNames(dsl), sandboxId, domainId,
+				vectorResourceDao, dataRagConfig);
+	}
+
+	/**
+	 * Replace every relationship type that has a configured physical edge name, on a copy.
+	 *
+	 * <p>A graph source traverses the name the DSL carries, so when the ontology relationship name is not
+	 * the physical edge name (or two graph sources would clash on one), the route's {@code realEdge} has to
+	 * be applied on the read path too — otherwise the traversal looks for an edge that does not exist. The
+	 * element is copied, so the caller's object is never mutated and an element with no configured edge name
+	 * is forwarded byte for byte.</p>
+	 */
+	private JSONObject withPhysicalEdgeNames(JSONObject element) {
+		JSONObject copy = JSON.parseObject(element.toJSONString());
+		JSONObject answer = copy.getJSONObject("answer");
+		JSONArray steps = answer == null ? null : answer.getJSONArray("steps");
+		if (steps == null) {
+			return copy;
+		}
+		for (int s = 0; s < steps.size(); s++) {
+			JSONObject graph = steps.getJSONObject(s) == null ? null : steps.getJSONObject(s).getJSONObject("graph");
+			JSONArray patterns = graph == null ? null : graph.getJSONArray("patterns");
+			if (patterns == null) {
+				continue;
+			}
+			for (int p = 0; p < patterns.size(); p++) {
+				JSONArray relationships = patterns.getJSONObject(p) == null ? null
+						: patterns.getJSONObject(p).getJSONArray("relationship");
+				if (relationships == null) {
+					continue;
+				}
+				for (int r = 0; r < relationships.size(); r++) {
+					JSONArray types = relationships.getJSONObject(r) == null ? null
+							: relationships.getJSONObject(r).getJSONArray("type");
+					if (types == null) {
+						continue;
+					}
+					for (int t = 0; t < types.size(); t++) {
+						RelationshipRoute route = router.routeOfRelationship(types.getString(t));
+						if (route != null && route.getRealEdge() != null && !route.getRealEdge().isBlank()) {
+							types.set(t, route.getRealEdge());
+						}
+					}
+				}
+			}
+		}
+		return copy;
 	}
 
 	@Override
