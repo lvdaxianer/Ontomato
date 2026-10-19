@@ -53,9 +53,18 @@ function sectionHeading(content: string): string {
   );
 }
 
-async function buildPptOutline(title: string, sections: readonly ReportSection[]) {
+export interface PptGenerationOptions {
+  userInstructions?: string;
+  cover?: { title: string; subtitle: string };
+  coverImage?: string;
+  coverImageMode?: "background" | "side";
+}
+
+async function buildPptOutline(title: string, sections: readonly ReportSection[], options: PptGenerationOptions = {}) {
   const response = await analysisReportApi.summarizePpt({
     title,
+    userInstructions: options.userInstructions || "",
+    cover: options.cover,
     report: sections.map((section) => stripChartBlocks(section.content)).join("\n\n"),
     sections: sections.map((section) => ({
       id: section.id,
@@ -181,9 +190,10 @@ function addSlideChrome(
 
 export async function downloadPptx(
   title: string,
-  sections: readonly ReportSection[]
+  sections: readonly ReportSection[],
+  options: PptGenerationOptions = {}
 ): Promise<void> {
-  const outline = await buildPptOutline(title, sections);
+  const outline = await buildPptOutline(title, sections, options);
   const sectionCharts = new Map<string, string>();
   for (const section of sections) {
     const chart = section.content.match(/```html\s*\n([\s\S]*?)\n```/)?.[1]?.trim();
@@ -221,6 +231,16 @@ export async function downloadPptx(
         line: { color: "172033", transparency: 100 },
         fill: { color: "172033" },
       });
+      if (options.coverImage && options.coverImageMode !== "background") {
+        slide.addImage({ data: options.coverImage, x: 7.45, y: 1.05, w: 5.2, h: 5.35, transparency: 0 });
+      } else if (options.coverImage) {
+        slide.addImage({ data: options.coverImage, x: 0, y: 0, w: 13.333, h: 7.5, transparency: 42 });
+        slide.addShape(deck.ShapeType.rect, {
+          x: 0, y: 0, w: 13.333, h: 7.5,
+          line: { color: "172033", transparency: 100 },
+          fill: { color: "172033", transparency: 38 },
+        });
+      }
       slide.addShape(deck.ShapeType.rect, {
         x: 0.65,
         y: 0.82,
@@ -232,7 +252,7 @@ export async function downloadPptx(
       slide.addText(outline.title, {
         x: 1.2,
         y: 2.15,
-        w: 10.6,
+        w: options.coverImage && options.coverImageMode !== "background" ? 5.8 : 10.6,
         h: 1.0,
         fontFace: "Microsoft YaHei",
         fontSize: outline.title.length > 24 ? 30 : 38,
@@ -244,11 +264,12 @@ export async function downloadPptx(
       slide.addText(outline.subtitle, {
         x: 1.22,
         y: 3.42,
-        w: 8.5,
-        h: 0.4,
+        w: options.coverImage && options.coverImageMode !== "background" ? 5.8 : 8.5,
+        h: 1.2,
         fontFace: "Microsoft YaHei",
         fontSize: 17,
         color: "B8C5E0",
+        fit: "shrink",
         margin: 0,
       });
       continue;

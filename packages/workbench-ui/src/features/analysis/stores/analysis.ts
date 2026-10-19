@@ -30,7 +30,7 @@ import {
   type ReportSection,
 } from "../../../utils/analysis-report";
 import { buildTaskProgressMap } from "../utils/taskProgress";
-import { downloadPptx } from "../utils/ppt";
+import { downloadPptx, type PptGenerationOptions } from "../utils/ppt";
 import { workbenchContent } from "../../../content";
 
 const TASK_PAGE_SIZE = 50;
@@ -1189,17 +1189,20 @@ export const useAnalysisStore = defineStore("analysis", () => {
     }
   }
 
-  async function createPpt() {
+  async function createPpt(options: PptGenerationOptions = {}) {
     if (!canCreatePpt.value || isCreatingPpt.value) return;
     isCreatingPpt.value = true;
     try {
       await downloadPptx(
         currentTask.value?.name || t("analysis.comprehensiveSummary"),
-        reportSections.value
+        reportSections.value,
+        options
       );
       ElMessage.success(t("analysis.pptGenerated"));
+      return true;
     } catch (error: any) {
       ElMessage.error(error?.message || t("analysis.pptGenerateFailed"));
+      return false;
     } finally {
       isCreatingPpt.value = false;
     }
