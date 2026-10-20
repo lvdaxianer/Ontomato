@@ -7,7 +7,7 @@ import type {
 } from "@ontomato/contracts/analysis-agent";
 
 import { ref, computed, watch, onBeforeUnmount } from "vue";
-import { ElMessage, ElMessageBox } from "element-plus";
+import { ElMessage } from "element-plus";
 import { ArrowLeft, UserRound, Workflow, FileText, Blocks, Database, BarChart3, Cog, Flame, Settings, ZoomIn, ZoomOut, Maximize } from "lucide-vue-next";
 import CodeMirrorEditor from "../../../components/CodeMirrorEditor.vue";
 import { renderAgentMarkdown } from "../../../utils/agent-markdown";
@@ -86,16 +86,22 @@ const promptOptions = computed(() => [
   { value: "summarizerPrompt", label: t("hotData.dimensionReport") },
   { value: "conclusionMakerPrompt", label: t("hotData.conclusionReport") },
 ]);
-async function requestClose() {
+const leaveConfirmationVisible = ref(false);
+function requestClose() {
   if (saving.value) return;
   if (dirty.value) {
-    try {
-      await ElMessageBox.confirm(t("admin.agentEditorDiscard"), t("admin.agentEditorUnsaved"), {
-        confirmButtonText: t("admin.agentEditorDiscardAction"), cancelButtonText: t("common.cancel"), type: "warning",
-      });
-    } catch { return; }
+    leaveConfirmationVisible.value = true;
+    return;
   }
   emit("update:visible", false);
+}
+function discardAndClose() {
+  leaveConfirmationVisible.value = false;
+  emit("update:visible", false);
+}
+async function saveAndClose() {
+  leaveConfirmationVisible.value = false;
+  await handleSubmit();
 }
 function beforeUnload(event: BeforeUnloadEvent) {
   if (props.visible && dirty.value) { event.preventDefault(); event.returnValue = ""; }
@@ -574,7 +580,7 @@ watch(isDark, () => {
               <div class="subgraph-fields">
                <div class="scope-graph-card">
                  <div class="scope-graph-toolbar">
-                    <div><strong>{{ t(form.graphScopeMode === 'subgraph' ? 'admin.graphScopeVisualSelector' : 'admin.graphScopePanorama') }}</strong><span>{{ t('admin.graphScopeVisualSummary', { roots: form.graphScopeMode === 'subgraph' ? form.graphScopeRootClassNames.length : 0, classes: scopeReachableClasses.size }) }}</span></div>
+                     <div><strong>{{ t(form.graphScopeMode === 'subgraph' ? 'admin.graphScopeVisualSelector' : 'admin.graphScopePanorama') }}</strong><span>{{ t(form.graphScopeMode === 'subgraph' ? 'admin.graphScopeVisualSummary' : 'admin.graphScopePanoramaSummary', { roots: form.graphScopeRootClassNames.length, classes: scopeReachableClasses.size }) }}</span></div>
                    <div class="scope-graph-actions">
                      <button type="button" :title="t('admin.graphScopeZoomIn')" :aria-label="t('admin.graphScopeZoomIn')" @click="zoomScopeGraph(0.25)"><ZoomIn :size="15" /></button>
                      <button type="button" :title="t('admin.graphScopeZoomOut')" :aria-label="t('admin.graphScopeZoomOut')" @click="zoomScopeGraph(-0.25)"><ZoomOut :size="15" /></button>
@@ -790,6 +796,20 @@ watch(isDark, () => {
     </div>
     </div>
   </el-drawer>
+  <el-dialog
+    v-model="leaveConfirmationVisible"
+    :title="t('admin.agentEditorUnsaved')"
+    width="440px"
+    append-to-body
+    :close-on-click-modal="false"
+  >
+    <p>{{ t('admin.agentEditorLeaveConfirm') }}</p>
+    <template #footer>
+      <el-button @click="leaveConfirmationVisible = false">{{ t('common.cancel') }}</el-button>
+      <el-button @click="discardAndClose">{{ t('admin.agentEditorDiscardAction') }}</el-button>
+      <el-button type="primary" @click="saveAndClose">{{ t('common.save') }}</el-button>
+    </template>
+  </el-dialog>
 </template>
 
 <style scoped>

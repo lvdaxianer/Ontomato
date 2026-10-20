@@ -51,9 +51,8 @@ public class BusinessConfig {
      * Multi-source routing; {@code null} means a single-source domain.
      *
      * <p>Set together with {@code dataAdapter = "multi"}: the routing then decides which source each class
-     * and relationship belongs to. It lives here rather than in the ontomap because routing must be
-     * decidable from the business config alone (the sandbox write path builds its adapter with no ontomap
-     * in scope).</p>
+     * belongs to, and with the ontomap which source each relationship belongs to. See
+     * {@link MultiDataSourceDefinition} for why it lives here rather than in the ontomap.</p>
      */
     private MultiDataSourceDefinition multiDataSource;
 

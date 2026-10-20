@@ -7,8 +7,8 @@ import {
   detectSessionContext,
   sessionContextLabel,
 } from "../../utils/session-context";
-import AgentMessage from "./AgentMessage.vue";
-import ChatInput from "./ChatInput.vue";
+import AgentMessage from "../../../../components/agent-chat/AgentMessage.vue";
+import ChatInput from "../../../../components/agent-chat/AgentChatInput.vue";
 import WelcomePage from "./WelcomePage.vue";
 import { useI18n } from "vue-i18n";
 
@@ -142,11 +142,23 @@ onBeforeUnmount(() => {
         </template>
 
         <!-- Input -->
-        <ChatInput v-model="draft" :is-sending="isSending" @send="handleSend" @stop="stopSending" />
+        <ChatInput
+          v-model="draft"
+          :is-sending="isSending"
+          :placeholder="t('diagnosis.describeSymptoms')"
+          @send="handleSend"
+          @stop="stopSending"
+        />
       </template>
       <template v-else>
         <WelcomePage @quick-action="handleQuickAction" />
-        <ChatInput v-model="draft" :is-sending="isSending" @send="handleSend" @stop="stopSending" />
+        <ChatInput
+          v-model="draft"
+          :is-sending="isSending"
+          :placeholder="t('diagnosis.describeSymptoms')"
+          @send="handleSend"
+          @stop="stopSending"
+        />
       </template>
     </div>
   </div>

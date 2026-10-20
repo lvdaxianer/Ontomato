@@ -8,8 +8,10 @@ const { t } = useI18n();
 
 const props = defineProps<{
   modelValue: string;
+  /** A response is in flight: Enter does not send and the action button stops it. */
   isSending: boolean;
-  placeholder?: string;
+  placeholder: string;
+  maxlength?: number;
 }>();
 
 const emit = defineEmits<{
@@ -73,7 +75,9 @@ function handleAction() {
       <textarea
         ref="textareaRef"
         :value="modelValue"
-        :placeholder="placeholder || t('diagnosis.describeSymptoms')"
+        :placeholder="placeholder"
+        :aria-label="placeholder"
+        :maxlength="maxlength"
         class="chat-input-textarea"
         rows="1"
         @input="handleInput"
@@ -88,6 +92,7 @@ function handleAction() {
           class="chat-input-action"
           :class="{ 'chat-input-action--stop': isSending }"
           :disabled="!isSending && !modelValue.trim()"
+          :aria-label="t(isSending ? 'common.stop' : 'chat.send')"
           @click="handleAction"
         >
           <Square v-if="isSending" :size="16" />

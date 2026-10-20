@@ -142,7 +142,7 @@ class MultiDataSourceEsTest {
 		DataSourceEntry entry = new DataSourceEntry();
 		entry.setId(id);
 		entry.setAdapterType("elasticsearch");
-		entry.setConnectionRef(id);
+		entry.setConnection(connection());
 		entry.setLabel(id);
 		return entry;
 	}
@@ -160,7 +160,6 @@ class MultiDataSourceEsTest {
 		MultiDataSourceDefinition definition = new MultiDataSourceDefinition();
 		for (String sourceId : sourceIds) {
 			definition.getDataSources().add(source(sourceId));
-			businessConfig.getDataAdapterConnections().put(sourceId, connection());
 		}
 		definition.getClasses().add(route(PERSON, "crm"));
 		definition.getClasses().add(route(INVOICE, "erp"));
@@ -196,7 +195,6 @@ class MultiDataSourceEsTest {
 		definition.getDataSources().add(source("crm"));
 		definition.getClasses().add(route(PERSON, "crm"));
 		businessConfig.setMultiDataSource(definition);
-		businessConfig.getDataAdapterConnections().put("crm", connection());
 		return businessConfig;
 	}
 

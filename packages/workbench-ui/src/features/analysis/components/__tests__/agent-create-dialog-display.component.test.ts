@@ -7,7 +7,7 @@ import en from "../../../../locales/en";
 
 vi.mock("../../../mcp/api", () => ({ listMcpServiceNames: vi.fn(async () => []) }));
 vi.mock("../../api", () => ({
-  analysisAgentApi: {},
+  analysisAgentApi: { createAgent: vi.fn(async () => ({})) },
   analysisTaskApi: {},
   analysisReportApi: {},
   streamDeepAnalysis: vi.fn(),
@@ -33,7 +33,7 @@ async function dialog(extra: Record<string, unknown>) {
     global: {
       plugins: [createI18n({ legacy: false, locale: "en", messages: { en } }), ElementPlus],
       stubs: {
-        ElDialog: { template: "<div><slot/><slot name='footer'/></div>" },
+        ElDialog: { template: "<div class='leave-confirmation-test'><slot/><slot name='footer'/></div>" },
         SkillSelector: true,
       },
     },
@@ -44,6 +44,39 @@ async function dialog(extra: Record<string, unknown>) {
 }
 
 describe("display inputs of the new agent dialog under both layouts", () => {
+  it("offers cancel, discard and save before leaving, and keeps the draft on a failed save", async () => {
+    const { analysisAgentApi } = await import("../../api");
+    const wrapper = await dialog({});
+    const vm = wrapper.vm as any;
+    vm.form.name = "Changed agent";
+    await vm.requestClose();
+    await flushPromises();
+    expect(vm.leaveConfirmationVisible).toBe(true);
+    const confirmation = wrapper.find(".leave-confirmation-test");
+    expect(confirmation.text()).toContain("Cancel");
+    expect(confirmation.text()).toContain("Discard changes");
+    expect(confirmation.text()).toContain("Save");
+    vi.mocked(analysisAgentApi.createAgent).mockRejectedValueOnce(new Error("Save failed"));
+    await vm.saveAndClose();
+    expect(wrapper.emitted("update:visible")).toBeUndefined();
+    expect(vm.form.name).toBe("Changed agent");
+    await vm.requestClose();
+    await vm.saveAndClose();
+    expect(wrapper.emitted("created")).toHaveLength(1);
+    expect(wrapper.emitted("update:visible")).toEqual([[false]]);
+    wrapper.unmount();
+  });
+
+  it("shows root counts only for subgraph scope", async () => {
+    const wrapper = await dialog({});
+    expect(wrapper.find(".scope-graph-toolbar").text()).toContain("0 classes in range");
+    expect(wrapper.find(".scope-graph-toolbar").text()).not.toContain("roots");
+    (wrapper.vm as any).form.graphScopeMode = "subgraph";
+    await flushPromises();
+    expect(wrapper.find(".scope-graph-toolbar").text()).toContain("0 roots");
+    wrapper.unmount();
+  });
+
   it("when omitted: left-column asterisk on the left, labels not wrapped", async () => {
     const wrapper = await dialog({});
     const items = wrapper.findAll(".form-left .el-form-item");

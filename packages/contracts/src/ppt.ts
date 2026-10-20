@@ -11,3 +11,17 @@ export interface PptSummaryOutline {
   subtitle: string;
   slides: PptSummarySlide[];
 }
+
+export interface PptGenerationOptions {
+  userInstructions?: string;
+  cover?: { title: string; subtitle: string };
+  coverImage?: string;
+  coverImageMode?: "background" | "side";
+}
+
+export interface PptSourceSection {
+  id: string;
+  heading?: string;
+  content: string;
+  tables?: Array<{ columns: string[]; rows: unknown[][] }>;
+}

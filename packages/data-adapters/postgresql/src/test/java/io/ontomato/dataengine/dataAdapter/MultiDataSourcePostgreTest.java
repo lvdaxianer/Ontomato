@@ -138,7 +138,7 @@ class MultiDataSourcePostgreTest {
 		DataSourceEntry entry = new DataSourceEntry();
 		entry.setId(id);
 		entry.setAdapterType("postgresql");
-		entry.setConnectionRef(id);
+		entry.setConnection(connection());
 		entry.setLabel(id);
 		return entry;
 	}
@@ -157,7 +157,6 @@ class MultiDataSourcePostgreTest {
 		MultiDataSourceDefinition definition = new MultiDataSourceDefinition();
 		for (String sourceId : sourceIds) {
 			definition.getDataSources().add(source(sourceId));
-			businessConfig.getDataAdapterConnections().put(sourceId, connection());
 		}
 		definition.getClasses().addAll(routes);
 		businessConfig.setMultiDataSource(definition);

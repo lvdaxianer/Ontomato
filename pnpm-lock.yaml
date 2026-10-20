@@ -246,6 +246,9 @@ importers:
       playwright:
         specifier: 1.59.1
         version: 1.59.1
+      pptxgenjs:
+        specifier: 4.0.1
+        version: 4.0.1
       undici:
         specifier: 6.27.0
         version: 6.27.0

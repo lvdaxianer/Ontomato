@@ -12,6 +12,7 @@ import com.alibaba.fastjson2.JSONObject;
 
 import io.ontomato.dataengine.config.BusinessConfig;
 import io.ontomato.dataengine.config.DataRagConfig;
+import io.ontomato.dataengine.dao.JSONRuleDao;
 import io.ontomato.dataengine.dao.VectorResourceDao;
 import io.ontomato.dataengine.dataAdapter.DataAdapter;
 import io.ontomato.dataengine.dataAdapter.DataAdapterRegistry;
@@ -35,6 +36,9 @@ public class SandboxServiceImpl implements SandboxService {
 	
 	@Autowired
 	private VectorResourceDao vectorResourceDao;
+
+	@Autowired
+	private JSONRuleDao jsonRuleDao;
 	
 	@Override
 	public void createNamespace(String tmpNamespace, String domainId) {
@@ -121,10 +125,10 @@ public class SandboxServiceImpl implements SandboxService {
 		}
 	}
 	
+	/** The domain's adapter with its ontomap: writing an edge needs the relationship definitions. */
 	private DataAdapter getDataAdapter(String domainId) {
 		BusinessConfig businessConfig = businessConfigService.get(domainId);
-		DataAdapter adapter = dataAdapterRegistry.create(businessConfig, null);
-		return adapter;
+		return dataAdapterRegistry.create(businessConfig, jsonRuleDao.query(domainId));
 	}
 
 }

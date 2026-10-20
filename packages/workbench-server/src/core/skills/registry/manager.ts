@@ -425,7 +425,37 @@ export class DomainSkillRegistryManager {
 
   private async copyTemplateIfMissing(domainId: string): Promise<string> {
     const skillsRoot = this.getDomainSkillsRoot(domainId);
-    if (fs.existsSync(skillsRoot)) return skillsRoot;
+    if (fs.existsSync(skillsRoot)) {
+      for (const skillId of ["leaflet", "quality-trace-graph"]) {
+        const installedMarker = path.join(skillsRoot, `.${skillId}-v1`);
+        if (fs.existsSync(installedMarker)) continue;
+        for (const { from, to } of this.templateSources) {
+          const relative = path.join("executable", "visualization", skillId);
+          const source = path.join(from, relative);
+          const target = path.join(skillsRoot, to, relative);
+          if (!fs.existsSync(source)) continue;
+          if (!fs.existsSync(target)) {
+            await fs.promises.cp(source, target, { recursive: true, force: false });
+          }
+          await fs.promises.writeFile(installedMarker, "1");
+          break;
+        }
+      }
+      const marker = path.join(skillsRoot, ".generate-ppt-v1");
+      if (!fs.existsSync(marker)) {
+        for (const {from, to} of this.templateSources) {
+          const relative = path.join("executable", "analysis", "generate-ppt");
+          const source = path.join(from, relative);
+          const target = path.join(skillsRoot, to, relative);
+          if (fs.existsSync(source)) {
+            if (!fs.existsSync(target)) await fs.promises.cp(source, target, {recursive: true, force: false});
+            await fs.promises.writeFile(marker, "1");
+            break;
+          }
+        }
+      }
+      return skillsRoot;
+    }
 
     try {
       await fs.promises.mkdir(this.domainsRoot, { recursive: true });
@@ -436,6 +466,7 @@ export class DomainSkillRegistryManager {
           force: false,
         });
       }
+      await fs.promises.writeFile(path.join(skillsRoot, ".generate-ppt-v1"), "1");
       logger.info("Initialized domain skills from template", { domainId, skillsRoot });
       return skillsRoot;
     } catch (error) {

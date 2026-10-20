@@ -9,13 +9,34 @@ is a fourth service. The site needs Docker Engine 26+, Compose v2 and Python 3.8
 cp .env.example .env
 # Set ARCH, POSTGRES_PASSWORD and PUBLIC_HOST in .env.
 echo 'COMPOSE_FILE=docker-compose.yml:docker-compose.ghcr.yml' >> .env
-echo 'ONTOMATO_VERSION=4.0.1' >> .env
+echo 'ONTOMATO_VERSION=<version-and-build-tag>' >> .env
 docker compose pull
 docker compose up -d --wait --wait-timeout 600
 ```
 
-Update `ONTOMATO_VERSION`, then repeat pull and up. Images come from GHCR. Build
+CI publishes a shared `<version>-ci<run>.<attempt>-g<commit>` tag for all three images,
+as well as `edge`, release and `latest` aliases. Use the full build tag above so
+`docker ps` shows the deployed build. Update `ONTOMATO_VERSION`, then repeat pull
+and up. Images come from GHCR. Build
 and publication happen before deployment; Compose has no build step.
+
+### Automatic updates (optional)
+
+A development or test deployment that should always follow a tag, usually `edge`, can add
+`docker-compose.autoupdate.yml` to the end of `COMPOSE_FILE` and run `docker compose up -d`:
+
+```bash
+COMPOSE_FILE=docker-compose.yml:docker-compose.ghcr.yml:docker-compose.autoupdate.yml
+ONTOMATO_VERSION=edge
+```
+
+This adds a Watchtower container (`nickfedor/watchtower`). Every 5 minutes it checks whether
+the tags of the workbench, data engine and ontology manager containers point to new images on
+GHCR; if so it pulls them, recreates those containers with their existing configuration and
+removes the replaced images. PostgreSQL is not touched, and only this Compose project's
+containers are watched. The three images update independently, and changes to the deployment
+templates still need a manual update. Keep fixed versions without automatic updates for
+production sites.
 
 ## Offline delivery
 
@@ -28,7 +49,11 @@ make bundle ARCH=amd64 VERSION=<next-version>
 ```
 
 The default state is `.build/mirror/<arch>`; set `MIRROR_STATE` to a durable path
-for production exports. `IMAGE_REGISTRY` and `IMAGE_TAG` select published sources.
+for production exports. `IMAGE_REGISTRY` and `IMAGE_TAG` select the published
+multi-architecture images, and `ARCH` selects the platform inside them.
+Either architecture can be exported on either host without emulation: oc-mirror
+runs with the Docker engine's own tool image, and the target architecture's tool
+image, built by copying only, goes into the bootstrap.
 Each product image is checked for the expected architecture, component and version,
 then resolved to an immutable platform digest. `REGISTRY_AUTH_FILE` can point to
 an oc-mirror-compatible auth JSON; credentials are never copied into a delivery.
@@ -37,6 +62,8 @@ The result is `.build/bundle/ontomato-<version>-<time>-<arch>.tar.gz`, including
 this deployment template, `offline/` and `package/`. `package/mirror_*.tar` files
 are oc-mirror's own archives. The initial `bootstrap.tar.gz` contains Registry 3.1.2
 and the pinned oc-mirror 4.22.17 tool image. Subsequent packages omit bootstrap.
+The Registry is pinned by digest; the bundle option `--registry-repository`
+(default `docker.io/library/registry`) only chooses which repository serves that digest.
 Do not use `docker load` on `mirror_*.tar`.
 
 On the disconnected machine, extract the first bundle and run:
@@ -90,3 +117,31 @@ Workbench port is 3000, manager 3005 and data engine 18087. Override them in `.e
 `frontend_data` maps to `/app/data`, and `backend_data` to `/deploy`. Initial
 `initdb.sql` creates the product databases. Services default to UTC; set `TZ` for
 another timezone. This stack does not migrate a pre-existing database.
+
+## Configuration
+
+Models are normally configured in the UI. To seed new domains, optionally set
+`LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL`, `EMBEDDING_BASE_URL`,
+`EMBEDDING_API_KEY`, `EMBEDDING_MODEL` and `EMBEDDING_DIMENSIONS` (default 2048)
+in `.env`. Unset means the product default; an explicit empty value stays empty.
+Existing domains keep their saved model settings.
+
+For an existing installation, rename the old `BACKEND_` keys for LLM, embedding,
+LDAP, company sync, SSO, service/node ID, card URL, data adapter and production
+connection by removing that prefix in `.env` **and** its `${...}` placeholders in
+`backend_data/conf/application.yml` (locally `apps/data-engine/.dev/conf/application.yml`).
+`POSTGRE_USER_NAME` / `POSTGRE_PASSWORD` become `POSTGRES_USER` / `POSTGRES_PASSWORD`;
+`POSTGRE_DRIVER_CLASS` becomes `DATA_ENGINE_JDBC_DRIVER`. In `application.yml`, replace
+`url: ${POSTGRE_JDBC_URL:}` with the template line
+`url: ${DATA_ENGINE_JDBC_URL:jdbc:postgresql://${POSTGRES_HOST:localhost}:${POSTGRES_PORT:5432}/datarag}`;
+renaming the placeholder alone leaves the URL empty, because Compose no longer injects one.
+Keep customized values and resolve duplicate keys before restarting.
+The JDBC override is only needed for a nonstandard database connection; otherwise both
+clients use `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_USER`, `POSTGRES_PASSWORD`.
+The workbench retains its own database, and Java retains `datarag`.
+
+To inspect the **running** build, including a deployment tracking `edge`:
+
+```bash
+docker inspect --format '{{.Name}} {{index .Config.Labels "org.opencontainers.image.version"}} {{index .Config.Labels "io.ontomato.build"}}' $(docker compose ps -q)
+```

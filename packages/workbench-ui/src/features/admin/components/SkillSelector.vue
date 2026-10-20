@@ -24,6 +24,7 @@
           </div>
           <el-checkbox
             :model-value="selectedSkills.includes(skill.id)"
+            :disabled="skill.id === 'generate-ppt' && !skill.enabled && !selectedSkills.includes(skill.id)"
             @click.stop="toggleSkill(skill.id)"
           />
         </div>
@@ -89,6 +90,7 @@ async function loadSkills() {
 // Toggle skill selection
 function toggleSkill(skillId: string) {
   const index = selectedSkills.value.indexOf(skillId);
+  if (skillId === "generate-ppt" && !skills.value.find(skill => skill.id === skillId)?.enabled && index < 0) return;
   if (index > -1) {
     selectedSkills.value = selectedSkills.value.filter((id) => id !== skillId);
   } else {

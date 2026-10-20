@@ -64,7 +64,8 @@ export async function buildManagerImage(app, args) {
     cpSync(join(app.publicRoot, RECIPE, name), join(context, name));
   for (const [source, dest] of LICENSE_FILES)
     cpSync(join(app.publicRoot, source), join(context, dest));
-  const tag = `${app.component}:${buildStamp(version, app.repoRoot, entries)}-${arch}`;
+  const stamp = buildStamp(version, app.repoRoot, entries);
+  const tag = `${app.component}:${stamp}-${arch}`;
   const alias = `${app.component}:deploy-${arch}`;
   console.log(`[build] manager ${tag}`);
   docker([
@@ -79,7 +80,7 @@ export async function buildManagerImage(app, args) {
     `WORKSPACE=${record.workspaceId}`,
     "--build-arg",
     `APPLICATION=${record.application}`,
-    ...imageLabels(app.component, version),
+    ...imageLabels(app.component, version, stamp),
     "-t",
     tag,
     "-t",

@@ -1,7 +1,11 @@
 import { apiGet, apiPost, nodeApiGet, nodeApiPost } from "../../utils/api";
 import type { SystemModelConfig } from "@ontomato/contracts/system-model";
-import type { DataAdapterConnection, GeneralConfigKey, ModelEntry, RoleModels } from "../system";
-import { vectorRebuildStatusSchema } from "../system";
+import type {
+  DataAdapterRequest,
+  MultiDataSourceDefinition,
+} from "@ontomato/contracts/data-adapters";
+import type { GeneralConfigKey, ModelEntry, RoleModels } from "../system";
+import { ontologyOutlineSchema, vectorRebuildStatusSchema } from "../system";
 
 const generalConfigSaveEndpoints: Record<GeneralConfigKey, string> = {
   knowledgeMaxResult: "/businessConfig/saveKnowledgeMaxResult",
@@ -25,10 +29,14 @@ export const adminApi = {
   saveGeneralConfig: (key: GeneralConfigKey, value: unknown) =>
     apiPost(generalConfigSaveEndpoints[key], { [key]: value }),
   listDataAdapters: () => apiGet("/businessConfig/dataAdapters"),
-  useDataAdapter: (payload: { type: string } & DataAdapterConnection) =>
+  useDataAdapter: (payload: DataAdapterRequest) =>
     apiPost("/businessConfig/useDataAdapter", payload),
-  testDataAdapter: (payload: { type: string } & DataAdapterConnection) =>
+  useMultiDataSource: (definition: MultiDataSourceDefinition) =>
+    apiPost("/businessConfig/useMultiDataSource", definition),
+  testDataAdapter: (payload: DataAdapterRequest) =>
     apiPost("/businessConfig/testDataAdapter", payload),
+  getOntologyOutline: async () =>
+    ontologyOutlineSchema.parse((await apiGet("/admin/getSchema")).data),
   testEmbeddingModel: (payload: unknown) => apiPost("/businessConfig/testEmbeddingModel", payload),
   getVectorRebuildStatus: async () =>
     vectorRebuildStatusSchema.parse((await apiGet("/businessConfig/vectorRebuildStatus")).data),

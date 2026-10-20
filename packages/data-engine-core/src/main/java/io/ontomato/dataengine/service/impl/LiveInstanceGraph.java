@@ -102,8 +102,7 @@ public class LiveInstanceGraph {
     private Map<String, ObjectType> objectTypes(Map<String, Object> schema) {
         Map<String, ObjectType> types = new LinkedHashMap<>();
         for (var def : (List<Map<String, Object>>) schema.get("classDef")) {
-            if (!Boolean.TRUE.equals(def.get("inStarChart"))) continue;
-            String name = identifier((String) def.get("className"));
+            String name = (String) def.get("className");
             String pk = identifier(DslUtil.getPrimaryKey(def));
             String label = pk;
             boolean preferredLabel = false;

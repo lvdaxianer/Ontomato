@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { flushPromises, mount } from "@vue/test-utils";
 import { createI18n } from "vue-i18n";
-import ElementPlus, { ElInputNumber, ElSelect, ElOption, ElMessageBox, ElSwitch } from "element-plus";
+import ElementPlus, { ElInputNumber, ElSelect, ElOption, ElSwitch } from "element-plus";
 import CodeMirrorEditor from "../../../../components/CodeMirrorEditor.vue";
 import AgentCreateDialog from "../AgentCreateDialog.vue";
 import en from "../../../../locales/en";
@@ -59,6 +59,7 @@ async function dialog(editingAgent: AnalysisAgent | null = null) {
       plugins: plugins(),
       stubs: {
         ElDrawer: { template: "<div><slot/><slot name='footer'/></div>" },
+        ElDialog: { props: ["modelValue"], template: "<div v-if='modelValue' class='leave-confirmation-test'><slot/><slot name='footer'/></div>" },
         SkillSelector: true,
         CodeMirrorEditor: true,
       },
@@ -161,19 +162,18 @@ describe("agent product and execution modes", () => {
   });
 
   it("keeps drafts when leaving is cancelled and closes only after discarding", async () => {
-    const confirm = vi.spyOn(ElMessageBox, "confirm");
     const wrapper = await dialog();
     await wrapper.find("input.el-input__inner").setValue("Draft");
     const back = () => wrapper.findAll("button").find(button => button.text() === "Back")!;
-    confirm.mockRejectedValueOnce("cancel");
     await back().trigger("click");
     await flushPromises();
+    await wrapper.find(".leave-confirmation-test").findAll("button").find(button => button.text() === "Cancel")!.trigger("click");
     expect(wrapper.emitted("update:visible")).toBeUndefined();
-    confirm.mockResolvedValueOnce("confirm" as Awaited<ReturnType<typeof ElMessageBox.confirm>>);
+    expect(wrapper.find<HTMLInputElement>("input.el-input__inner").element.value).toBe("Draft");
     await back().trigger("click");
     await flushPromises();
+    await wrapper.find(".leave-confirmation-test").findAll("button").find(button => button.text() === "Discard changes")!.trigger("click");
     expect(wrapper.emitted("update:visible")).toEqual([[false]]);
-    confirm.mockRestore();
     wrapper.unmount();
   });
   it("defaults to analysis + loop and persists the selected product with one flag", async () => {

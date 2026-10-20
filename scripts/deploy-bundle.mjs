@@ -25,6 +25,7 @@ const FLAGS = {
   "--arch": "value", "--version": "value", "--image-tag": "value",
   "--registry": "value", "--state": "value", "--bootstrap": "boolean",
   "--network": "value", "--insecure-source": "boolean", "--postgres": "value",
+  "--registry-repository": "value",
 };
 
 // The pack is the only place that rewrites a template file, and only this line.
@@ -85,6 +86,7 @@ export function buildBundle(options, { name, deployDir, installDir, images, vali
     "--state", resolve(options["--state"]), "--output", join(staging, "package"),
     ...imageArgs(resolved),
     ...(options["--bootstrap"] ? ["--bootstrap"] : []),
+    ...(options["--registry-repository"] ? ["--registry-repository", options["--registry-repository"]] : []),
     ...(options["--network"] ? ["--network", options["--network"]] : []),
     ...(options["--insecure-source"] ? ["--insecure-source"] : []),
     ...(process.env.REGISTRY_AUTH_FILE ? ["--authfile", resolve(process.env.REGISTRY_AUTH_FILE)] : []),

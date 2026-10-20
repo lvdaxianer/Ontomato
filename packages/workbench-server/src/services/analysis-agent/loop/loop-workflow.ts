@@ -44,6 +44,9 @@ import { partialReportNotice } from "../report/partial-result-notice";
 import { assembleLoopExternalMcpCapability } from "./external-mcp";
 import { assembleLoopNotebookCapability } from "./notebook";
 import { assembleLoopDataProbeCapability } from "./probe";
+import { collectPptConversation } from "../delivery/ppt-conversation";
+import { generatePpt } from "../delivery/ppt-generator";
+import { pptArtifactStore } from "../delivery/ppt-artifacts";
 import { assembleLoopSkillCapability } from "./skills";
 import { createDeepAnalysisArtifactStore } from "../task/artifacts";
 import {
@@ -307,6 +310,29 @@ export async function runAnalysisLoopWorkflow(
         domainId,
         selectedSkillIds,
         resolveEvidence: evidenceCapability.resolveEvidence,
+        generatePpt: async (skillSignal) => {
+          const combinedSignal = skillSignal ? AbortSignal.any([loopSignal, skillSignal]) : loopSignal;
+          combinedSignal.throwIfAborted();
+          const current = trajectory.current();
+          const {sections, warnings} = collectPptConversation([...previousTurns, {
+            requestSeq, userMessage: userQuestion, messages: state?.messages || [],
+            evidenceRefs: conversationTurn?.evidenceRefs || current.activities.flatMap(activity =>
+              (activity.questions || []).map(question => ({questionId: question.questionId, question: question.question,
+                threadId, requestSeq, sourceKind: "analysis_sub_question" as const, sourceRef: question.questionId}))),
+            charts: current.charts,
+          }], evidenceCapability.resolveEvidence);
+          sections.push(...current.sections.map(section => ({id: section.sectionId, content: section.markdown})));
+          const title = previousTurns[0]?.userMessage.slice(0, 80) || userQuestion.slice(0, 80);
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(new Error("PPT generation timed out")), 590000);
+          try {
+            const generationSignal = AbortSignal.any([combinedSignal, controller.signal]);
+            const generated = await generatePpt(title, sections, {}, generationSignal);
+            generationSignal.throwIfAborted();
+            const file = await pptArtifactStore().save({domainId, userId}, title, generated.buffer);
+            return {...file, warnings: [...warnings, ...generated.warnings]};
+          } finally { clearTimeout(timeout); }
+        },
         trajectory,
       });
 

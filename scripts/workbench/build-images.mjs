@@ -115,7 +115,7 @@ export async function buildWorkbenchImage(app, args) {
     `APPLICATION=${record.application}`,
     "--build-arg",
     `TARGETPLATFORM=linux/${arch}`,
-    ...imageLabels(app.component, version),
+    ...imageLabels(app.component, version, stamp),
     "-t",
     tag,
     "-t",
