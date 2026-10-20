@@ -212,6 +212,14 @@ COPY --chmod=0755 payload/bin/ /app/bin/
 RUN --mount=type=bind,source=tools/verify-image.py,target=/tmp/verify-image.py \
     python /tmp/verify-image.py --app /app --lib /opt/datarag/lib --arch "${TARGETARCH}"
 
+# The product version and build identity the image labels carry, for the running
+# service to report its own version (the enterprise license page shows them).
+# Declared after the last RUN so a new build identity reuses every layer above.
+ARG ONTOMATO_PRODUCT_VERSION
+ARG ONTOMATO_PRODUCT_BUILD
+ENV ONTOMATO_PRODUCT_VERSION=${ONTOMATO_PRODUCT_VERSION} \
+    ONTOMATO_PRODUCT_BUILD=${ONTOMATO_PRODUCT_BUILD}
+
 WORKDIR /deploy
 # The entrypoint is the product's own; CMD stays empty so an edition that needs
 # extra JVM arguments ships an entrypoint wrapper instead of an inherited CMD.

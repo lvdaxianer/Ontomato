@@ -237,6 +237,12 @@ const reactorBuildArgs = (app) => [
   `EXCLUDE_ARTIFACT_IDS=${app.excludeArtifactIds}`,
 ];
 const buildArgsOf = (argv) => argv.filter((a, i) => argv[i - 1] === "--build-arg");
+// The image carries its own version and build identity for the running service, the
+// same values as its version and build labels (the build label is the tag minus suffixes).
+const identityBuildArgs = (argv) => [
+  `ONTOMATO_PRODUCT_VERSION=${VERSION}`,
+  `ONTOMATO_PRODUCT_BUILD=${tagsOf(argv)[0].split(":")[1].replace(/(?:-override)?-arm64$/, "")}`,
+];
 const run = (app, args) => buildJavaApp(app, parseJavaArgs(args, { ...JAVA_FLAGS, "--license-mode": "value" }));
 
 test("the CLI takes flags only: no positional build action, no packaging switch", () => {
@@ -259,7 +265,10 @@ test("the public build hands the export its reactor inputs and nothing edition-s
   const app = publicApp(fx);
   await run(app, ["--arch", "arm64", "--prompt-lang", "en"]);
   const build = docker.builds()[0];
-  assert.deepEqual(buildArgsOf(build.args).sort(), ["EXPORT_STAGE=build-central", ...reactorBuildArgs(app)].sort());
+  assert.deepEqual(
+    buildArgsOf(build.args).sort(),
+    ["EXPORT_STAGE=build-central", ...reactorBuildArgs(app), ...identityBuildArgs(build.args)].sort(),
+  );
   assert.equal(existsSync(RECIPE), true);
 });
 
@@ -352,6 +361,7 @@ for (const mode of ["real", "override"])
       "APP_CHECK_SCRIPT=enterprise/scripts/data-engine/verify-license-jar.sh",
       `APP_CHECK_JAR=/out/app/lib/data-engine-enterprise-${VERSION}.jar`,
       `APP_CHECK_ARG=${mode}`,
+      ...identityBuildArgs(build.args),
     ].sort());
     assert.deepEqual(argOf(build.args, "EXPORT_STAGE"), ["build-secret"]);
     assert.deepEqual(build.args.slice(build.args.indexOf("--secret"), build.args.indexOf("--secret") + 2), ["--secret", `id=maven-settings,src=${fx.settings}`]);
