@@ -47,7 +47,7 @@ class DeliveryTests(unittest.TestCase):
         target.write_text("WORKBENCH_IMAGE=previous\n")
         args = SimpleNamespace(bundle=self.bundle, state=self.root / "state", port=5000,
                                project="fixture", output_env=target)
-        with patch.object(mirror, "run"), patch.object(mirror, "mirror", side_effect=ValueError("missing baseline")):
+        with patch.object(mirror, "run"), patch.object(mirror, "ensure_mirror_network"), patch.object(mirror, "mirror", side_effect=ValueError("missing baseline")):
             with self.assertRaisesRegex(ValueError, "baseline"):
                 mirror.import_bundle(args)
         self.assertEqual(target.read_text(), "WORKBENCH_IMAGE=previous\n")
@@ -62,13 +62,23 @@ class DeliveryTests(unittest.TestCase):
         target = self.root / "images.env"
         args = SimpleNamespace(bundle=self.bundle, state=state, port=5100,
                                project="fixture", output_env=target)
-        with patch.object(mirror, "run"), patch.object(mirror, "mirror") as invoke:
+        with patch.object(mirror, "run"), patch.object(mirror, "ensure_mirror_network"), patch.object(mirror, "mirror") as invoke:
             mirror.import_bundle(args)
         self.assertEqual((history / "previous").read_text(), "keep")
         self.assertEqual(len(list((state / "imports").glob("*.json"))), 1)
         self.assertFalse((state / "incoming/mirror_999999.tar").exists())
         self.assertIn("WORKBENCH_IMAGE=127.0.0.1:5100/product/workbench_image@sha256:" + "a" * 64, target.read_text())
         self.assertIn("docker://registry:5000", invoke.call_args[0][2])
+
+    def test_registry_is_attached_to_the_mirror_network_when_compose_left_it_out(self):
+        with patch.object(mirror, "run", side_effect=["cid", json.dumps({"p_default": {}}), None]) as run:
+            mirror.ensure_mirror_network("p", {})
+        self.assertEqual(run.call_args_list[-1].args[0], ["docker", "network", "connect", "--alias", "registry", "p_mirror", "cid"])
+
+    def test_registry_already_on_the_mirror_network_is_left_alone(self):
+        with patch.object(mirror, "run", side_effect=["cid", json.dumps({"p_default": {}, "p_mirror": {}})]) as run:
+            mirror.ensure_mirror_network("p", {})
+        self.assertEqual(run.call_count, 2)
 
     def test_source_repository_preserves_ports_and_nested_paths(self):
         self.assertEqual(mirror.repository("localhost:5000/a/b:v1"), "localhost:5000/a/b")
@@ -104,7 +114,7 @@ class DeliveryTests(unittest.TestCase):
         target = self.root / "images.env"
         args = SimpleNamespace(bundle=self.bundle, state=self.root / "state", port=5000,
                                project="fixture", output_env=target)
-        with patch.object(mirror, "run"), patch.object(mirror, "mirror"):
+        with patch.object(mirror, "run"), patch.object(mirror, "ensure_mirror_network"), patch.object(mirror, "mirror"):
             mirror.import_bundle(args)
         self.assertIn("WORKBENCH_IMAGE=127.0.0.1:5000/a:" + build + "@" + digest, target.read_text())
 

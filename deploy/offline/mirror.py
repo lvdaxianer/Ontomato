@@ -212,6 +212,19 @@ def verify_bundle(bundle):
     return data
 
 
+def ensure_mirror_network(project, env):
+    # Compose v2.24.6 on Docker 26 (seen on a CentOS 7 host) occasionally starts the Registry attached to
+    # its default network only, so oc-mirror on the internal network cannot resolve "registry". Attach it
+    # here; this is the only place that depends on that Compose behavior.
+    network = project + "_mirror"
+    container = run(["docker", "compose", "-p", project, "-f", HERE / "compose.yml", "ps", "-q", "registry"],
+                    capture=True, env=env)
+    attached = json.loads(run(["docker", "inspect", "-f", "{{json .NetworkSettings.Networks}}", container],
+                              capture=True))
+    if network not in attached:
+        run(["docker", "network", "connect", "--alias", "registry", network, container])
+
+
 def import_bundle(args):
     bundle, state = Path(args.bundle).resolve(), Path(args.state).resolve()
     data = verify_bundle(bundle)
@@ -222,6 +235,7 @@ def import_bundle(args):
         run(["docker", "image", "inspect", image], capture=True)
     env = dict(os.environ, MIRROR_STATE=str(state), MIRROR_PORT=str(args.port), MIRROR_REGISTRY_IMAGE=data["registry"])
     run(["docker", "compose", "-p", args.project, "-f", HERE / "compose.yml", "up", "-d"], env=env)
+    ensure_mirror_network(args.project, env)
     # Keep import history beside the cache. Only incoming archives change each time.
     incoming = state / "incoming"
     incoming.mkdir(exist_ok=True)
