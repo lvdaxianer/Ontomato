@@ -315,6 +315,32 @@ describe("requests used by data browsing and visual modeling", () => {
     expect(requests[0].headers["x-api-key"]).toBe("k");
   });
 
+  it("loads and replaces the shared visual-modeling layout through the domain-scoped endpoints", async () => {
+    respond = async (url: string) =>
+      url.endsWith("/admin/graph-layout")
+        ? json({ success: true, data: { positions: { Order: { x: 120, y: 80 } } } })
+        : json({ success: true });
+    const { client } = setup({ type: "token", token: "t" });
+
+    await expect(client.loadGraphLayout()).resolves.toEqual({
+      positions: { Order: { x: 120, y: 80 } },
+    });
+    await client.saveGraphLayout({ positions: { Order: { x: 160, y: 100 } } });
+
+    expect(requests.map(({ method, url, body }) => ({ method, url, body }))).toEqual([
+      {
+        method: "GET",
+        url: "/custom/manager-api/data-query/admin/graph-layout",
+        body: undefined,
+      },
+      {
+        method: "POST",
+        url: "/custom/manager-api/data-query/admin/graph-layout",
+        body: { positions: { Order: { x: 160, y: 100 } } },
+      },
+    ]);
+  });
+
   it("paged data submits search only when a keyword is given", async () => {
     const { client } = setup({ type: "token", token: "t" });
     await client.loadObjectData("Order", 2, 50, "abc");

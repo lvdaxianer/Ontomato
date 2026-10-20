@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, watch } from "vue";
+import { computed, ref, onMounted, onUnmounted, watch } from "vue";
 import { ElButton, ElTag, vLoading } from "element-plus";
 import { D3ForceLayout } from "@antv/g6";
 import { graphLayout, initialNodePosition } from "../ontology-graph-layout";
@@ -12,6 +12,7 @@ import VisualModelingRightPanel from "./VisualModelingRightPanel.vue";
 import VisualModelingAttributeDialog, {
   type NewAttributeInput,
 } from "./VisualModelingAttributeDialog.vue";
+import type { OntologyGraphLayout } from "../api";
 
 const { t } = useSharedText();
 const { message, confirm } = useManagerFeedback();
@@ -27,7 +28,9 @@ const {
   deleteOntologyObject,
   deleteOntologyRelation,
   getMetas,
+  loadGraphLayout,
   listDataAdapters,
+  saveGraphLayout,
   updateOntologyAttribute,
   updateOntologyObject,
 } = useManagerClient();
@@ -66,10 +69,10 @@ interface NodePosition {
   y: number;
 }
 
-const LAYOUT_STORAGE_KEY = "visual-modeling-layout-v2";
 const NODE_SIZE = 70;
 const NODE_CENTER = NODE_SIZE / 2;
 const NODE_LABEL_OFFSET = 12;
+const LAYOUT_SAVE_DEBOUNCE_MS = 600;
 // The node palette comes from the host, the same input as the ontology graph.
 function nodeColor(className: string) {
   const palette = context.presentation.nodePalette;
@@ -189,6 +192,20 @@ const newEdgeFromField = ref("");
 const newEdgeToField = ref("");
 const pendingEdge = ref<any>(null);
 const isFirstLoad = ref(true);
+const layoutPositions = ref<Record<string, NodePosition>>({});
+const layoutReady = ref(false);
+const layoutSaveState = ref<"idle" | "saving" | "saved" | "error">("idle");
+const layoutSaveError = ref("");
+let layoutSaveTimer: ReturnType<typeof setTimeout> | null = null;
+let layoutSaveInFlight = false;
+let pendingLayoutSnapshot: Record<string, NodePosition> | null = null;
+
+const layoutSaveStatusText = computed(() => {
+  if (layoutSaveState.value === "saving") return ot("layoutSaving");
+  if (layoutSaveState.value === "error") return ot("layoutSaveFailed");
+  if (layoutSaveState.value === "saved") return ot("layoutSaved");
+  return "";
+});
 
 function nodeCenter(node: Node): NodePosition {
   const pos = node.getPosition();
@@ -232,28 +249,72 @@ function applyEdgeGeometry(edge: Edge, sourceNode: Node, targetNode: Node) {
   });
 }
 
-function saveLayout() {
-  if (!graph) return;
-
+function captureLayoutPositions(): Record<string, NodePosition> {
+  if (!graph) return {};
   const positions: Record<string, NodePosition> = {};
   graph.getNodes().forEach((node) => {
     const pos = node.getPosition();
     positions[node.id] = { x: pos.x, y: pos.y };
   });
-
-  localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(positions));
+  return positions;
 }
 
-function loadLayout(): Map<string, NodePosition> {
-  const saved = localStorage.getItem(LAYOUT_STORAGE_KEY);
-  if (!saved) return new Map();
-
-  try {
-    const positions: Record<string, NodePosition> = JSON.parse(saved);
-    return new Map(Object.entries(positions));
-  } catch {
-    return new Map();
+function normalizeGraphLayout(layout: OntologyGraphLayout | undefined) {
+  const positions: Record<string, NodePosition> = {};
+  for (const [className, position] of Object.entries(layout?.positions || {})) {
+    if (Number.isFinite(position?.x) && Number.isFinite(position?.y)) {
+      positions[className] = { x: position.x, y: position.y };
+    }
   }
+  return positions;
+}
+
+function scheduleLayoutSave() {
+  if (!graph) return;
+  pendingLayoutSnapshot = captureLayoutPositions();
+  layoutPositions.value = { ...pendingLayoutSnapshot };
+  layoutSaveError.value = "";
+  if (layoutSaveTimer) clearTimeout(layoutSaveTimer);
+  layoutSaveTimer = setTimeout(() => {
+    layoutSaveTimer = null;
+    void flushLayoutSave();
+  }, LAYOUT_SAVE_DEBOUNCE_MS);
+}
+
+async function flushLayoutSave() {
+  if (layoutSaveInFlight || !pendingLayoutSnapshot) return;
+
+  const snapshot = pendingLayoutSnapshot;
+  pendingLayoutSnapshot = null;
+  layoutSaveInFlight = true;
+  layoutSaveState.value = "saving";
+  try {
+    await saveGraphLayout({ positions: snapshot });
+    layoutSaveState.value = "saved";
+    layoutSaveError.value = "";
+  } catch (error: any) {
+    pendingLayoutSnapshot = snapshot;
+    layoutSaveState.value = "error";
+    layoutSaveError.value = error?.message || ot("layoutSaveFailed");
+  } finally {
+    layoutSaveInFlight = false;
+    if (pendingLayoutSnapshot && !layoutSaveTimer) {
+      layoutSaveTimer = setTimeout(() => {
+        layoutSaveTimer = null;
+        void flushLayoutSave();
+      }, LAYOUT_SAVE_DEBOUNCE_MS);
+    }
+  }
+}
+
+function retryLayoutSave() {
+  if (!pendingLayoutSnapshot) pendingLayoutSnapshot = captureLayoutPositions();
+  layoutSaveError.value = "";
+  if (layoutSaveTimer) clearTimeout(layoutSaveTimer);
+  layoutSaveTimer = setTimeout(() => {
+    layoutSaveTimer = null;
+    void flushLayoutSave();
+  }, 0);
 }
 
 function calculateDefaultLayout(): Map<string, NodePosition> {
@@ -510,7 +571,7 @@ function initGraph() {
 
   g.on("node:moved", () => {
     updateEdgeAnchors();
-    saveLayout();
+    scheduleLayoutSave();
   });
 
   g.on("edge:mouseenter", ({ edge }: { edge: Edge }) => {
@@ -541,7 +602,7 @@ function initGraph() {
         existingRel.fromclass = source;
         existingRel.toclass = target;
         updateEdgeAnchors();
-        saveLayout();
+        scheduleLayoutSave();
         message.warning(t("hotData.relationReconnected"));
       }
       return;
@@ -590,12 +651,11 @@ function renderNodes() {
 
   graph.clearCells();
 
-  const savedLayout = loadLayout();
   const defaultLayout = calculateDefaultLayout();
 
   const finalPositions = new Map<string, NodePosition>();
   classList.value.forEach((cls) => {
-    const savedPos = savedLayout.get(cls.className);
+    const savedPos = layoutPositions.value[cls.className];
     if (savedPos) {
       finalPositions.set(cls.className, savedPos);
     } else {
@@ -607,6 +667,8 @@ function renderNodes() {
       }
     }
   });
+
+  layoutPositions.value = Object.fromEntries(finalPositions);
 
   classList.value.forEach((cls) => {
     const pos = finalPositions.get(cls.className) || { x: 50, y: 50 };
@@ -740,12 +802,23 @@ function renderNodes() {
     graph!.centerContent();
     graph!.zoomToFit({ padding: 50, maxScale: 1 });
   }
+
+  if (layoutReady.value) scheduleLayoutSave();
 }
 
 async function loadData() {
   loading.value = true;
   try {
     const res = await getMetas();
+    try {
+      layoutPositions.value = normalizeGraphLayout(await loadGraphLayout());
+      layoutSaveState.value = "saved";
+      layoutSaveError.value = "";
+    } catch (error: any) {
+      layoutPositions.value = {};
+      layoutSaveState.value = "error";
+      layoutSaveError.value = error?.message || ot("layoutLoadFailed");
+    }
     classList.value = (res.data?.classDef || []).map((cls: any) => ({
       className: cls.className,
       showName: cls.showName || cls.classDesc || cls.className,
@@ -782,6 +855,7 @@ async function loadData() {
     }
     initGraph();
     renderNodes();
+    layoutReady.value = true;
     applyRouteFocus();
   } catch (e: any) {
     message.error(e.message || t("dataBrowser.loadDataFailed"));
@@ -970,9 +1044,7 @@ function handleTrash2Node() {
         classList.value = classList.value.filter((c) => c.className !== nodeToTrash2.className);
         selectedNode.value = null;
 
-        const savedLayout = loadLayout();
-        savedLayout.delete(nodeToTrash2.className);
-        localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(Object.fromEntries(savedLayout)));
+        delete layoutPositions.value[nodeToTrash2.className];
 
         renderNodes();
         message.success(t("admin.deletedSuccess"));
@@ -1201,6 +1273,8 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
+  if (layoutSaveTimer) clearTimeout(layoutSaveTimer);
+  if (pendingLayoutSnapshot && !layoutSaveInFlight) void flushLayoutSave();
   activeLayout?.stop();
   activeLayout?.destroy();
   activeLayout = null;
@@ -1473,6 +1547,14 @@ async function saveClassDesc(cls: ClassDef) {
             {{ t("common.delete") }}
           </el-button>
         </div>
+        <div v-if="layoutSaveStatusText" class="layout-save-status" role="status" aria-live="polite">
+          <span class="layout-save-status-text" :title="layoutSaveError || undefined">
+            {{ layoutSaveStatusText }}
+          </span>
+          <el-button v-if="layoutSaveState === 'error'" link size="small" @click="retryLayoutSave">
+            {{ ot("retryLayoutSave") }}
+          </el-button>
+        </div>
       </div>
     </div>
 
@@ -1572,6 +1654,12 @@ async function saveClassDesc(cls: ClassDef) {
   margin-left: var(--spacing-sm);
   padding-left: var(--spacing-sm);
   border-left: 1px solid var(--el-border-color);
+}
+
+.layout-save-status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-xs);
 }
 
 .selection-cluster {
