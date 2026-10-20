@@ -6,7 +6,7 @@ export const ossRuntimeDefaults: RuntimeDefaults = {
   systemMcpUrlFallback: "",
 
   defaultDataAdapter: "sql",
-  /** The OSS edition's historical default request locale. */
-  requestLocaleFallback: "en",
+  /** The OSS edition's default request locale when the workbench locale is not installed yet. */
+  requestLocaleFallback: "zh-CN",
 };
 

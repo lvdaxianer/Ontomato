@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, it, vi } from "vitest";
-import { getLocale, setLocale, t } from "@ontomato/workbench-server/i18n/index";
+import { getLocale, setLocale, tApp } from "@ontomato/workbench-server/i18n/index";
 import { installModelAgentCatalog } from "@ontomato/workbench-server/logging/model-agents";
 import { parseQueryAnswerPayload, parseQueryAnswerPayloads } from "@ontomato/workbench-server/services/data-query/protocol";
 import { truncateErrorForDisplay } from "@ontomato/workbench-server/services/data-query/display-error";
@@ -51,9 +51,9 @@ afterAll(() => {
 });
 
 describe("oss query fixed text", () => {
-  it("keeps protocol, display, dashboard, chart and thinking text on the fixed English pack", async () => {
+  it("keeps fixed protocol text in English while the active UI locale is Chinese", async () => {
     setLocale("zh-CN");
-    expect(getLocale()).toBe("en");
+    expect(getLocale()).toBe("zh-CN");
 
     expect(parseQueryAnswerPayload({ answer: [1] }).answer).toEqual([1]);
     expect(() => parseQueryAnswerPayload({ answer: "no" })).toThrow(
@@ -66,7 +66,7 @@ describe("oss query fixed text", () => {
     expect(truncateErrorForDisplay("")).toBe("Unknown error");
     expect(truncateErrorForDisplay(new Error("  "))).toBe("Unknown error");
     expect(truncateErrorForDisplay("boom")).toBe("boom");
-    expect(t("query.error.unknownError")).toBe("Unknown Error");
+    expect(tApp("query.error.unknownError")).toBe("Unknown Error");
 
     db.queries.length = 0;
     const created = await createDashboard({ ownerId: "owner-1", domainId: "domain-1", name: "" });
@@ -101,7 +101,7 @@ describe("oss query fixed text", () => {
       message: "The chart planning stage produced no executable chart plan (candidate fields: q1: [x, y])",
     });
 
-    const label = t("query.branch.static");
+    const label = tApp("query.branch.static");
     expect(label).toBe("Fixed Metrics Hot Data");
     const summary = buildThinkingSummary({
       summary: "",
