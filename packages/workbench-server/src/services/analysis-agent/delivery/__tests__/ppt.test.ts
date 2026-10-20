@@ -44,6 +44,19 @@ describe("conversation PPT", () => {
     expect(result.sections[0].content).toContain("Answer 1");
   });
 
+  it("keeps partial query status in the source and the real PPTX warning slide", async () => {
+    const source = turn(1);
+    source.evidenceRefs = [{questionId: "q", question: "Revenue", threadId: "thread", requestSeq: 1, sourceKind: "analysis_sub_question", sourceRef: "q"}];
+    const marker = {truncated: true as const, rowLimit: 100000, truncationHint: "Only the processed portion is included."};
+    const {sections} = collectPptConversation([source], () => ({question: "Revenue", entries: [{index: 0, title: "Results", dataCount: 0, data: [], ...marker}]}));
+    expect(sections.find(section => section.tables)).toMatchObject(marker);
+    const {buffer, warnings} = await buildPptDeck("Partial", sections, {...outline, slides: []});
+    expect(warnings.join(" ")).toContain(marker.truncationHint);
+    const xml = new AdmZip(buffer).getEntries().filter(entry => /^ppt\/slides\/slide\d+\.xml$/.test(entry.entryName)).map(entry => entry.getData().toString()).join("\n");
+    expect(xml).toContain("Incomplete source data");
+    expect(xml).toContain(marker.truncationHint);
+  });
+
   it("writes a real PPTX with every chart, paginated native tables and failure warnings", async () => {
     const render = vi.fn(async (html: string) => {if (html.includes("broken")) throw new Error("bad chart"); return png;});
     const {buffer, warnings} = await buildPptDeck("Conversation", [{id: "first", heading: "Results", content: "Explanation\n```html\n<canvas>first</canvas>\n```\n```html\n<canvas>second</canvas>\n```\n```html\n<canvas>broken</canvas>\n```", tables: [{columns: ["year", "revenue"], rows: Array.from({length: 35}, (_, index) => [index, 42])}]}], outline, {}, undefined, render);

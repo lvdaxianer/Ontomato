@@ -5,6 +5,7 @@ import { SkillCategory, SkillType } from "../../../../core/skills/constants";
 import { listChatRenderSnapshots } from "../../chat-snapshot-store";
 import { getPrimaryQueryRun } from "../../../data-query/query-run-store";
 import { extractDatasetsFromQueryRun } from "../../../data-query/query-run-artifacts";
+import { combineResultTruncation } from "../../../data-query/protocol";
 import { generatePpt } from "../../../analysis-agent/delivery/ppt-generator";
 import { pptArtifactStore } from "../../../analysis-agent/delivery/ppt-artifacts";
 import type { GraphState } from "../state";
@@ -33,7 +34,9 @@ export async function generateQueryConversationPpt(state: GraphState, config?: a
         snapshot.visualizationHTML ? `\n\`\`\`html\n${snapshot.visualizationHTML}\n\`\`\`` : ""].filter(Boolean).join("\n\n")};
       try {
         const run = await getPrimaryQueryRun(state.threadId, requestSeq);
-        if (run) section.tables = extractDatasetsFromQueryRun(run).map(dataset => {
+        const datasets = run ? extractDatasetsFromQueryRun(run) : [];
+        Object.assign(section, combineResultTruncation(datasets));
+        if (run) section.tables = datasets.map(dataset => {
           const columns = [...new Set(dataset.rows.flatMap(row => Object.keys(row)))];
           section.content += `\n\n${dataset.title}\n${JSON.stringify(dataset.rows)}`;
           return {columns, rows: dataset.rows.map(row => columns.map(column => row[column] ?? ""))};

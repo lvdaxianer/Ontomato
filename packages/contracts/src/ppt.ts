@@ -1,3 +1,5 @@
+import type { ResultTruncation } from "./query-execution";
+
 export interface PptSummarySlide {
   title: string;
   takeaway: string;
@@ -19,7 +21,7 @@ export interface PptGenerationOptions {
   coverImageMode?: "background" | "side";
 }
 
-export interface PptSourceSection {
+export interface PptSourceSection extends Partial<ResultTruncation> {
   id: string;
   heading?: string;
   content: string;

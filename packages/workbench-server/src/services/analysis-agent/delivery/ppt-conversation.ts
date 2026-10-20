@@ -2,6 +2,7 @@ import type { PptSourceSection } from "@ontomato/contracts/ppt";
 import type { AnalysisConversationTurnRecord } from "../task/conversation-types";
 import type { AgentMessage } from "../../../core/agent-loop/types";
 import type { LoopSkillEvidenceRecord } from "../loop/skills";
+import { combineResultTruncation } from "../../data-query/protocol";
 
 export type PptConversationTurn = Pick<AnalysisConversationTurnRecord, "requestSeq" | "userMessage" | "evidenceRefs" | "charts"> & {
   messages?: AgentMessage[];
@@ -30,12 +31,14 @@ export function collectPptConversation(
         const columns = [...new Set(entry.data.flatMap(row => Object.keys(row)))];
         const table = { columns, rows: entry.data.map(row => columns.map(column => row[column])) };
         sections.push({id: `query-${ref.questionId}-${entry.index}`, heading: entry.title || evidence.question,
-          content: [evidence.question, entry.title, JSON.stringify(table)].join("\n"), tables: [table]});
+          content: [evidence.question, entry.title, JSON.stringify(table)].join("\n"), tables: [table],
+          ...combineResultTruncation([entry])});
       }
     }
     for (const chart of turn.charts) {
       sections.push({id: `chart-${turn.requestSeq}-${chart.chartId}`, heading: chart.title,
-        content: [chart.title, chart.sourceSubQuestion, chart.reason, chart.evidenceSummary, `\`\`\`html\n${chart.html}\n\`\`\``].filter(Boolean).join("\n\n")});
+        content: [chart.title, chart.sourceSubQuestion, chart.reason, chart.evidenceSummary, `\`\`\`html\n${chart.html}\n\`\`\``].filter(Boolean).join("\n\n"),
+        ...combineResultTruncation([chart])});
     }
   }
   return {sections, warnings};

@@ -13,11 +13,18 @@ export function stripPptCharts(text: string): string {
   return text.replace(/```html\s*[\s\S]*?```/g, "").replace(/^\s*\[chart:[^\]\r\n]+\]\s*$/gm, "").trim();
 }
 
+function partialSourceWarning(section: PptSourceSection): string {
+  return section.truncated
+    ? `Incomplete source data (${section.heading || section.id}): ${section.truncationHint}`
+    : "";
+}
+
 export async function generatePpt(title: string, sections: readonly PptSourceSection[], options: PptGenerationOptions = {}, signal?: AbortSignal) {
   const outline = await summarizeReportForPpt({ title, ...options,
     report: "",
     sections: sections.map(section => ({id: section.id, heading: section.heading || section.content.match(/^#{1,3}\s+(.+)$/m)?.[1] || title,
-      text: stripPptCharts(section.content), hasChart: /```html/.test(section.content)})),
+      text: [partialSourceWarning(section), stripPptCharts(section.content)].filter(Boolean).join("\n\n"),
+      hasChart: /```html/.test(section.content)})),
   }, signal);
   return buildPptDeck(title, sections, outline, options, signal);
 }
@@ -70,7 +77,7 @@ export async function buildPptDeck(
   options: PptGenerationOptions = {}, signal?: AbortSignal,
   renderChart: (html: string) => Promise<string> = html => renderChartHtmlToDataUrl(html, 30000, {offline: true, signal})
 ): Promise<{ buffer: Buffer; warnings: string[] }> {
-  const warnings: string[] = [];
+  const warnings: string[] = sections.map(partialSourceWarning).filter(Boolean);
   const sectionCharts = new Map<string, string>();
   const usedCharts = new Set<string>();
   for (const section of sections) {
