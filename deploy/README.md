@@ -49,7 +49,11 @@ make bundle ARCH=amd64 VERSION=<next-version>
 ```
 
 The default state is `.build/mirror/<arch>`; set `MIRROR_STATE` to a durable path
-for production exports. `IMAGE_REGISTRY` and `IMAGE_TAG` select published sources.
+for production exports. `IMAGE_REGISTRY` and `IMAGE_TAG` select the published
+multi-architecture images, and `ARCH` selects the platform inside them.
+Either architecture can be exported on either host without emulation: oc-mirror
+runs with the Docker engine's own tool image, and the target architecture's tool
+image, built by copying only, goes into the bootstrap.
 Each product image is checked for the expected architecture, component and version,
 then resolved to an immutable platform digest. `REGISTRY_AUTH_FILE` can point to
 an oc-mirror-compatible auth JSON; credentials are never copied into a delivery.
@@ -58,6 +62,8 @@ The result is `.build/bundle/ontomato-<version>-<time>-<arch>.tar.gz`, including
 this deployment template, `offline/` and `package/`. `package/mirror_*.tar` files
 are oc-mirror's own archives. The initial `bootstrap.tar.gz` contains Registry 3.1.2
 and the pinned oc-mirror 4.22.17 tool image. Subsequent packages omit bootstrap.
+The Registry is pinned by digest; the bundle option `--registry-repository`
+(default `docker.io/library/registry`) only chooses which repository serves that digest.
 Do not use `docker load` on `mirror_*.tar`.
 
 On the disconnected machine, extract the first bundle and run:

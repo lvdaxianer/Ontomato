@@ -13,7 +13,9 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 TOOL_VERSION = "4.22.17"
 TOOL_IMAGE = "ontomato-oc-mirror:" + TOOL_VERSION
-REGISTRY_IMAGE = "registry@sha256:ddf754342cfc8acc51a56d5d0ab6af06826461864460636d8bd5c546dab2a7b8"
+# The bootstrap Registry is pinned by digest; only the repository serving it may vary (e.g. a mirror copy).
+REGISTRY_DIGEST = "sha256:ddf754342cfc8acc51a56d5d0ab6af06826461864460636d8bd5c546dab2a7b8"
+REGISTRY_REPOSITORY = "docker.io/library/registry"
 TOOL_SHA = {
     "amd64": "2a2e3a3be56a5a44fca7c1e9249e7ed32a9dbf04c67225281c232b1cc31afe42",
     "arm64": "1d1c755a7581e6bfbeab0198c6ad4349f2761918d53a88523e105e7362c14e5e",
@@ -78,8 +80,20 @@ def validate_sources(sources):
             raise ValueError("Delivery images must use immutable digests")
 
 
+def tool_image(arch):
+    return TOOL_IMAGE + "-" + arch
+
+
+def engine_arch():
+    # oc-mirror runs in a container on this Docker engine, so the engine picks the runnable tool.
+    arch = run(["docker", "version", "--format", "{{.Server.Arch}}"], capture=True)
+    if arch not in TOOL_SHA:
+        raise ValueError("Unsupported Docker engine architecture: " + arch)
+    return arch
+
+
 def ensure_tool(state, arch):
-    tag = TOOL_IMAGE + "-" + arch
+    tag = tool_image(arch)
     exists = subprocess.run(["docker", "image", "inspect", tag], stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL).returncode == 0
     if exists:
@@ -111,8 +125,8 @@ def mirror(tool, state, args, network=None, authfile=None):
     run(command + [tool, "--cache-dir", "/work/cache", "--remove-signatures"] + args)
 
 
-def save_bootstrap(tool, target, arch):
-    registry_ref = resolve_image("docker.io/library/" + REGISTRY_IMAGE, arch)
+def save_bootstrap(tool, target, arch, registry_repository):
+    registry_ref = resolve_image(registry_repository + "@" + REGISTRY_DIGEST, arch)
     # A tag survives docker save/load; digest-only references do not on every engine.
     registry_tag = "ontomato-offline-registry:3.1.2-" + arch
     run(["docker", "tag", registry_ref, registry_tag])
@@ -146,14 +160,18 @@ def export(args):
                   {"name": ref if ref.split("@")[0] != repository(ref) else repository(ref) + ":mirror-" + ref.split("@sha256:")[1] + "@" + ref.split("@")[1]}
                   for ref in dict.fromkeys(sources.values())]}}
     (state / "imageset.yaml").write_text(json.dumps(config, indent=2) + "\n")
-    tool = ensure_tool(state, args.arch)
+    # Exporting copies pinned single-platform images, so the engine's own tool runs it; the
+    # target architecture's tool is what the site loads and runs on import.
+    exporter = ensure_tool(state, engine_arch())
+    tool = tool_image(args.arch)
     registry_tag = "ontomato-offline-registry:3.1.2-" + args.arch
     if args.bootstrap:
-        registry_tag = save_bootstrap(tool, state / "bootstrap.tar.gz", args.arch)
+        registry_tag = save_bootstrap(ensure_tool(state, args.arch), state / "bootstrap.tar.gz", args.arch,
+                                      args.registry_repository)
     flags = ["-c", "/work/imageset.yaml"]
     if args.insecure_source:
         flags += ["--src-tls-verify=false"]
-    mirror(tool, state, flags + ["file:///work/export"], args.network, args.authfile)
+    mirror(exporter, state, flags + ["file:///work/export"], args.network, args.authfile)
     archives = sorted((state / "export").glob("mirror_*.tar"))
     if not archives:
         raise ValueError("oc-mirror produced no archive; no delivery was created")
@@ -175,7 +193,7 @@ def verify_bundle(bundle):
     data = json.loads((bundle / "delivery.json").read_text())
     if data.get("schema") != 1 or data.get("arch") not in TOOL_SHA or set(data.get("images", {})) != set(IMAGE_KEYS):
         raise ValueError("Invalid delivery metadata")
-    expected_tool = TOOL_IMAGE + "-" + data["arch"]
+    expected_tool = tool_image(data["arch"])
     expected_registry = "ontomato-offline-registry:3.1.2-" + data["arch"]
     if data.get("tool") != expected_tool or data.get("registry") != expected_registry:
         raise ValueError("This tool version does not match the delivery; use its bundled offline/ directory")
@@ -194,6 +212,19 @@ def verify_bundle(bundle):
     return data
 
 
+def ensure_mirror_network(project, env):
+    # Compose v2.24.6 on Docker 26 (seen on a CentOS 7 host) occasionally starts the Registry attached to
+    # its default network only, so oc-mirror on the internal network cannot resolve "registry". Attach it
+    # here; this is the only place that depends on that Compose behavior.
+    network = project + "_mirror"
+    container = run(["docker", "compose", "-p", project, "-f", HERE / "compose.yml", "ps", "-q", "registry"],
+                    capture=True, env=env)
+    attached = json.loads(run(["docker", "inspect", "-f", "{{json .NetworkSettings.Networks}}", container],
+                              capture=True))
+    if network not in attached:
+        run(["docker", "network", "connect", "--alias", "registry", network, container])
+
+
 def import_bundle(args):
     bundle, state = Path(args.bundle).resolve(), Path(args.state).resolve()
     data = verify_bundle(bundle)
@@ -204,6 +235,7 @@ def import_bundle(args):
         run(["docker", "image", "inspect", image], capture=True)
     env = dict(os.environ, MIRROR_STATE=str(state), MIRROR_PORT=str(args.port), MIRROR_REGISTRY_IMAGE=data["registry"])
     run(["docker", "compose", "-p", args.project, "-f", HERE / "compose.yml", "up", "-d"], env=env)
+    ensure_mirror_network(args.project, env)
     # Keep import history beside the cache. Only incoming archives change each time.
     incoming = state / "incoming"
     incoming.mkdir(exist_ok=True)
@@ -243,6 +275,8 @@ def main():
     for name in ("state", "output", "version"):
         exp.add_argument("--" + name, required=True)
     exp.add_argument("--bootstrap", action="store_true", help="Include Registry and oc-mirror images for a first installation")
+    exp.add_argument("--registry-repository", default=REGISTRY_REPOSITORY,
+                     help="Repository serving the pinned bootstrap Registry digest")
     exp.add_argument("--authfile", help="Container auth JSON with inline credentials; never copied to a delivery")
     exp.add_argument("--network", help="Docker network for the exporter")
     exp.add_argument("--insecure-source", action="store_true")
