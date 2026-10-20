@@ -92,7 +92,7 @@ public class EnvServiceImpl implements EnvService {
 	@Override
 	public void importSchema(User user) throws Exception {
 		if (!isProductionEnvConfigured()) {
-			throw new Exception("Production environment is not configured (BACKEND_PRODUCTION_ENV_URL is empty)");
+			throw new Exception("Production environment is not configured (PRODUCTION_ENV_URL is empty)");
 		}
 		String domainId = user.getDomainId();
 		
@@ -193,7 +193,7 @@ public class EnvServiceImpl implements EnvService {
 	@Override
 	public JSONObject syncAssetsToProduction(List<String> actionIds, List<String> metricViewIds, boolean dryRun) throws Exception {
 		if (!isProductionEnvConfigured()) {
-			throw new Exception("Production environment is not configured (BACKEND_PRODUCTION_ENV_URL is empty)");
+			throw new Exception("Production environment is not configured (PRODUCTION_ENV_URL is empty)");
 		}
 		JSONArray actions = new JSONArray();
 		JSONArray missingExplanations = new JSONArray();

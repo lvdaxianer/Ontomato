@@ -79,7 +79,7 @@ function sandbox(makeScenario, files) {
   return { dir, root: realRoot, log, env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, FAKE_SCENARIO: JSON.stringify(scenario), FAKE_LOG: log } };
 }
 function productFiles(port) {
-  return { "package.json": "{}\n", "dev/postgres.compose.yml": "services: {}\n", "apps/data-engine/dev.mjs": "process.exit(0)\n", "apps/data-engine/.env": `SERVER_PORT=${port}\n`, "apps/data-engine/.venv/bin/python": "#!/bin/sh\nexit 0\n" };
+  return { "package.json": "{}\n", "dev/postgres.compose.yml": "services: {}\n", "apps/data-engine/dev.mjs": "process.exit(0)\n", ".env": `SERVER_PORT=${port}\n`, "apps/data-engine/.venv/bin/python": "#!/bin/sh\nexit 0\n" };
 }
 function cli(sb, command) {
   const result = spawnSync(process.execPath, [join(REPO, "scripts", "dev-stack.mjs"), sb.root, command], {
@@ -148,14 +148,14 @@ test("yaml resolves from the calling product root, not the shared tool location"
     rmSync(dir, { recursive: true, force: true });
   }
 });
-posixTest("Java port prefers the field .env over the inherited environment", () => {
+posixTest("Java port prefers the process environment over the shared root .env", () => {
   const sb = sandbox(() => ({}), productFiles(18087));
   try {
     const ctx = productContext(sb.root);
-    assert.equal(resolveJavaPort(ctx, { SERVER_PORT: "9999" }), 18087);
-    writeFileSync(join(sb.root, "apps/data-engine/.env"), "");
     assert.equal(resolveJavaPort(ctx, { SERVER_PORT: "9999" }), 9999);
-    writeFileSync(join(sb.root, "apps/data-engine/.env"), "SERVER_PORT=not-a-port\n");
+    writeFileSync(join(sb.root, ".env"), "");
+    assert.equal(resolveJavaPort(ctx, { SERVER_PORT: "9999" }), 9999);
+    writeFileSync(join(sb.root, ".env"), "SERVER_PORT=not-a-port\n");
     assert.throws(() => resolveJavaPort(ctx, {}), /SERVER_PORT/);
   } finally {
     cleanup(sb);
@@ -165,7 +165,7 @@ posixTest("Java port falls back to the field application.yml literal and rejects
   const sb = sandbox(() => ({}), productFiles(18087));
   try {
     const ctx = productContext(sb.root);
-    writeFileSync(join(sb.root, "apps/data-engine/.env"), "");
+    writeFileSync(join(sb.root, ".env"), "");
     mkdirSync(join(sb.root, "apps/data-engine/.dev/conf"), { recursive: true });
     writeFileSync(join(sb.root, "apps/data-engine/.dev/conf/application.yml"), "server:\n  port: 28087\n");
     assert.equal(resolveJavaPort(ctx, {}), 28087);
@@ -290,7 +290,7 @@ posixTest("up fails fast when Docker is unavailable and never calls compose", ()
 });
 posixTest("up checks required local files before touching Docker", () => {
   const files = productFiles(18087);
-  delete files["apps/data-engine/.env"];
+  delete files[".env"];
   const sb = sandbox(() => ({}), files);
   try {
     const result = cli(sb, "up");

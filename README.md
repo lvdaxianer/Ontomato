@@ -154,9 +154,9 @@ Offline sites use [oc-mirror incremental delivery](deploy/README.md#offline-deli
 
 When `docker compose ps` shows every service healthy, open `http://<host>:3000` and set the
 chat and embedding models under **Model Configuration** in the Admin Panel. You can also
-preset them in `.env` (`BACKEND_LLM_*`, `BACKEND_EMBEDDING_*`).
+preset new-domain defaults using the optional [configuration](deploy/README.md#configuration).
 
-`BACKEND_EMBEDDING_DIMENSIONS` (default `2048`) is the embedding dimension a new domain
+`EMBEDDING_DIMENSIONS` (default `2048`) is the embedding dimension a new domain
 starts with; it is sent to the embedding model with that domain's own configuration.
 An existing domain keeps its saved dimension: change it under **Model Configuration**
 and rebuild the vectors.

@@ -197,7 +197,7 @@ public class BusinessConfigServiceImpl implements BusinessConfigService {
 				+ "`ontomato.data-engine.questionSpliterTimeout`, "
 				+ "`ontomato.data-engine.dataAdapter` all take effect promptly after being configured through the page.\n"
 				+ "Apart from these configuration items, other configurations take effect only after the on-site conf/application.yml is updated, or an environment variable that the kept file still references is updated, and the application is restarted. "
-				+ "BACKEND_ and POSTGRE_ aliases apply through placeholders that remain in that file; removing a placeholder does not guarantee the alias still overrides the file.";
+				+ "Environment variable aliases apply through placeholders that remain in that file; removing a placeholder does not guarantee the alias still overrides the file.";
 	}
 
 }

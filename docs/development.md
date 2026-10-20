@@ -92,10 +92,8 @@ Maven unchanged (for example `-o`).
   overwritten, new ones are added, extra ones are kept, and `application.yml` and
   `mcp-clients.yml` are copied only when missing. The prompt language is `en`; this
   repository accepts only `PROMPT_LANG=en`.
-- Prepare `apps/data-engine/.env` yourself first (the Java `POSTGRE_*`, `BACKEND_*` and so
-  on, filled in the host's own terms; it is read literally as one `KEY=value` per line and
-  overrides inherited environment variables of the same name), and a missing file is
-  reported before Maven starts. The Python virtual environment `apps/data-engine/.venv`
+- Prepare the root `.env` from `.env.example`; Node, Java and the Manager share it.
+  Process variables take priority. A missing file is reported before Maven starts. The Python virtual environment `apps/data-engine/.venv`
   needs no manual preparation: on startup, if it is missing it is created automatically
   with the local `python3` (`py -3` on Windows, Python 3.10+ required) and
   `packages/data-engine-core/requirements-py310.txt` is installed; it is reinstalled when
@@ -117,7 +115,7 @@ point uses only Node and tools the system already ships (on Windows it uses the 
 PowerShell/CIM and needs no Bash, tail or extra dependency), so it runs directly in
 PowerShell.
 
-- `dev:up`: first checks the ports, `apps/data-engine/.env` and
+- `dev:up`: first checks the ports, `.env` and
   `dev/postgres.compose.yml`, prepares the Python virtual environment as needed and then
   starts Compose. Only the three Node processes run in the foreground (with an explicit
   `PORT=3000`), and Ctrl-C stops only this group; when PG/MCP/Java are already up it reuses
@@ -148,14 +146,15 @@ can be traced with `docker volume ls --filter label=dev.stack.product=<name>`; e
 volumes are not migrated, backfilled or deleted automatically, and the database-creation
 SQL runs only on the first initialization of an empty volume.
 
-Prepare the local configuration (each is only a `cp` of the example): the root `.env`,
-`apps/data-engine/.env`, and, when needed, the local MCP entry created from the synced
+Prepare the root `.env` from `.env.example` and, when needed, the local MCP entry created from the synced
 `apps/data-engine/.dev/conf/mcp-clients.yml` — it must be the only
 `http://127.0.0.1:<port>/sse`, and remote entries may be kept alongside it.
 
-Ports: Node 3000, the main web app 5173 and the Manager 5174 are fixed; PG uses `DB_PORT`
-(default 5432), Java uses `SERVER_PORT` from `apps/data-engine/.env` (default 18087), and
+Ports: Node 3000, the main web app 5173 and the Manager 5174 are fixed; PG uses `POSTGRES_PORT`
+(default 5432), Java uses `SERVER_PORT` from `.env` (default 18087), and
 the MCP uses the local port in `mcp-clients.yml` (template 18500). When a port is taken by
 another process, `up` reports the error and exits without stopping other processes. Each
 product root needs one install in its own root, so one `pnpm install` in the enterprise
 assembly root already includes the adjacent public repository.
+
+Existing checkouts: merge the values from `apps/data-engine/.env` into the root `.env` once, resolve duplicate keys, then remove the old file. Java now follows the same process-environment priority as Node. Rename old keys and site YAML placeholders as described in [deployment configuration](../deploy/README.md#configuration).
