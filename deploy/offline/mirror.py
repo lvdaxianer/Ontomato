@@ -175,6 +175,10 @@ def export(args):
     flags = ["-c", "/work/imageset.yaml"]
     if args.insecure_source:
         flags += ["--src-tls-verify=false"]
+    # Archives from an earlier export of this state were already delivered; the export history that makes
+    # this run incremental lives in oc-mirror's working directory, so only this run's archives are collected.
+    for old in (state / "export").glob("mirror_*.tar"):
+        old.unlink()
     mirror(exporter, state, flags + ["file:///work/export"], args.network, args.authfile)
     archives = sorted((state / "export").glob("mirror_*.tar"))
     if not archives:

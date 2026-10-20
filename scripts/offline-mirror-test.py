@@ -181,6 +181,21 @@ class DeliveryTests(unittest.TestCase):
         self.assertTrue(all(name.endswith("@sha256:" + "a" * 64) for name in names))
 
 
+    def test_incremental_export_ships_only_this_runs_archives(self):
+        args = self.export_args()
+        (args.state / "export").mkdir(parents=True)
+        (args.state / "export/mirror_000001.tar").write_bytes(b"previous full archive")
+        (args.state / "export/mirror_000002.tar").write_bytes(b"previous second part")
+        def write_archive(*_):
+            self.assertEqual(list((args.state / "export").glob("mirror_*.tar")), [])
+            (args.state / "export/mirror_000001.tar").write_bytes(b"increment")
+        with patch.object(mirror, "engine_arch", return_value="arm64"), \
+                patch.object(mirror, "ensure_tool", return_value=self.data["tool"]), \
+                patch.object(mirror, "mirror", side_effect=write_archive):
+            mirror.export(args)
+        self.assertEqual(sorted(p.name for p in args.output.glob("mirror_*.tar")), ["mirror_000001.tar"])
+        self.assertEqual((args.output / "mirror_000001.tar").read_bytes(), b"increment")
+
     def test_cross_architecture_export_runs_the_engine_tool_and_ships_the_target_tool(self):
         args = self.export_args()
         args.bootstrap = True
