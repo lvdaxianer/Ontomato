@@ -131,7 +131,7 @@ onBeforeUnmount(() => {
         <template v-else>
           <div ref="chatContainer" class="chat-messages">
             <div v-for="(msg, i) in messages" :key="i" class="chat-messages__item">
-              <AgentMessage :message="msg" :message-index="i" />
+              <AgentMessage :message="msg" />
             </div>
             <div v-if="isSending" class="typing-indicator">
               <span class="typing-dot" />

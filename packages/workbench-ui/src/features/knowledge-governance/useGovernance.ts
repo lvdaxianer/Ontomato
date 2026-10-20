@@ -7,6 +7,7 @@ import {
   type GovernanceSourceRead,
 } from "@ontomato/contracts/knowledge-governance";
 import {
+  joinAssistantTurns,
   readSseData,
   reduceAgentLiveTail,
   SseProtocolError,
@@ -38,7 +39,9 @@ export function useGovernance() {
   // A round this page just created keeps its live state when the route catches up.
   let adopted: string | null = null;
 
-  const messages = computed(() => [...(session.value?.messages ?? []), ...live.value.messages]);
+  const messages = computed(() =>
+    joinAssistantTurns([...(session.value?.messages ?? []), ...live.value.messages])
+  );
   // Only a followed stream says a response is in flight; a stale snapshot never does.
   const running = computed(
     () => live.value.status === "starting" || live.value.status === "running"

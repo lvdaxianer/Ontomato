@@ -228,7 +228,7 @@ defineExpose({
           <div class="sidebar-empty-text">{{ t("diagnosis.enterProblem") }}</div>
         </div>
         <div v-for="(msg, i) in messages" :key="i" class="sidebar-msg-wrapper">
-          <AgentMessage :message="msg" :message-index="i" />
+          <AgentMessage :message="msg" />
         </div>
         <div v-if="isSending" class="sidebar-typing">
           <span class="typing-dot" />

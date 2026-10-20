@@ -1,44 +1,45 @@
 <script setup lang="ts">
-import type { AgentChatMessage } from "@ontomato/contracts/agent-chat";
+import type { AgentChatMessage, AgentChatToolSegment } from "@ontomato/contracts/agent-chat";
 import { computed, ref } from "vue";
-import { ChevronDown, ChevronUp, Wrench, Brain } from "lucide-vue-next";
+import { Brain, Check, ChevronRight, CircleAlert, Loader2 } from "lucide-vue-next";
 
 import { renderAgentMarkdown } from "../../utils/agent-markdown";
 import { useI18n } from "vue-i18n";
 
 const { t } = useI18n();
 
-const props = defineProps<{
-  message: AgentChatMessage;
-  messageIndex: number;
-}>();
+const props = defineProps<{ message: AgentChatMessage }>();
 
-/* ------------------------------------------------------------------ */
-/*  Expand / collapse state                                            */
-/* ------------------------------------------------------------------ */
+/** Consecutive tool calls read as one step of work; text and thinking keep their own blocks. */
+type Block =
+  | { kind: "text" | "thinking"; key: string; content: string }
+  | { kind: "tools"; key: string; tools: AgentChatToolSegment[]; failed: number; running?: string };
 
-const expandedTools = ref<Set<string>>(new Set());
-const expandedThinking = ref<Set<number>>(new Set());
+const blocks = computed(() => {
+  const result: Block[] = [];
+  props.message.segments?.forEach((seg, index) => {
+    if (seg.type !== "tool_call") {
+      // Whitespace between two tool calls does not split them into separate steps.
+      if (seg.content.trim())
+        result.push({ kind: seg.type, key: `${seg.type}:${index}`, content: seg.content });
+      return;
+    }
+    let group = result.at(-1);
+    if (group?.kind !== "tools") {
+      group = { kind: "tools", key: `tools:${seg.toolCallId}`, tools: [], failed: 0 };
+      result.push(group);
+    }
+    group.tools.push(seg);
+    if (seg.isError) group.failed++;
+    if (seg.status === "running") group.running = seg.tool;
+  });
+  return result;
+});
 
-function toggleTool(toolCallId: string) {
-  if (expandedTools.value.has(toolCallId)) {
-    expandedTools.value.delete(toolCallId);
-  } else {
-    expandedTools.value.add(toolCallId);
-  }
-}
+const expanded = ref(new Set<string>());
 
-function toggleThinking(segIndex: number) {
-  const key = props.messageIndex * 1000 + segIndex;
-  if (expandedThinking.value.has(key)) {
-    expandedThinking.value.delete(key);
-  } else {
-    expandedThinking.value.add(key);
-  }
-}
-
-function isThinkingExpanded(segIndex: number): boolean {
-  return expandedThinking.value.has(props.messageIndex * 1000 + segIndex);
+function toggle(key: string) {
+  if (!expanded.value.delete(key)) expanded.value.add(key);
 }
 
 function formatToolResult(result: unknown): string {
@@ -60,18 +61,9 @@ function formatToolArgs(args: string): string {
   }
 }
 
-function renderText(content: string): string {
-  return renderAgentMarkdown(content);
-}
-
-const hasSegments = computed(() => {
-  const msg = props.message;
-  return msg.role === "assistant" && msg.segments && msg.segments.length > 0;
-});
-
 const fallbackMarkdown = computed(() => {
   const msg = props.message;
-  if (msg.role === "user" || hasSegments.value || !msg.content.trim()) return "";
+  if (msg.role === "user" || blocks.value.length || !msg.content.trim()) return "";
   return renderAgentMarkdown(msg.content);
 });
 </script>
@@ -84,93 +76,117 @@ const fallbackMarkdown = computed(() => {
     </div>
   </div>
 
-  <!-- Assistant message -->
+  <!-- Assistant message: the explanation leads; work steps are compact lines opened on demand. -->
   <div v-else class="agent-msg agent-msg--assistant">
-    <template v-if="hasSegments && message.segments">
-      <template v-for="(seg, si) in message.segments" :key="si">
-        <div
-          v-if="seg.type === 'text' && seg.content.trim()"
-          class="agent-msg__markdown markdown-content"
-          v-html="renderText(seg.content)"
-        />
+    <template v-for="block in blocks" :key="block.key">
+      <div
+        v-if="block.kind === 'text'"
+        class="agent-msg__markdown markdown-content"
+        v-html="renderAgentMarkdown(block.content)"
+      />
 
-        <!-- Thinking -->
-        <div v-else-if="seg.type === 'thinking'" class="agent-thinking">
-          <div
-            class="agent-thinking__header"
-            role="button"
-            tabindex="0"
-            :aria-expanded="isThinkingExpanded(si)"
-            @click="toggleThinking(si)"
-            @keydown.enter.space.prevent="toggleThinking(si)"
-          >
-            <Brain :size="14" class="agent-thinking__icon" />
-            <span class="agent-thinking__label">{{ t("thinking.thinkingProcess") }}</span>
-            <component
-              :is="isThinkingExpanded(si) ? ChevronUp : ChevronDown"
-              :size="14"
-              class="agent-thinking__arrow"
-            />
-          </div>
-          <pre v-if="isThinkingExpanded(si)" class="agent-thinking__content">{{ seg.content }}</pre>
-        </div>
-
-        <!-- Tool call -->
+      <div v-else-if="block.kind === 'thinking'" class="agent-step">
         <div
-          v-else-if="seg.type === 'tool_call'"
-          :class="['agent-tool', { 'agent-tool--error': seg.isError }]"
+          class="agent-step__row"
+          role="button"
+          tabindex="0"
+          :aria-expanded="expanded.has(block.key)"
+          @click="toggle(block.key)"
+          @keydown.enter.space.prevent="toggle(block.key)"
         >
+          <Brain :size="14" class="agent-step__icon" />
+          <span>{{ t("thinking.thinkingProcess") }}</span>
+          <ChevronRight :size="14" class="agent-step__chevron" />
+        </div>
+        <pre v-if="expanded.has(block.key)" class="agent-step__detail agent-step__thinking">{{
+          block.content
+        }}</pre>
+      </div>
+
+      <div
+        v-else-if="block.kind === 'tools'"
+        :class="['agent-step', { 'agent-step--group': block.tools.length > 1 }]"
+      >
+        <!-- Several calls in a row collapse to one summary line that names the running call. -->
+        <div
+          v-if="block.tools.length > 1"
+          class="agent-step__row"
+          role="button"
+          tabindex="0"
+          :aria-expanded="expanded.has(block.key)"
+          @click="toggle(block.key)"
+          @keydown.enter.space.prevent="toggle(block.key)"
+        >
+          <Loader2 v-if="block.running" :size="14" class="agent-step__icon agent-step__icon--running" />
+          <CircleAlert
+            v-else-if="block.failed"
+            :size="14"
+            class="agent-step__icon agent-step__icon--failed"
+          />
+          <Check v-else :size="14" class="agent-step__icon" />
+          <span>{{ t("chat.toolCalls", block.tools.length) }}</span>
+          <code v-if="block.running" class="agent-step__name">{{ block.running }}</code>
+          <span v-if="block.failed" class="agent-step__failed">
+            {{ t("chat.toolFailures", { count: block.failed }) }}
+          </span>
+          <ChevronRight :size="14" class="agent-step__chevron" />
+        </div>
+
+        <div v-if="block.tools.length === 1 || expanded.has(block.key)" class="agent-step__list">
           <div
-            class="agent-tool__header"
-            role="button"
-            tabindex="0"
-            :aria-expanded="expandedTools.has(seg.toolCallId)"
-            @click="toggleTool(seg.toolCallId)"
-            @keydown.enter.space.prevent="toggleTool(seg.toolCallId)"
+            v-for="seg in block.tools"
+            :key="seg.toolCallId"
+            :class="['agent-tool', { 'agent-tool--error': seg.isError }]"
           >
-            <Wrench :size="14" class="agent-tool__icon" />
-            <span class="agent-tool__name">{{ seg.tool }}</span>
-            <span
-              v-if="seg.status === 'running'"
-              class="agent-tool__status agent-tool__status--running"
+            <div
+              class="agent-tool__header agent-step__row"
+              role="button"
+              tabindex="0"
+              :aria-expanded="expanded.has(seg.toolCallId)"
+              @click="toggle(seg.toolCallId)"
+              @keydown.enter.space.prevent="toggle(seg.toolCallId)"
             >
-              {{ t("diagnosis.executing") }}
-            </span>
-            <span v-else-if="seg.isError" class="agent-tool__status agent-tool__status--failed">
-              {{ t("common.failed") }}
-            </span>
-            <span v-else class="agent-tool__status agent-tool__status--done">
-              {{ t("common.complete") }}
-            </span>
-            <component
-              :is="expandedTools.has(seg.toolCallId) ? ChevronUp : ChevronDown"
-              :size="14"
-              class="agent-tool__arrow"
-            />
-          </div>
-          <div v-if="expandedTools.has(seg.toolCallId)" class="agent-tool__detail">
-            <div v-if="seg.args" class="agent-tool__section">
-              <div class="agent-tool__section-label">{{ t("common.parameters") }}</div>
-              <pre class="agent-tool__section-content">{{ formatToolArgs(seg.args) }}</pre>
+              <Loader2
+                v-if="seg.status === 'running'"
+                :size="14"
+                class="agent-step__icon agent-step__icon--running"
+              />
+              <CircleAlert
+                v-else-if="seg.isError"
+                :size="14"
+                class="agent-step__icon agent-step__icon--failed"
+              />
+              <Check v-else :size="14" class="agent-step__icon" />
+              <code class="agent-tool__name agent-step__name">{{ seg.tool }}</code>
+              <span v-if="seg.status === 'running'" class="agent-step__sr">
+                {{ t("diagnosis.executing") }}
+              </span>
+              <span v-else-if="seg.isError" class="agent-step__failed">
+                {{ t("common.failed") }}
+              </span>
+              <span v-else class="agent-step__sr">{{ t("common.complete") }}</span>
+              <ChevronRight :size="14" class="agent-step__chevron" />
             </div>
-            <div v-if="seg.status === 'done'" class="agent-tool__section">
-              <div class="agent-tool__section-label">{{ t("common.result") }}</div>
-              <pre
-                :class="[
-                  'agent-tool__section-content',
-                  { 'agent-tool__section-content--error': seg.isError },
-                ]"
-                >{{ formatToolResult(seg.result) }}</pre
-              >
+            <div v-if="expanded.has(seg.toolCallId)" class="agent-tool__detail agent-step__detail">
+              <template v-if="seg.args">
+                <div class="agent-step__section">{{ t("common.parameters") }}</div>
+                <pre class="agent-step__text">{{ formatToolArgs(seg.args) }}</pre>
+              </template>
+              <template v-if="seg.status === 'done'">
+                <div class="agent-step__section">{{ t("common.result") }}</div>
+                <pre :class="['agent-step__text', { 'agent-step__text--error': seg.isError }]">{{
+                  formatToolResult(seg.result)
+                }}</pre>
+              </template>
             </div>
           </div>
         </div>
-      </template>
+      </div>
     </template>
 
     <!-- Fallback for legacy/plain-text assistant messages. -->
     <div
-      v-else-if="fallbackMarkdown"
+      v-if="fallbackMarkdown"
       class="agent-msg__markdown markdown-content"
       v-html="fallbackMarkdown"
     />
@@ -178,42 +194,30 @@ const fallbackMarkdown = computed(() => {
 </template>
 
 <style scoped>
-/* ================================================================== */
-/*  User message bubble                                                */
-/* ================================================================== */
-
+/* User message: a quiet bubble, so the Agent's explanation stays the main reading line. */
 .agent-msg--user {
   display: flex;
   justify-content: flex-end;
-  padding: 0 4px;
 }
 
 .agent-msg__bubble {
-  max-width: 70%;
-  padding: 10px 16px;
-  background: var(--el-color-primary);
-  color: var(--on-primary);
-  border-radius: 16px 4px 16px 16px;
+  max-width: min(80%, 560px);
+  padding: 9px 14px;
+  background: var(--el-fill-color-light);
+  color: var(--el-text-color-primary);
+  border-radius: 14px;
   font-size: 14px;
   line-height: 1.6;
   word-break: break-word;
   white-space: pre-wrap;
 }
 
-html.dark .agent-msg__bubble {
-  background: var(--el-color-primary-dark-2);
-}
-
-/* ================================================================== */
-/*  Assistant message                                                  */
-/* ================================================================== */
-
 .agent-msg--assistant {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 0 4px;
+  gap: 10px;
   width: 100%;
+  min-width: 0;
 }
 
 /* Markdown content inherits global .markdown-content styles from style.css */
@@ -223,7 +227,6 @@ html.dark .agent-msg__bubble {
   color: var(--el-text-color-primary);
 }
 
-/* First child margin reset */
 .agent-msg__markdown :deep(> *:first-child) {
   margin-top: 0;
 }
@@ -233,173 +236,147 @@ html.dark .agent-msg__bubble {
 }
 
 /* ================================================================== */
-/*  Thinking block                                                     */
+/*  Work steps: borderless muted lines, details open beneath their line */
 /* ================================================================== */
 
-.agent-thinking {
-  border-left: 3px solid var(--el-color-info-light-5);
-  border-radius: 4px;
-  background: var(--observe-bg-card, var(--el-fill-color-lighter));
-  overflow: hidden;
+.agent-step {
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--el-text-color-secondary);
 }
 
-.agent-thinking__header {
+.agent-step__row {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 10px;
+  width: fit-content;
+  max-width: 100%;
+  min-height: 26px;
+  box-sizing: border-box;
+  padding: 2px 6px;
+  margin-inline-start: -6px;
+  border-radius: 6px;
   cursor: pointer;
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
   user-select: none;
-  transition: background var(--transition-fast);
 }
 
-.agent-thinking__header:hover {
+.agent-step__row:hover {
   background: var(--el-fill-color-light);
+  color: var(--el-text-color-regular);
 }
 
-.agent-thinking__icon {
-  flex-shrink: 0;
-  opacity: 0.7;
-}
-
-.agent-thinking__label {
-  font-weight: 500;
-}
-
-.agent-thinking__arrow {
-  margin-left: auto;
-  flex-shrink: 0;
-  opacity: 0.5;
-}
-
-.agent-thinking__content {
-  margin: 0;
-  padding: 8px 10px;
-  font-size: 12px;
-  font-family: var(--font-sans);
-  line-height: 1.5;
-  white-space: pre-wrap;
-  word-break: break-word;
-  color: var(--el-text-color-secondary);
-  border-top: 1px solid var(--el-border-color-lighter);
-  max-height: 300px;
-  overflow-y: auto;
-}
-
-/* ================================================================== */
-/*  Tool call block                                                    */
-/* ================================================================== */
-
-.agent-tool {
-  border: 1px solid var(--observe-border, var(--el-border-color-light));
-  border-radius: 8px;
-  background: var(--observe-bg-card, var(--el-bg-color));
-  overflow: hidden;
-}
-
-.agent-tool--error {
-  border-color: var(--el-color-danger-light-5);
-}
-
-.agent-tool__header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 10px;
-  cursor: pointer;
-  user-select: none;
-  transition: background var(--transition-fast);
-}
-
-.agent-thinking__header:focus-visible,
-.agent-tool__header:focus-visible {
+.agent-step__row:focus-visible {
   outline: 2px solid var(--el-color-primary);
-  outline-offset: -2px;
+  outline-offset: 0;
 }
 
-.agent-tool__header:hover {
+.agent-step__icon {
+  flex-shrink: 0;
+}
+
+.agent-step__icon--running {
+  color: var(--el-color-primary);
+  animation: agent-step-spin 1s linear infinite;
+}
+
+.agent-step__icon--failed,
+.agent-step__failed {
+  color: var(--el-color-danger);
+}
+
+.agent-step__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background: none;
+  padding: 0;
+  color: inherit;
+}
+
+/* Always faintly visible: touch screens have no hover to reveal that a line expands. */
+.agent-step__chevron {
+  flex-shrink: 0;
+  opacity: 0.4;
+  transition:
+    opacity var(--transition-fast),
+    transform var(--transition-fast);
+}
+
+.agent-step__row:hover .agent-step__chevron,
+.agent-step__row:focus-visible .agent-step__chevron,
+.agent-step__row[aria-expanded="true"] .agent-step__chevron {
+  opacity: 0.8;
+}
+
+.agent-step__row[aria-expanded="true"] .agent-step__chevron {
+  transform: rotate(90deg);
+}
+
+.agent-step--group .agent-step__list {
+  margin: 2px 0 0 6px;
+  padding-inline-start: 10px;
+  border-inline-start: 1px solid var(--el-border-color-lighter);
+}
+
+.agent-step__sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.agent-step__detail {
+  margin: 2px 0 6px 20px;
+  padding: 6px 10px;
+  border-radius: 6px;
   background: var(--el-fill-color-lighter);
 }
 
-.agent-tool__icon {
-  flex-shrink: 0;
-  color: var(--el-text-color-secondary);
-}
-
-.agent-tool__name {
-  font-size: 13px;
-  font-weight: 500;
-  font-family: var(--font-mono);
-  color: var(--el-text-color-primary);
-}
-
-.agent-tool__status {
-  font-size: 12px;
-}
-
-.agent-tool__status--running {
-  color: var(--el-color-warning);
-  animation: agent-tool-pulse 1.5s infinite;
-}
-
-.agent-tool__status--failed {
-  color: var(--el-color-danger);
-  font-weight: 500;
-}
-
-.agent-tool__status--done {
-  color: var(--el-color-success);
-}
-
-.agent-tool__arrow {
-  margin-left: auto;
-  flex-shrink: 0;
-  color: var(--el-text-color-secondary);
-  opacity: 0.5;
-}
-
-.agent-tool__detail {
-  border-top: 1px solid var(--el-border-color-lighter);
-}
-
-.agent-tool__section + .agent-tool__section {
-  border-top: 1px solid var(--el-border-color-lighter);
-}
-
-.agent-tool__section-label {
+.agent-step__section {
   font-size: 11px;
   font-weight: 600;
-  color: var(--el-text-color-secondary);
-  padding: 6px 10px 2px;
-  text-transform: uppercase;
+  margin-top: 4px;
 }
 
-.agent-tool__section-content {
-  margin: 0;
-  padding: 4px 10px 8px;
+.agent-step__text,
+.agent-step__thinking {
+  margin: 2px 0 4px;
   font-size: 12px;
-  font-family: var(--font-mono);
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
-  max-height: 300px;
+  max-height: 240px;
   overflow-y: auto;
   color: var(--el-text-color-regular);
 }
 
-.agent-tool__section-content--error {
+.agent-step__text {
+  font-family: var(--font-mono);
+}
+
+.agent-step__thinking {
+  font-family: var(--font-sans);
+  max-height: 300px;
+}
+
+.agent-step__text--error {
   color: var(--el-color-danger);
 }
 
-@keyframes agent-tool-pulse {
-  0%,
-  100% {
-    opacity: 1;
+@keyframes agent-step-spin {
+  to {
+    transform: rotate(360deg);
   }
-  50% {
-    opacity: 0.5;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-step__icon--running {
+    animation: none;
   }
 }
 
