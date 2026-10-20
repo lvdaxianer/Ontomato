@@ -33,6 +33,8 @@ let dataAdapter: string;
 let instanceNodeCount: number;
 let dataAdapters: { type: string; label: string; sql: boolean; fields: string[] }[];
 let knowledge: Record<string, Record<string, unknown>>;
+let graphLayout: { positions: Record<string, { x: number; y: number }> };
+let graphLayoutSaveFailures: number;
 /** Knowledge IDs whose delete returns a business failure. */
 let knowledgeDeleteFails: Set<string>;
 
@@ -103,6 +105,14 @@ function respond(url: string, body?: Record<string, unknown>): Response {
   if (path === "/businessConfig/dataAdapters") {
     return json({ success: true, data: { currentType: dataAdapter, adapters: dataAdapters } });
   }
+  if (path === "/admin/graph-layout") {
+    if (body && graphLayoutSaveFailures > 0) {
+      graphLayoutSaveFailures -= 1;
+      return json({ success: false, message: "layout write failed" });
+    }
+    if (body) graphLayout = body as typeof graphLayout;
+    return json({ success: true, data: graphLayout });
+  }
   if (path === "/function/queryList") return json({ success: true, data: functions });
   if (path.endsWith("/queryList")) return json({ success: true, data: [] });
   return json({ success: true, data: {} });
@@ -136,6 +146,8 @@ beforeEach(() => {
     k2: { knowledgeID: "k2", knowledgeTitle: "Legacy note", knowledgeText: "t2", status: 0 },
   };
   knowledgeDeleteFails = new Set();
+  graphLayout = { positions: {} };
+  graphLayoutSaveFailures = 0;
   vi.stubGlobal("fetch", (url: string, init: RequestInit) => {
     const path = url.replace(/^.*\/data-query/, "");
     const body = init.body === undefined ? undefined : JSON.parse(String(init.body));
@@ -536,6 +548,24 @@ describe("OntologyManager root component with real pages", () => {
     const inputs = [...openDialog("Rel Desc").querySelectorAll<HTMLInputElement>("input")];
     expect(inputs.map((input) => input.value)).toContain("item_id");
     expect(inputs.map((input) => input.value)).toContain("id");
+  });
+
+  it("visual modeling restores the server layout and retries a debounced save after failure", async () => {
+    graphLayout = { positions: { Order: { x: 120, y: 80 } } };
+    const { root } = mountHost({ ...base, view: "/visual-modeling" });
+    await settle();
+
+    expect(graphRecord.addedNodes).toContainEqual(expect.objectContaining({ id: "Order", x: 120, y: 80 }));
+    graphLayoutSaveFailures = 1;
+    graphHandlers["node:moved"]!({});
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    await settle();
+
+    expect(paths()).toContain("/admin/graph-layout");
+    expect(root().textContent).toContain("Layout save failed");
+    clickButton("Retry");
+    await settle();
+    expect(root().textContent).toContain("Layout saved");
   });
 
   it("when only locale/theme change, the open edit dialog and its input are kept without reloading", async () => {
