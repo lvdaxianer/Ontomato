@@ -23,7 +23,7 @@ export function stageInstallEntry(installDir, staging) {
 
 const FLAGS = {
   "--arch": "value", "--version": "value", "--image-tag": "value",
-  "--registry": "value", "--state": "value", "--bootstrap": "boolean",
+  "--registry": "value", "--state": "value", "--cache-dir": "value", "--bootstrap": "boolean",
   "--network": "value", "--insecure-source": "boolean", "--postgres": "value",
   "--registry-repository": "value",
 };
@@ -84,6 +84,7 @@ export function buildBundle(options, { name, deployDir, installDir, images, vali
   execute("python3", [
     mirror, "export", "--arch", arch, "--version", version,
     "--state", resolve(options["--state"]), "--output", join(staging, "package"),
+    ...(options["--cache-dir"] ? ["--cache-dir", resolve(options["--cache-dir"])] : []),
     ...imageArgs(resolved),
     ...(options["--bootstrap"] ? ["--bootstrap"] : []),
     ...(options["--registry-repository"] ? ["--registry-repository", options["--registry-repository"]] : []),

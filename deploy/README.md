@@ -96,6 +96,9 @@ application/database migration compatibility must be considered separately.
 
 - Keep the connected export state (both cache and `export/working-dir`) and each
   site's import state (cache, incoming working directory and Registry data).
+- The export cache defaults to `<state>/cache`. The bundle option `--cache-dir` can
+  point several states at one shared download cache: it only supplies blob bytes,
+  while which blobs an export archives comes from the state's `export/working-dir` history.
 - Successful Registry imports are recorded under the site state's `imports/` directory.
   These receipts do not assert that the application upgrade has completed.
 - Copy each completed delivery before the next export: oc-mirror reuses its
