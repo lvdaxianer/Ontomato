@@ -329,6 +329,7 @@ test("public final image: central export of the public tree only, one image tag 
   assert.deepEqual(docker.images()[tagsOf(build.args)[0]], {
     "org.opencontainers.image.version": VERSION,
     "io.ontomato.component": "datarag-opensource",
+    "io.ontomato.build": tagsOf(build.args)[0].split(":")[1].replace(/-arm64$/, ""),
   });
 });
 
@@ -396,6 +397,7 @@ for (const mode of ["real", "override"])
     assert.deepEqual(docker.images()[tagsOf(build.args)[0]], {
       "org.opencontainers.image.version": VERSION,
       "io.ontomato.component": "datarag",
+      "io.ontomato.build": tagsOf(build.args)[0].split(":")[1].replace(/(?:-override)?-arm64$/, ""),
       "io.example.license.mode": mode,
     });
   });
@@ -453,3 +455,7 @@ test("an image whose license label differs from the mode is rejected", async (t)
   fakeDocker(t, fx.dir, { FAKE_MODE: "bad-label" });
   await assert.rejects(() => run(enterpriseApp(fx, "override"), ["--arch", "arm64", "--license-mode", "override"]), /Built image identity mismatch: datarag:/);
 });
+
+// Synthetic local-build fixtures must not inherit the outer CI build identity.
+delete process.env.CI_PIPELINE_ID;
+delete process.env.GITHUB_RUN_ID;

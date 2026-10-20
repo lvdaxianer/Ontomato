@@ -306,10 +306,11 @@ test("the public entry builds ontomato-ontology-manager from its two owners", (t
     );
   assertRecipeMatches(build, listing);
 
-  // The manager image carries the version, component and kind only.
+  // The running image retains the same build identity as its readable tag.
   assert.deepEqual(docker.labels(), {
     "org.opencontainers.image.version": VERSION,
     "io.ontomato.component": "ontomato-ontology-manager",
+    "io.ontomato.build": tag.split(":")[1].replace(/-arm64$/, ""),
   });
   assert.equal(existsSync(join(publicRoot, "apps/ontology-manager/runtime-lock.json")), false);
 });
@@ -354,10 +355,11 @@ test("an enterprise build takes its own app plus the public owners and stamps th
   );
   assertRecipeMatches(build, listing);
 
-  // A dirty public source still marks the stamp; the labels stay the version, component and kind only.
+  // A dirty public source still marks the stamp and its image metadata.
   assert.deepEqual(docker.labels(), {
     "org.opencontainers.image.version": VERSION,
     "io.ontomato.component": "ontology-manager",
+    "io.ontomato.build": build[build.indexOf("-t") + 1].split(":")[1].replace(/-amd64$/, ""),
   });
   const [tag, alias] = build.filter((arg, i) => build[i - 1] === "-t");
   assert.match(tag, new RegExp(`^ontology-manager:${VERSION}-\\d{8}-\\d{6}-g${enterpriseHead.slice(0, 12)}-dirty-amd64$`));
@@ -393,3 +395,7 @@ test("the rendered DataRAG proxy clears the model runtime credential header", ()
   assert.match(rendered, /^ {2}proxy_set_header X-Ontomato-Model-Runtime-Token "";$/m);
   assert.match(rendered, /\n\}$/);
 });
+
+// Synthetic local-build fixtures must not inherit the outer CI build identity.
+delete process.env.CI_PIPELINE_ID;
+delete process.env.GITHUB_RUN_ID;
