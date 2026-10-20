@@ -16,7 +16,7 @@ class DeliveryTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.root = Path(self.tmp.name)
+        self.root = Path(self.tmp.name).resolve()
         self.bundle = self.root / "bundle"
         self.bundle.mkdir()
         (self.bundle / "imageset.yaml").write_text("{}")
@@ -107,21 +107,23 @@ class DeliveryTests(unittest.TestCase):
             {"platform": {"os": "linux", "architecture": "amd64"}, "digest": "sha256:" + "a" * 64},
             {"platform": {"os": "linux", "architecture": "arm64"}, "digest": digest},
         ]}
-        image = {"Os": "linux", "Architecture": "arm64"}
+        image = {"os": "linux", "architecture": "arm64"}
         with patch.object(mirror.subprocess, "check_output", return_value=json.dumps(manifest).encode()), \
-                patch.object(mirror, "run", side_effect=["pull output", json.dumps([image])]) as run:
+                patch.object(mirror, "run", return_value=json.dumps(image)) as run:
             ref = mirror.resolve_image("example.com/arbitrary/image:mutable", "arm64")
         self.assertEqual(ref, "example.com/arbitrary/image@" + digest)
-        self.assertEqual(run.call_args_list[0].args[0], ["docker", "pull", "--platform", "linux/arm64", ref])
+        # The platform config is read from the registry; nothing is pulled into the local Docker.
+        self.assertEqual([call.args[0] for call in run.call_args_list],
+                         [["docker", "buildx", "imagetools", "inspect", ref, "--format", "{{json .Image}}"]])
 
     def test_build_tag_survives_resolution_and_offline_import_with_the_same_digest(self):
         raw = b'{"schemaVersion":2}\n'
         digest = "sha256:" + hashlib.sha256(raw).hexdigest()
         build = "4.1.0-dev-ci123-gabc"
-        image = {"Os": "linux", "Architecture": "arm64", "Config": {"Labels": {
+        image = {"os": "linux", "architecture": "arm64", "config": {"Labels": {
             "org.opencontainers.image.version": "4.1.0-dev", "io.ontomato.build": build}}}
         with patch.object(mirror.subprocess, "check_output", return_value=raw), \
-                patch.object(mirror, "run", side_effect=["", json.dumps([image])]):
+                patch.object(mirror, "run", return_value=json.dumps(image)):
             ref = mirror.resolve_image("example.com/a:edge", "arm64")
         self.assertEqual(ref, "example.com/a:" + build + "@" + digest)
         self.data["images"]["WORKBENCH_IMAGE"] = ref
@@ -136,15 +138,15 @@ class DeliveryTests(unittest.TestCase):
 
     def test_resolve_single_manifest_hashes_exact_bytes(self):
         raw = b'{"schemaVersion":2}\n'
-        image = {"Os": "linux", "Architecture": "arm64"}
+        image = {"os": "linux", "architecture": "arm64"}
         with patch.object(mirror.subprocess, "check_output", return_value=raw), \
-                patch.object(mirror, "run", side_effect=["", json.dumps([image])]):
+                patch.object(mirror, "run", return_value=json.dumps(image)):
             ref = mirror.resolve_image("example.com/a:tag", "arm64")
         self.assertEqual(ref, "example.com/a@sha256:" + hashlib.sha256(raw).hexdigest())
 
     def test_resolve_rejects_wrong_platform(self):
         with patch.object(mirror.subprocess, "check_output", return_value=b'{"schemaVersion":2}'), \
-                patch.object(mirror, "run", side_effect=["", json.dumps([{"Os": "linux", "Architecture": "amd64"}])]):
+                patch.object(mirror, "run", return_value=json.dumps({"os": "linux", "architecture": "amd64"})):
             with self.assertRaisesRegex(ValueError, "platform"):
                 mirror.resolve_image("example.com/a:tag", "arm64")
 
@@ -153,7 +155,7 @@ class DeliveryTests(unittest.TestCase):
         return SimpleNamespace(state=self.root / "state", output=self.root / "exported", arch="arm64",
                                version="4.0.1", workbench=refs[0], data_engine=refs[1], manager=refs[2],
                                postgres=refs[3], bootstrap=False, insecure_source=False, network=None, authfile=None,
-                               registry_repository=mirror.REGISTRY_REPOSITORY)
+                               registry_repository=mirror.REGISTRY_REPOSITORY, cache_dir=None)
 
     def test_export_rejects_mutable_tag_before_creating_state(self):
         args = self.export_args()
@@ -165,7 +167,7 @@ class DeliveryTests(unittest.TestCase):
 
     def test_export_preserves_validated_pins_without_resolving_again(self):
         args = self.export_args()
-        def write_archive(*_):
+        def write_archive(*_, **__):
             (args.state / "export").mkdir()
             (args.state / "export/mirror_000001.tar").write_bytes(b"archive")
         with patch.object(mirror, "resolve_image") as resolve, \
@@ -186,7 +188,7 @@ class DeliveryTests(unittest.TestCase):
         (args.state / "export").mkdir(parents=True)
         (args.state / "export/mirror_000001.tar").write_bytes(b"previous full archive")
         (args.state / "export/mirror_000002.tar").write_bytes(b"previous second part")
-        def write_archive(*_):
+        def write_archive(*_, **__):
             self.assertEqual(list((args.state / "export").glob("mirror_*.tar")), [])
             (args.state / "export/mirror_000001.tar").write_bytes(b"increment")
         with patch.object(mirror, "engine_arch", return_value="arm64"), \
@@ -200,7 +202,7 @@ class DeliveryTests(unittest.TestCase):
         args = self.export_args()
         args.bootstrap = True
         args.registry_repository = "mirror.example.com/copies/registry"
-        def write_archive(*_):
+        def write_archive(*_, **__):
             (args.state / "export").mkdir()
             (args.state / "export/mirror_000001.tar").write_bytes(b"archive")
         def save(tool, target, arch, registry_repository):
@@ -216,6 +218,40 @@ class DeliveryTests(unittest.TestCase):
         self.assertEqual(bootstrap.call_args.args[0], mirror.tool_image("arm64"))
         self.assertEqual(bootstrap.call_args.args[3], "mirror.example.com/copies/registry")
         self.assertEqual(mirror.verify_bundle(args.output)["tool"], mirror.tool_image("arm64"))
+
+    def test_export_mounts_the_state_cache_by_default_and_a_given_shared_cache(self):
+        for cache_dir, expected in ((None, self.root / "state/cache"), (self.root / "shared cache", self.root / "shared cache")):
+            with self.subTest(cache_dir=cache_dir):
+                args = self.export_args()
+                args.output = self.root / ("exported-" + str(cache_dir is None))
+                args.cache_dir = cache_dir
+                def write_archive(*_, **__):
+                    (args.state / "export").mkdir(parents=True, exist_ok=True)
+                    (args.state / "export/mirror_000001.tar").write_bytes(b"archive")
+                with patch.object(mirror, "engine_arch", return_value="arm64"), \
+                        patch.object(mirror, "ensure_tool", return_value=self.data["tool"]), \
+                        patch.object(mirror, "run", side_effect=write_archive) as run:
+                    mirror.export(args)
+                command = run.call_args.args[0]
+                self.assertEqual(command[command.index("-v", command.index("-v") + 1) + 1], str(expected) + ":/cache")
+                self.assertEqual(command[command.index("--cache-dir") + 1], "/cache")
+                self.assertTrue(expected.is_dir())
+
+    def test_import_keeps_the_site_cache_in_its_state(self):
+        args = SimpleNamespace(bundle=self.bundle, state=self.root / "state", port=5000,
+                               project="fixture", output_env=self.root / "images.env")
+        with patch.object(mirror, "run"), patch.object(mirror, "engine_arch", return_value="arm64"), \
+                patch.object(mirror, "ensure_mirror_network"), patch.object(mirror, "mirror") as invoke:
+            mirror.import_bundle(args)
+        self.assertEqual(invoke.call_args.kwargs["cache"], args.state.resolve() / "cache")
+
+    def test_bootstrap_pulls_only_the_registry_image_for_docker_save(self):
+        ref = "mirror.example.com/copies/registry@" + mirror.REGISTRY_DIGEST
+        with patch.object(mirror, "resolve_image", return_value=ref), \
+                patch.object(mirror, "run", side_effect=[None, ValueError("stop")]) as run, \
+                self.assertRaisesRegex(ValueError, "stop"):
+            mirror.save_bootstrap("tool", self.root / "bootstrap.tar.gz", "arm64", "mirror.example.com/copies/registry")
+        self.assertEqual(run.call_args_list[0].args[0], ["docker", "pull", "--platform", "linux/arm64", ref])
 
     def test_bootstrap_registry_keeps_the_pinned_digest_from_any_repository(self):
         with patch.object(mirror, "resolve_image", side_effect=ValueError("stop")) as resolve, \

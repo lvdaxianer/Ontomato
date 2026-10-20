@@ -18,8 +18,9 @@ export function main(argv) {
     ],
     validateImages(images) {
       for (let i = 0; i < components.length; i++) {
-        const image = JSON.parse(output("docker", ["image", "inspect", images[i]]))[0];
-        const labels = image.Config.Labels || {};
+        // Platform image config from the registry; bundling pulls nothing into Docker.
+        const image = JSON.parse(output("docker", ["buildx", "imagetools", "inspect", images[i], "--format", "{{json .Image}}"]));
+        const labels = image.config?.Labels || {};
         if (labels["io.ontomato.component"] !== components[i]
           || labels["org.opencontainers.image.version"] !== options["--version"])
           throw new Error(`Wrong component/version: ${images[i]}`);

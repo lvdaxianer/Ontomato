@@ -48,6 +48,12 @@ def repository(ref):
     return first + "/" + path
 
 
+def image_config(ref):
+    # Read a single-platform image config straight from the registry; nothing is pulled into Docker.
+    return json.loads(run(["docker", "buildx", "imagetools", "inspect", ref, "--format", "{{json .Image}}"],
+                          capture=True))
+
+
 def resolve_image(ref, arch):
     raw = subprocess.check_output(["docker", "buildx", "imagetools", "inspect", ref, "--raw"])
     manifest = json.loads(raw)
@@ -61,11 +67,10 @@ def resolve_image(ref, arch):
         # imagetools adds no formatting to --raw; hash the original bytes, including newlines.
         digest = "sha256:" + hashlib.sha256(raw).hexdigest()
     resolved = repository(ref) + "@" + digest
-    run(["docker", "pull", "--platform", "linux/" + arch, resolved], capture=True)
-    image = json.loads(run(["docker", "image", "inspect", resolved], capture=True))[0]
-    if image["Os"] != "linux" or image["Architecture"] != arch:
+    image = image_config(resolved)
+    if image.get("os") != "linux" or image.get("architecture") != arch:
         raise ValueError("Wrong image platform: " + resolved)
-    labels = image.get("Config", {}).get("Labels") or {}
+    labels = (image.get("config") or {}).get("Labels") or {}
     version = labels.get("org.opencontainers.image.version")
     if version:
         tag = labels.get("io.ontomato.build") or version + "-" + digest.split(":")[1][:12]
@@ -119,18 +124,21 @@ def ensure_tool(state, arch):
     return tag
 
 
-def mirror(tool, state, args, network=None, authfile=None):
-    command = ["docker", "run", "--rm", "--pull=never", "-v", str(state) + ":/work"]
+def mirror(tool, state, args, network=None, authfile=None, *, cache):
+    cache.mkdir(parents=True, exist_ok=True)
+    command = ["docker", "run", "--rm", "--pull=never", "-v", str(state) + ":/work", "-v", str(cache) + ":/cache"]
     if network:
         command += ["--network", network]
     if authfile:
         command += ["-v", str(Path(authfile).resolve()) + ":/auth.json:ro"]
         args = ["--authfile", "/auth.json"] + args
-    run(command + [tool, "--cache-dir", "/work/cache", "--remove-signatures"] + args)
+    run(command + [tool, "--cache-dir", "/cache", "--remove-signatures"] + args)
 
 
 def save_bootstrap(tool, target, arch, registry_repository):
     registry_ref = resolve_image(registry_repository + "@" + REGISTRY_DIGEST, arch)
+    # docker save needs the Registry image locally; it is the only image an export pulls.
+    run(["docker", "pull", "--platform", "linux/" + arch, registry_ref], capture=True)
     # A tag survives docker save/load; digest-only references do not on every engine.
     registry_tag = registry_image(arch)
     run(["docker", "tag", registry_ref, registry_tag])
@@ -179,7 +187,10 @@ def export(args):
     # this run incremental lives in oc-mirror's working directory, so only this run's archives are collected.
     for old in (state / "export").glob("mirror_*.tar"):
         old.unlink()
-    mirror(exporter, state, flags + ["file:///work/export"], args.network, args.authfile)
+    # The cache only supplies blob bytes, so it may be shared between states; which blobs an export archives
+    # comes from the history in this state's working directory.
+    cache = Path(args.cache_dir).resolve() if args.cache_dir else state / "cache"
+    mirror(exporter, state, flags + ["file:///work/export"], args.network, args.authfile, cache=cache)
     archives = sorted((state / "export").glob("mirror_*.tar"))
     if not archives:
         raise ValueError("oc-mirror produced no archive; no delivery was created")
@@ -258,7 +269,8 @@ def import_bundle(args):
         if name == "imageset.yaml" or name.startswith("mirror_"):
             shutil.copyfile(bundle / name, incoming / name)
     mirror(tool, state, ["-c", "/work/incoming/imageset.yaml", "--from", "file:///work/incoming",
-                         "--dest-tls-verify=false", "docker://registry:5000"], args.project + "_mirror")
+                         "--dest-tls-verify=false", "docker://registry:5000"], args.project + "_mirror",
+           cache=state / "cache")
     # Receipts record successful Registry imports only, not application upgrades.
     receipts = state / "imports"
     receipts.mkdir(exist_ok=True)
@@ -279,7 +291,7 @@ def import_bundle(args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
-    resolve = commands.add_parser("resolve", help="Pull the selected platform and print immutable references as a JSON array")
+    resolve = commands.add_parser("resolve", help="Check the selected platform in the registry and print immutable references as a JSON array")
     exp = commands.add_parser("export", help="Export validated immutable images; retain --state between versions")
     for command in (resolve, exp):
         for name in ("workbench", "data-engine", "manager", "postgres"):
@@ -291,6 +303,7 @@ def main():
     exp.add_argument("--registry-repository", default=REGISTRY_REPOSITORY,
                      help="Repository serving the pinned bootstrap Registry digest")
     exp.add_argument("--authfile", help="Container auth JSON with inline credentials; never copied to a delivery")
+    exp.add_argument("--cache-dir", help="oc-mirror download cache (default: <state>/cache); may be shared")
     exp.add_argument("--network", help="Docker network for the exporter")
     exp.add_argument("--insecure-source", action="store_true")
     imp = commands.add_parser("import", help="Import a delivery to the persistent local Registry")

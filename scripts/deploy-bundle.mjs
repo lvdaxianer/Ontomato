@@ -23,7 +23,7 @@ export function stageInstallEntry(installDir, staging) {
 
 const FLAGS = {
   "--arch": "value", "--version": "value", "--image-tag": "value",
-  "--registry": "value", "--state": "value", "--bootstrap": "boolean",
+  "--registry": "value", "--state": "value", "--cache-dir": "value", "--bootstrap": "boolean",
   "--network": "value", "--insecure-source": "boolean", "--postgres": "value",
   "--registry-repository": "value",
 };
@@ -84,6 +84,7 @@ export function buildBundle(options, { name, deployDir, installDir, images, vali
   execute("python3", [
     mirror, "export", "--arch", arch, "--version", version,
     "--state", resolve(options["--state"]), "--output", join(staging, "package"),
+    ...(options["--cache-dir"] ? ["--cache-dir", resolve(options["--cache-dir"])] : []),
     ...imageArgs(resolved),
     ...(options["--bootstrap"] ? ["--bootstrap"] : []),
     ...(options["--registry-repository"] ? ["--registry-repository", options["--registry-repository"]] : []),
@@ -92,9 +93,10 @@ export function buildBundle(options, { name, deployDir, installDir, images, vali
     ...(process.env.REGISTRY_AUTH_FILE ? ["--authfile", resolve(process.env.REGISTRY_AUTH_FILE)] : []),
   ]);
 
-  const archive = `${staging}.tar.gz`;
+  // Not gzipped: package/mirror_*.tar already holds compressed layers, so gzip barely shrinks it but costs a lot of CPU.
+  const archive = `${staging}.tar`;
   rmSync(archive, { force: true });
-  execute("tar", ["--no-xattrs", "--exclude=.DS_Store", "--exclude=__pycache__", "--exclude=*.pyc", "-czf", archive, "-C", bundleRoot, base], {
+  execute("tar", ["--no-xattrs", "--exclude=.DS_Store", "--exclude=__pycache__", "--exclude=*.pyc", "-cf", archive, "-C", bundleRoot, base], {
     env: { ...process.env, COPYFILE_DISABLE: "1" },
   });
   console.log(`BUNDLE_TAR=${archive}`);

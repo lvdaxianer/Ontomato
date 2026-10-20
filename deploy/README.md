@@ -58,7 +58,7 @@ Each product image is checked for the expected architecture, component and versi
 then resolved to an immutable platform digest. `REGISTRY_AUTH_FILE` can point to
 an oc-mirror-compatible auth JSON; credentials are never copied into a delivery.
 
-The result is `.build/bundle/ontomato-<version>-<time>-<arch>.tar.gz`, including
+The result is `.build/bundle/ontomato-<version>-<time>-<arch>.tar`, including
 this deployment template, `offline/` and `package/`. `package/mirror_*.tar` files
 are oc-mirror's own archives. The initial `bootstrap.tar.gz` contains Registry 3.1.2
 and the pinned oc-mirror 4.22.17 tool image. Subsequent packages omit bootstrap.
@@ -96,6 +96,9 @@ application/database migration compatibility must be considered separately.
 
 - Keep the connected export state (both cache and `export/working-dir`) and each
   site's import state (cache, incoming working directory and Registry data).
+- The export cache defaults to `<state>/cache`. The bundle option `--cache-dir` can
+  point several states at one shared download cache: it only supplies blob bytes,
+  while which blobs an export archives comes from the state's `export/working-dir` history.
 - Successful Registry imports are recorded under the site state's `imports/` directory.
   These receipts do not assert that the application upgrade has completed.
 - Copy each completed delivery before the next export: oc-mirror reuses its
