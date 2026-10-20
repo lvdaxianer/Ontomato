@@ -145,6 +145,22 @@ export interface InstanceNeighborhood extends InstanceGraphData {
   version: string;
 }
 
+/** A persisted visual-modeling node position in graph coordinates. */
+export interface OntologyGraphPosition {
+  x: number;
+  y: number;
+}
+
+/** The shared visual-modeling layout stored for the current domain. */
+export interface OntologyGraphLayout {
+  positions: Record<string, OntologyGraphPosition>;
+  viewport?: {
+    x?: number;
+    y?: number;
+    zoom?: number;
+  };
+}
+
 /**
  * Star-chart data state reported by the data engine. Only READY carries data; GENERATING and NOT_GENERATED mean the
  * domain has never been generated, with or without a build currently running.
@@ -499,6 +515,16 @@ export function createManagerClient(
     return response.data as InstanceNeighborhood;
   }
 
+  /** Loads the shared visual-modeling layout for the current domain. */
+  async function loadGraphLayout(): Promise<OntologyGraphLayout> {
+    return (await send("/admin/graph-layout", { method: "GET" })).data as OntologyGraphLayout;
+  }
+
+  /** Replaces the shared visual-modeling layout for the current domain. */
+  function saveGraphLayout(layout: OntologyGraphLayout) {
+    return post("/admin/graph-layout", layout as unknown as Record<string, unknown>);
+  }
+
   /**
    * Rebuilds the star-chart data from the current Ontology and returns once it is done; GENERATING means a build for
    * this domain was already running.
@@ -589,6 +615,8 @@ export function createManagerClient(
     loadInstanceGraphSummary,
     searchInstanceGraph,
     loadInstanceNeighborhood,
+    loadGraphLayout,
+    saveGraphLayout,
     refreshStarChartData,
     queryInstanceInfo,
     listDataAdapters,
