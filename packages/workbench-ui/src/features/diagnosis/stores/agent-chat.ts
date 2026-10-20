@@ -14,6 +14,7 @@ import { ApiRequestError } from "../../../utils/api";
 import { diagnosisApi } from "../api";
 
 import {
+  joinAssistantTurns,
   parseAgentResponseEvent,
   readSseData,
   reduceAgentLiveTail,
@@ -109,7 +110,7 @@ export const useDiagnosisChatStore = defineStore("diagnosis-chat", () => {
   );
   const messages = computed(() => {
     const state = sessionStates.value[currentSessionId.value];
-    return state ? [...state.history, ...state.live.messages] : [];
+    return state ? joinAssistantTurns([...state.history, ...state.live.messages]) : [];
   });
   const isSending = computed(() => {
     const status = sessionStates.value[currentSessionId.value]?.status;

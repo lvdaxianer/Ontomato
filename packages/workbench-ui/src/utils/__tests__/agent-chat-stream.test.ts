@@ -1,7 +1,8 @@
-import type { AgentResponseEvent } from "@ontomato/contracts/agent-chat";
+import type { AgentChatMessage, AgentResponseEvent } from "@ontomato/contracts/agent-chat";
 import { describe, expect, it } from "vitest";
 
 import {
+  joinAssistantTurns,
   parseAgentResponseEvent,
   readSseData,
   reduceAgentLiveTail,
@@ -153,5 +154,64 @@ describe("agent chat stream reducer", () => {
     await expect(
       readSseData(body('id: 1\ndata: {"type":\n\n'), () => false, () => true)
     ).rejects.toBeInstanceOf(SseProtocolError);
+  });
+});
+
+describe("assistant turn display shape", () => {
+  const args = (id: string) => ({ id });
+  const result = (id: string) => ({ content: [{ type: "text", text: `read ${id}` }] });
+  const done = (id: string) => ({
+    type: "tool_call" as const,
+    toolCallId: id,
+    tool: "read_knowledge",
+    args: JSON.stringify(args(id), null, 2),
+    result: result(id),
+    isError: false,
+    status: "done" as const,
+  });
+
+  it("shows a settled turn split per model iteration exactly as its live tail showed it", () => {
+    // Shape of the server history projection: one assistant message per model iteration.
+    const history: AgentChatMessage[] = [
+      { role: "user", content: "Check revenue rules" },
+      {
+        role: "assistant",
+        content: "Looking.",
+        segments: [
+          { type: "thinking", content: "plan" },
+          { type: "text", content: "Looking." },
+          done("c1"),
+        ],
+      },
+      { role: "assistant", content: "", segments: [done("c2"), done("c3")] },
+      { role: "assistant", content: "", segments: [done("c4")] },
+      { role: "assistant", content: "Which date?", segments: [{ type: "text", content: "Which date?" }] },
+      { role: "user", content: "Payment date" },
+      { role: "assistant", content: "Noted.", segments: [{ type: "text", content: "Noted." }] },
+    ];
+    const tool = (id: string): AgentResponseEvent[] => [
+      { type: "tool_start", toolCallId: id, tool: "read_knowledge", args: args(id) },
+      { type: "tool_end", toolCallId: id, tool: "read_knowledge", result: result(id), isError: false },
+    ];
+    const live = [
+      { type: "response_started", message: "Check revenue rules" },
+      { type: "thinking", content: "plan" },
+      { type: "token", content: "Looking." },
+      ...tool("c1"),
+      ...tool("c2"),
+      ...tool("c3"),
+      ...tool("c4"),
+      { type: "token", content: "Which date?" },
+    ].reduce<AgentLiveTail>((state, event) => reduceAgentLiveTail(state, event as AgentResponseEvent), {
+      messages: [],
+      status: "idle",
+    });
+
+    const shown = joinAssistantTurns(history);
+    expect(shown).toHaveLength(4);
+    expect(shown.slice(0, 2)).toEqual(live.messages);
+    // A user message still separates turns; history input is left untouched.
+    expect(shown.slice(2)).toEqual(history.slice(5));
+    expect(history[2]!.segments).toHaveLength(2);
   });
 });

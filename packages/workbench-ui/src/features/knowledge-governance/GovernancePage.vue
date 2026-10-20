@@ -31,6 +31,7 @@ const {
 const input = ref(""),
   panel = ref<"report" | "sources" | null>(null);
 const conversation = ref<HTMLElement | null>(null);
+const panelElement = ref<HTMLElement | null>(null);
 const busy = computed(() => running.value || sending.value);
 // Review counts appear only once the Agent has recorded an actual review scope.
 const progress = computed(() => {
@@ -65,6 +66,20 @@ watch(messages, async () => {
   const nearEnd = !element || element.scrollHeight - element.scrollTop - element.clientHeight < 160;
   await nextTick();
   if (nearEnd && conversation.value) conversation.value.scrollTop = conversation.value.scrollHeight;
+});
+// Opening the panel moves focus into it (on narrow screens it hides the conversation);
+// closing returns focus to whatever opened it.
+let opener: HTMLElement | null = null;
+watch(panel, async (value, previous) => {
+  if (value && !previous) {
+    opener = document.activeElement as HTMLElement | null;
+    await nextTick();
+    panelElement.value?.querySelector<HTMLElement>('[aria-pressed="true"]')?.focus();
+  } else if (!value && previous) {
+    await nextTick();
+    if (opener?.isConnected) opener.focus();
+    opener = null;
+  }
 });
 // Switching sessions keeps the from query so Back still returns to the entry page.
 function sessionLocation(sessionId?: string) {
@@ -143,7 +158,7 @@ function closeHistory(event: MouseEvent) {
     </header>
     <p v-if="error" role="alert" class="kg-banner">{{ error }}</p>
     <p v-if="loading" role="status" class="kg-loading">{{ t("governance.loading") }}</p>
-    <div v-else class="kg-body">
+    <div v-else :class="['kg-body', { 'kg-body--panel': session && panel }]">
       <main class="kg-chat">
         <div
           ref="conversation"
@@ -230,7 +245,12 @@ function closeHistory(event: MouseEvent) {
           <small>{{ t("governance.saved") }}</small>
         </div>
       </main>
-      <aside v-if="session && panel" class="kg-panel" :aria-label="t(`governance.${panel}`)">
+      <aside
+        v-if="session && panel"
+        ref="panelElement"
+        class="kg-panel"
+        :aria-label="t(`governance.${panel}`)"
+      >
         <header>
           <button
             v-for="tab in ['report', 'sources'] as const"
@@ -820,6 +840,10 @@ dd.kg-after {
   .kg-thread,
   .kg-composer {
     padding-inline: 16px;
+  }
+  /* The covered conversation leaves the tab order and accessibility tree until the panel closes. */
+  .kg-body--panel .kg-chat {
+    visibility: hidden;
   }
   .kg-panel {
     position: absolute;

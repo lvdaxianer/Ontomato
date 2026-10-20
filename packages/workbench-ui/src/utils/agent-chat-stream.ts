@@ -172,3 +172,32 @@ export function reduceAgentLiveTail<Status extends string>(
 
   return { messages, status: state.status === "starting" ? "running" : state.status };
 }
+
+/**
+ * Display shape of a transcript: one assistant message per user turn, as the live tail builds it.
+ * Settled history keeps one assistant message per model iteration; joining adjacent ones here
+ * makes a turn read the same before and after it settles. Segment order is kept and adjacent
+ * text or thinking joins exactly as streamed deltas do; user messages always start a new turn.
+ */
+export function joinAssistantTurns(messages: readonly AgentChatMessage[]): AgentChatMessage[] {
+  const result: AgentChatMessage[] = [];
+  for (const message of messages) {
+    const last = result[result.length - 1];
+    if (message.role !== "assistant" || last?.role !== "assistant") {
+      result.push(message);
+      continue;
+    }
+    const segments = cloneSegments(
+      last.segments ?? (last.content ? [{ type: "text" as const, content: last.content }] : [])
+    );
+    const incoming =
+      message.segments ?? (message.content ? [{ type: "text" as const, content: message.content }] : []);
+    for (const segment of incoming) {
+      const tail = segments[segments.length - 1];
+      if (segment.type !== "tool_call" && tail?.type === segment.type) tail.content += segment.content;
+      else segments.push({ ...segment });
+    }
+    result[result.length - 1] = { role: "assistant", content: last.content + message.content, segments };
+  }
+  return result;
+}

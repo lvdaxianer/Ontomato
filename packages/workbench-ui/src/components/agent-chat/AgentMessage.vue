@@ -296,9 +296,10 @@ const fallbackMarkdown = computed(() => {
   color: inherit;
 }
 
+/* Always faintly visible: touch screens have no hover to reveal that a line expands. */
 .agent-step__chevron {
   flex-shrink: 0;
-  opacity: 0;
+  opacity: 0.4;
   transition:
     opacity var(--transition-fast),
     transform var(--transition-fast);
@@ -307,7 +308,7 @@ const fallbackMarkdown = computed(() => {
 .agent-step__row:hover .agent-step__chevron,
 .agent-step__row:focus-visible .agent-step__chevron,
 .agent-step__row[aria-expanded="true"] .agent-step__chevron {
-  opacity: 0.7;
+  opacity: 0.8;
 }
 
 .agent-step__row[aria-expanded="true"] .agent-step__chevron {

@@ -371,6 +371,31 @@ describe("governance page contract", () => {
     expect(governanceApi.stop).not.toHaveBeenCalled();
   });
 
+  it("a settled turn saved per model iteration reads as one run of tool calls, as it did live", async () => {
+    const tool = (id: string) => ({
+      type: "tool_call" as const,
+      toolCallId: id,
+      tool: "read_knowledge",
+      args: "{}",
+      status: "done" as const,
+    });
+    const saved = session();
+    saved.messages = [
+      { role: "user", content: "Check revenue rules" },
+      { role: "assistant", content: "Looking.", segments: [{ type: "text", content: "Looking." }, tool("c1")] },
+      ...["c2", "c3", "c4", "c5"].map((id) => ({ role: "assistant" as const, content: "", segments: [tool(id)] })),
+      { role: "assistant", content: "Which date?", segments: [{ type: "text", content: "Which date?" }] },
+    ];
+    vi.mocked(governanceApi.list).mockResolvedValue([]);
+    vi.mocked(governanceApi.read).mockResolvedValue(saved);
+    const { wrapper } = await open();
+    expect(wrapper.findAll(".agent-msg--assistant")).toHaveLength(1);
+    expect(wrapper.findAll(".agent-step--group")).toHaveLength(1);
+    expect(wrapper.get(".agent-step--group").text()).toContain("5 tool calls");
+    expect(wrapper.text().indexOf("Looking.")).toBeLessThan(wrapper.text().indexOf("5 tool calls"));
+    expect(wrapper.text().indexOf("5 tool calls")).toBeLessThan(wrapper.text().indexOf("Which date?"));
+  });
+
   it("Back returns to the from page and switching rounds keeps from; without a valid from it returns to system agents", async () => {
     vi.mocked(governanceApi.list).mockResolvedValue([
       { id: secondId, createdAt: "2026-09-10T02:00:00Z", updatedAt: "2026-09-10T02:00:00Z", status: "idle" },
