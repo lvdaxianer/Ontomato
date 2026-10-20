@@ -6,8 +6,8 @@ import { ChevronDown, X, MessageSquare } from "lucide-vue-next";
 import { useAgentChat, truncateTitle } from "../composables/useAgentChat";
 
 import { contextLabel, detectSessionContext, sessionContextLabel } from "../utils/session-context";
-import AgentMessage from "./agent-chat/AgentMessage.vue";
-import ChatInput from "./agent-chat/ChatInput.vue";
+import AgentMessage from "../../../components/agent-chat/AgentMessage.vue";
+import ChatInput from "../../../components/agent-chat/AgentChatInput.vue";
 import { useI18n } from "vue-i18n";
 
 const { t } = useI18n();

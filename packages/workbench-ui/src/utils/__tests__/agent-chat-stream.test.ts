@@ -1,16 +1,17 @@
-import type { DiagnosisStreamEvent } from "@ontomato/contracts/diagnosis";
-import type { DiagnosisStreamEvent as BackendDiagnosisStreamEvent } from "@ontomato/contracts/diagnosis";
+import type { AgentResponseEvent } from "@ontomato/contracts/agent-chat";
 import { describe, expect, it } from "vitest";
 
 import {
-  parseDiagnosisStreamEvent,
-  reduceDiagnosisLiveTail,
-  type DiagnosisLiveTail,
+  parseAgentResponseEvent,
+  readSseData,
+  reduceAgentLiveTail,
+  SseProtocolError,
+  type AgentLiveTail,
 } from "../agent-chat-stream";
 
 const backendEventFixtures: {
-  [Type in BackendDiagnosisStreamEvent["type"]]: Extract<
-    BackendDiagnosisStreamEvent,
+  [Type in AgentResponseEvent["type"]]: Extract<
+    AgentResponseEvent,
     { type: Type }
   >;
 } = {
@@ -35,23 +36,20 @@ const backendEventFixtures: {
   error: { type: "error", error: "failed", timestamp: 1 },
 };
 
-function reduce(events: DiagnosisStreamEvent[]): DiagnosisLiveTail {
-  return events.reduce(reduceDiagnosisLiveTail, {
-    messages: [],
-    status: "starting",
-  } as DiagnosisLiveTail);
+function reduce(events: AgentResponseEvent[]): AgentLiveTail {
+  return events.reduce<AgentLiveTail>(reduceAgentLiveTail, { messages: [], status: "starting" });
 }
 
-describe("diagnosis chat stream reducer", () => {
+describe("agent chat stream reducer", () => {
   it("accepts every backend stream event variant at the frontend boundary", () => {
     for (const event of Object.values(backendEventFixtures)) {
-      expect(parseDiagnosisStreamEvent(event)).toEqual(event);
+      expect(parseAgentResponseEvent(event)).toEqual(event);
     }
   });
 
   it("builds one live tail from replayed text, thinking, and tool events", () => {
-    const initial: DiagnosisLiveTail = { messages: [], status: "starting" };
-    const events: DiagnosisStreamEvent[] = [
+    const initial: AgentLiveTail = { messages: [], status: "starting" };
+    const events: AgentResponseEvent[] = [
       { type: "response_started", message: "inspect" },
       { type: "thinking", content: "checking" },
       { type: "token", content: "found " },
@@ -67,7 +65,7 @@ describe("diagnosis chat stream reducer", () => {
       { type: "response_end", status: "completed" },
     ];
 
-    const result = events.reduce(reduceDiagnosisLiveTail, initial);
+    const result = events.reduce(reduceAgentLiveTail, initial);
 
     expect(initial).toEqual({ messages: [], status: "starting" });
     expect(result).toEqual({
@@ -108,15 +106,15 @@ describe("diagnosis chat stream reducer", () => {
   });
 
   it("strictly rejects malformed stream payloads", () => {
-    expect(parseDiagnosisStreamEvent({ type: "token", content: 1 })).toBeUndefined();
+    expect(parseAgentResponseEvent({ type: "token", content: 1 })).toBeUndefined();
     expect(
-      parseDiagnosisStreamEvent({ type: "tool_start", toolCallId: "1", tool: "read", args: [] })
+      parseAgentResponseEvent({ type: "tool_start", toolCallId: "1", tool: "read", args: [] })
     ).toBeUndefined();
     expect(
-      parseDiagnosisStreamEvent({ type: "response_end", status: "interrupted" })
+      parseAgentResponseEvent({ type: "response_end", status: "interrupted" })
     ).toBeUndefined();
-    expect(parseDiagnosisStreamEvent({ type: "unknown" })).toBeUndefined();
-    expect(parseDiagnosisStreamEvent({ type: "response_unavailable" })).toEqual({
+    expect(parseAgentResponseEvent({ type: "unknown" })).toBeUndefined();
+    expect(parseAgentResponseEvent({ type: "response_unavailable" })).toEqual({
       type: "response_unavailable",
     });
   });
@@ -129,5 +127,31 @@ describe("diagnosis chat stream reducer", () => {
     ]);
 
     expect(result).toEqual({ messages: [], status: "idle" });
+  });
+
+  it("reads business events past connection control events and rejects malformed data", async () => {
+    const body = (text: string) => new Response(text);
+    const seen: Array<[unknown, number | undefined]> = [];
+    const settled = await readSseData(
+      body(
+        'event: open\ndata: {"ok":true}\n\n' +
+          'event: heartbeat\ndata: {"ts":1}\n\n' +
+          'id: 3\ndata: {"type":"token","content":"a"}\n\n' +
+          'data: {"type":"response_end","status":"completed"}\n\n'
+      ),
+      (data, id) => {
+        seen.push([data, id]);
+        return (data as { type: string }).type === "response_end";
+      },
+      () => true
+    );
+    expect(settled).toBe(true);
+    expect(seen).toEqual([
+      [{ type: "token", content: "a" }, 3],
+      [{ type: "response_end", status: "completed" }, undefined],
+    ]);
+    await expect(
+      readSseData(body('id: 1\ndata: {"type":\n\n'), () => false, () => true)
+    ).rejects.toBeInstanceOf(SseProtocolError);
   });
 });
