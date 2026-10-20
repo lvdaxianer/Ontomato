@@ -451,9 +451,13 @@ is not a schema, keyspace or database that the adapter creates.
   `SELECT SCHEMA_NAME()`), lists `information_schema.tables` where `table_type = 'BASE TABLE'`, and
   deletes rows from every table whose lower-cased name starts with the lower-cased namespace.
 - `dropNamespace` does the same enumeration and drops those tables.
-- `createClass` computes `fullClassName = namespace + classDef.className` **even outside a
-  sandbox**. `insertObjects`, `updateObjects`, `deleteObjects`, `createEdge` and `deleteEdge` use
-  the same rule.
+- Use one helper everywhere:
+  `physicalName(namespace, className) = (namespace == null ? "" : namespace) + className`.
+  `createClass` concatenates unconditionally; `insertObjects` checks `namespace != null &&
+  !namespace.isBlank()` first. With an empty namespace both produce `className`, so they are
+  equivalent; with a non-empty namespace both produce the prefix. Do not implement two different
+  rules. `executeDsl` has no namespace parameter: its `objects[].class` is already the physical
+  name. Only `query()` applies the sandbox prefix to the DSL.
 - `sandboxClassName`/`sandboxObjectId` are the single source of truth for those names. Do not
   duplicate the prefix rule in `createClass`, `insertObjects` and the read path.
 - For M3 the namespace is a path segment and the parent must exist; for ES it is an index prefix;
@@ -978,3 +982,182 @@ Checklist for the UI:
       (join, two-step, time, `like`, row limit).
 - [ ] Provider metadata is sufficient for the configuration page; no Vue change.
 - [ ] Adapter-specific tests cover the protocol, dialect and bounds.
+
+## Appendix A: Java API surface (copy verbatim)
+
+The semantic contract above is not enough to compile. These are the exact declarations a new
+adapter must implement against. When the project is available, these are the only files worth
+opening for signatures; do not reverse-engineer them from a sibling adapter.
+
+### Packages
+
+| Type | Package |
+| --- | --- |
+| `DataAdapter`, `DataAdapterProvider`, `DataAdapterConnection`, `DslRowLimit`, `DslContractViolationException`, `UnsupportedDataAdapterOperationException`, `ConfigurationProblem`, `DslExecutionMode` | `io.ontomato.dataengine.dataAdapter` |
+| `BusinessConfig`, `DataRagConfig` | `io.ontomato.dataengine.config` |
+| `VectorResourceDao` | `io.ontomato.dataengine.dao` |
+| `DslExecutionResult` | `io.ontomato.dataengine.bean` |
+| `DslUtil`, `HttpRequestUtil` | `io.ontomato.dataengine.util` |
+| `UserDataPermission` | `io.ontomato.dataengine.service.sys.bean.permission` |
+| `MultiThreadAIChatService` | `io.ontomato.dataengine.service.ai` |
+| `AbstractDataAdapterTest`, `DataAdapterCapability` | `io.ontomato.dataengine.dataAdapter.test` |
+
+### `DataAdapter`
+
+```java
+public interface DataAdapter {
+    Connection openConnection() throws SQLException;
+    default JSONObject testConnection() throws Exception;
+    default boolean timeConditionsAsEpochMillis();
+    default TimeZone timeConditionZone();
+
+    String executeDsl(String queryJson, String sessionId, DslExecutionMode mode,
+            List<String> generatedMqls) throws Exception;
+    String getSampleDataFileName(String sampleDataDirName, String className);
+    String querySampleDataByClassName(String className, List<String> attrs);
+    void validateClassNameFormat(String className) throws Exception;
+    void validatePrimaryKeyName(String attrName) throws Exception;
+
+    void createNamespace(String namespace);
+    void truncateNamespace(String namespace);
+    void dropNamespace(String namespace);
+    void createClass(String namespace, Map<String, Object> classDef);
+    void createEdgeType(String namespace, String edgeName);
+    void insertObjects(String namespace, Map<String, Object> classDef, JSONArray objs) throws Exception;
+    void updateObjects(String namespace, Map<String, Object> classDef, JSONObject setValues,
+            JSONObject where) throws Exception;
+    void deleteObjects(String namespace, Map<String, Object> classDef, JSONObject where) throws Exception;
+    void createEdge(String namespace, String relationName, String sourceClassName,
+            String sourceObjId, String targetClassName, String targetObjId) throws Exception;
+    void deleteEdge(String namespace, String relationName, String sourceClassName,
+            String sourceObjId, String targetClassName, String targetObjId) throws Exception;
+
+    Map<String, Object> query(JSONObject dsl, String sandboxId, String domainId,
+            VectorResourceDao vectorResourceDao, DataRagConfig dataRagConfig) throws Exception;
+    JSONArray queryVectorAttr(Map<String, Object> classDef, String attrName,
+            String objectId) throws Exception;
+    String sandboxClassName(String sandboxId, String className);
+    String sandboxObjectId(String sandboxId, String objectId);
+    default List<ConfigurationProblem> validateOntoMap(Map<String, Object> jsonRule);
+}
+```
+
+There are **no** `appendVector`/`updateVector`/`deleteVector` methods on `DataAdapter`. Those are
+service-level write operations; the adapter exposes `queryVectorAttr` and the ordinary
+`updateObjects`/`deleteObjects` that the service uses.
+
+### `DataAdapterProvider`
+
+```java
+public interface DataAdapterProvider {
+    String type();
+    String label();
+    boolean requiresJoinFields();
+    List<String> connectionFields();
+    Map<String, String> connectionExamples();
+    DataAdapter create(DataAdapterConnection connection, DataRagConfig dataRagConfig,
+            Map<String, Object> jsonRule);
+    default DataAdapter create(BusinessConfig businessConfig, DataRagConfig dataRagConfig,
+            Map<String, Object> jsonRule);
+}
+```
+
+`DataAdapterConnection` is a Lombok `@Data` class with `url`, `company`, `user`, `password` and
+the usual getters/setters.
+
+### `DslRowLimit`
+
+```java
+public final class DslRowLimit {
+    public static final int DEFAULT_ROW_LIMIT = 20000;
+    public static final String TRUNCATED = "truncated";
+    public static final String ROW_LIMIT = "rowLimit";
+    public static final String TRUNCATION_HINT = "truncationHint";
+    public static int defaultRowLimit();
+    public static String truncationHint(int limit);
+    public static final class Tracker {
+        public void terminalLimit(int limit, boolean defaulted);
+        public void markTruncated();
+        public boolean defaulted();
+        public int effectiveLimit();
+        public boolean truncated();
+    }
+}
+```
+
+### `DslContractViolationException`
+
+```java
+public class DslContractViolationException extends RuntimeException {
+    public enum Code { INVALID_GRAMMAR, UNSUPPORTED_CONSTRUCT,
+                       UNSUPPORTED_OPERATOR_FOR_TYPE, UNSUPPORTED_JOIN_ARITY }
+    public DslContractViolationException(Code code, String dslPath, String detail);
+    public DslContractViolationException(List<Violation> violations);
+    public List<Violation> getViolations();
+    public static class Violation {
+        public Code getCode();
+        public String getDslPath();
+        public String getDetail();
+    }
+}
+```
+
+### `DslExecutionResult` and `query()` helpers
+
+```java
+public record DslExecutionResult(JSONObject data, Failure failure) {
+    public record Failure(Exception cause) {}
+    public static DslExecutionResult success(JSONObject data);
+    public static DslExecutionResult failure(JSONObject data, Exception cause);
+    public boolean failed();
+    public DslExecutionResult copy();
+    public JSONObject rawResponse();
+}
+
+public static String DslUtil.normalizeClassNames(String dslStr,
+        List<Map<String, Object>> classDefs);
+public static String DslUtil.setConditionTimeColumnToCorrectFormat(String dslStr,
+        String[] mightFormats, List<Map<String, Object>> classDefs,
+        boolean toEpochMillis, TimeZone zone);
+public static String DslUtil.getPrimaryKey(Map<String, Object> classDef);
+public static JSONArray DslUtil.parseVectorAttr(Object value);
+
+public static DslExecutionResult[] HttpRequestUtil.executeDsl(
+        DataRagConfig dataRagConfig, DataAdapter adapter, String queryJson, String sessionId,
+        boolean onlySearchPermissionData, Map<String, Object> jsonRule,
+        VectorResourceDao vectorResourceDao, UserDataPermission permission,
+        DslExecutionMode mode, String domainId);
+```
+
+`UserDataPermission` is `@Data @NoArgsConstructor @AllArgsConstructor`; construct it with
+`new UserDataPermission()` and call `setFullData(true)` where full access is intended.
+`dataRagConfig.getDslMightTimeFormats()` returns `String[]`.
+
+### `DataAdapterCapability`
+
+```java
+public static final Set<DataAdapterCapability> FULL = EnumSet.of(
+        JDBC_CONNECTION, READ_QUERY, SAMPLE_DATA, NAMESPACE_LIFECYCLE, CLASS_SCHEMA,
+        OBJECT_CRUD, EDGE_CRUD, GRAPH_QUERY, VECTOR_ATTR);
+public static final Set<DataAdapterCapability> READ_ONLY = EnumSet.of(
+        JDBC_CONNECTION, READ_QUERY, SAMPLE_DATA);
+```
+
+### `AbstractDataAdapterTest`
+
+```java
+protected abstract DataAdapter newAdapter(JSONObject jsonRule);
+protected DataAdapter newAdapter();
+protected abstract Set<DataAdapterCapability> capabilities();
+protected abstract String namespace();
+protected abstract JSONObject classDef();
+protected abstract JSONArray testObjects();
+protected String primaryKey();
+protected boolean sourceRendersTimeseries();
+protected abstract List<JSONObject> graphClassDefs();
+protected abstract JSONObject relationshipRule();
+protected abstract Map<String, JSONArray> graphSeed();
+protected List<SeedEdge> seedEdges();
+public record SeedEdge(String relation, int sourceGraphIdx, String sourceId,
+        int targetGraphIdx, String targetId) {}
+```
