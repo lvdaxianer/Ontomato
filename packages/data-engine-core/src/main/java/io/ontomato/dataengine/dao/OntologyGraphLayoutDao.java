@@ -126,6 +126,9 @@ public class OntologyGraphLayoutDao {
         if (value instanceof JSONObject object) {
             return object;
         }
+        if (value instanceof Map<?, ?>) {
+            return JSON.parseObject(JSON.toJSONString(value));
+        }
         throw new IllegalArgumentException(field + " must be a JSON object");
     }
 
