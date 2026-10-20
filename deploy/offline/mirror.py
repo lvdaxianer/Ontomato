@@ -78,8 +78,20 @@ def validate_sources(sources):
             raise ValueError("Delivery images must use immutable digests")
 
 
+def tool_image(arch):
+    return TOOL_IMAGE + "-" + arch
+
+
+def engine_arch():
+    # oc-mirror runs in a container on this Docker engine, so the engine picks the runnable tool.
+    arch = run(["docker", "version", "--format", "{{.Server.Arch}}"], capture=True)
+    if arch not in TOOL_SHA:
+        raise ValueError("Unsupported Docker engine architecture: " + arch)
+    return arch
+
+
 def ensure_tool(state, arch):
-    tag = TOOL_IMAGE + "-" + arch
+    tag = tool_image(arch)
     exists = subprocess.run(["docker", "image", "inspect", tag], stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL).returncode == 0
     if exists:
@@ -146,14 +158,17 @@ def export(args):
                   {"name": ref if ref.split("@")[0] != repository(ref) else repository(ref) + ":mirror-" + ref.split("@sha256:")[1] + "@" + ref.split("@")[1]}
                   for ref in dict.fromkeys(sources.values())]}}
     (state / "imageset.yaml").write_text(json.dumps(config, indent=2) + "\n")
-    tool = ensure_tool(state, args.arch)
+    # Exporting copies pinned single-platform images, so the engine's own tool runs it; the
+    # target architecture's tool is what the site loads and runs on import.
+    exporter = ensure_tool(state, engine_arch())
+    tool = tool_image(args.arch)
     registry_tag = "ontomato-offline-registry:3.1.2-" + args.arch
     if args.bootstrap:
-        registry_tag = save_bootstrap(tool, state / "bootstrap.tar.gz", args.arch)
+        registry_tag = save_bootstrap(ensure_tool(state, args.arch), state / "bootstrap.tar.gz", args.arch)
     flags = ["-c", "/work/imageset.yaml"]
     if args.insecure_source:
         flags += ["--src-tls-verify=false"]
-    mirror(tool, state, flags + ["file:///work/export"], args.network, args.authfile)
+    mirror(exporter, state, flags + ["file:///work/export"], args.network, args.authfile)
     archives = sorted((state / "export").glob("mirror_*.tar"))
     if not archives:
         raise ValueError("oc-mirror produced no archive; no delivery was created")
@@ -175,7 +190,7 @@ def verify_bundle(bundle):
     data = json.loads((bundle / "delivery.json").read_text())
     if data.get("schema") != 1 or data.get("arch") not in TOOL_SHA or set(data.get("images", {})) != set(IMAGE_KEYS):
         raise ValueError("Invalid delivery metadata")
-    expected_tool = TOOL_IMAGE + "-" + data["arch"]
+    expected_tool = tool_image(data["arch"])
     expected_registry = "ontomato-offline-registry:3.1.2-" + data["arch"]
     if data.get("tool") != expected_tool or data.get("registry") != expected_registry:
         raise ValueError("This tool version does not match the delivery; use its bundled offline/ directory")

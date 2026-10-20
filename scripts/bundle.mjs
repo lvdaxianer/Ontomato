@@ -11,8 +11,9 @@ export function main(argv) {
   return buildBundle(options, {
     name: "ontomato",
     deployDir: fileURLToPath(new URL("../deploy/", import.meta.url)),
+    // Published multi-architecture tags; mirror.py resolve picks the --arch platform digest.
     images: [
-      ...repositories.map((name) => `${options["--registry"]}/${name}:${options["--image-tag"]}-${options["--arch"]}`),
+      ...repositories.map((name) => `${options["--registry"]}/${name}:${options["--image-tag"]}`),
       options["--postgres"] || "docker.io/pgvector/pgvector:pg18",
     ],
     validateImages(images) {

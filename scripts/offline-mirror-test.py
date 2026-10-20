@@ -142,6 +142,7 @@ class DeliveryTests(unittest.TestCase):
             (args.state / "export").mkdir()
             (args.state / "export/mirror_000001.tar").write_bytes(b"archive")
         with patch.object(mirror, "resolve_image") as resolve, \
+                patch.object(mirror, "engine_arch", return_value="arm64"), \
                 patch.object(mirror, "ensure_tool", return_value=self.data["tool"]), \
                 patch.object(mirror, "mirror", side_effect=write_archive):
             mirror.export(args)
@@ -151,6 +152,31 @@ class DeliveryTests(unittest.TestCase):
         names = [item["name"] for item in json.loads((args.output / "imageset.yaml").read_text())["mirror"]["additionalImages"]]
         self.assertEqual(len(names), 4)
         self.assertTrue(all(name.endswith("@sha256:" + "a" * 64) for name in names))
+
+
+    def test_cross_architecture_export_runs_the_engine_tool_and_ships_the_target_tool(self):
+        args = self.export_args()
+        args.bootstrap = True
+        def write_archive(*_):
+            (args.state / "export").mkdir()
+            (args.state / "export/mirror_000001.tar").write_bytes(b"archive")
+        def save(tool, target, arch):
+            target.write_bytes(b"bootstrap")
+            return "ontomato-offline-registry:3.1.2-" + arch
+        with patch.object(mirror, "engine_arch", return_value="amd64"), \
+                patch.object(mirror, "ensure_tool", side_effect=lambda state, arch: mirror.tool_image(arch)) as tool, \
+                patch.object(mirror, "save_bootstrap", side_effect=save) as bootstrap, \
+                patch.object(mirror, "mirror", side_effect=write_archive) as invoke:
+            mirror.export(args)
+        self.assertEqual([call.args[1] for call in tool.call_args_list], ["amd64", "arm64"])
+        self.assertEqual(invoke.call_args.args[0], mirror.tool_image("amd64"))
+        self.assertEqual(bootstrap.call_args.args[0], mirror.tool_image("arm64"))
+        self.assertEqual(mirror.verify_bundle(args.output)["tool"], mirror.tool_image("arm64"))
+
+    def test_tool_build_runs_no_target_architecture_instruction(self):
+        _, unpack, final = (Path(mirror.HERE) / "Dockerfile").read_text().split("\nFROM ")
+        self.assertTrue(unpack.startswith("--platform=$BUILDPLATFORM "))
+        self.assertNotIn("RUN ", final)
 
 
 if __name__ == "__main__":
