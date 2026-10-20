@@ -19,8 +19,8 @@ The write operation replaces the complete position snapshot for the domain using
 
 Add domain-scoped methods to the existing admin service and controller:
 
-- `POST /admin/getGraphLayout` returns `{ positions, viewport }` for the authenticated user's domain, or empty values when no row exists.
-- `POST /admin/saveGraphLayout` accepts `{ positions, viewport }`, validates that the payload is an object and every coordinate is finite, then replaces the authenticated domain's snapshot.
+- `GET /admin/graph-layout` returns `{ positions, viewport }` for the authenticated user's domain, or empty values when no row exists.
+- `POST /admin/graph-layout` accepts `{ positions, viewport }`, validates that the payload is an object and every coordinate is finite, then replaces the authenticated domain's snapshot.
 
 The controller obtains `domainId` from the current authenticated user, never from the request body. The existing authentication and admin authorization boundary remains in force. Invalid payloads return the established `{ success: false, message }` response shape.
 

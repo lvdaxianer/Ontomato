@@ -465,6 +465,38 @@ public class AdminController {
 		return ret;
 	}
 
+	/** Returns the shared visual-modeling layout for the current user's domain. */
+	@GetMapping("/admin/graph-layout")
+	@ResponseBody
+	public JSONObject getGraphLayout() {
+		JSONObject ret = new JSONObject();
+		try {
+			User user = SystemUtils.getCurUser();
+			ret.put("success", true);
+			ret.put("data", adminService.getGraphLayout(user.getDomainId()));
+		} catch (Exception e) {
+			ret.put("success", false);
+			ret.put("message", e.getMessage());
+		}
+		return ret;
+	}
+
+	/** Replaces the shared visual-modeling layout for the current user's domain. */
+	@PostMapping("/admin/graph-layout")
+	@ResponseBody
+	public JSONObject saveGraphLayout(@RequestBody JSONObject param) {
+		JSONObject ret = new JSONObject();
+		try {
+			User user = SystemUtils.getCurUser();
+			adminService.saveGraphLayout(param, user.getDomainId());
+			ret.put("success", true);
+		} catch (Exception e) {
+			ret.put("success", false);
+			ret.put("message", e.getMessage());
+		}
+		return ret;
+	}
+
 	@PostMapping("/admin/getschemamarkdown")
 	@ResponseBody
 	public JSONObject getSchemaMarkdown(@RequestBody JSONObject param) {

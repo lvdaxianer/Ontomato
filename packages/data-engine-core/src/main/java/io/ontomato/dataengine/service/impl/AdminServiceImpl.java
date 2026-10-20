@@ -28,6 +28,7 @@ import io.ontomato.dataengine.config.DataRagConfig;
 import io.ontomato.dataengine.core.bean.User;
 import io.ontomato.dataengine.dao.AuditLogDao;
 import io.ontomato.dataengine.dao.JSONRuleDao;
+import io.ontomato.dataengine.dao.OntologyGraphLayoutDao;
 import io.ontomato.dataengine.dao.QueryExampleConfigDao;
 import io.ontomato.dataengine.dao.VectorResourceDao;
 import io.ontomato.dataengine.dataAdapter.DataAdapter;
@@ -56,6 +57,9 @@ public class AdminServiceImpl implements AdminService {
 	
 	@Autowired
 	private JSONRuleDao jsonRuleDao;
+
+	@Autowired
+	private OntologyGraphLayoutDao ontologyGraphLayoutDao;
 
 	@Autowired
 	private KnowledgeService knowledgeService;
@@ -866,6 +870,18 @@ public class AdminServiceImpl implements AdminService {
 			writeJSONRule(jsonRule, domainId);
 		}
 		return jsonRule;
+	}
+
+	/** Loads the shared visual-modeling layout from the domain-scoped store. */
+	@Override
+	public JSONObject getGraphLayout(String domainId) {
+		return ontologyGraphLayoutDao.query(domainId);
+	}
+
+	/** Validates and replaces the shared visual-modeling layout in the domain-scoped store. */
+	@Override
+	public void saveGraphLayout(JSONObject layout, String domainId) {
+		ontologyGraphLayoutDao.save(domainId, layout);
 	}
 
 	@Override
