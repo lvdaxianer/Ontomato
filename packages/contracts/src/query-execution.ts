@@ -35,6 +35,18 @@ export interface QueryDatasetIdentity {
 }
 
 /**
+ * The data engine's partial-result marker: processing stopped at `rowLimit` rows and the hint
+ * explains why. Complete results omit all three fields, so a result object carries them only as
+ * `Partial<ResultTruncation>`. Rows of a partial result, zero rows included, describe only what was
+ * processed and never prove that nothing else matches.
+ */
+export interface ResultTruncation {
+  truncated: true;
+  rowLimit: number;
+  truncationHint: string;
+}
+
+/**
  * Where the answer body places a dataset's actions (row count, downloads, details). The server writes
  * it right after that dataset's sub-question and table or empty state; it is invisible in rendered
  * Markdown.

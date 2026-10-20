@@ -110,7 +110,7 @@ export function buildEvidenceModelText(params: {
       : entry.data;
     parts.push(
       tApp("analysis.loop.evidence.254", { title: entry.title, dataCount: entry.dataCount }),
-      `dataView=${JSON.stringify(buildModelDataView(displayRows))}`
+      `dataView=${JSON.stringify(buildModelDataView(displayRows, { truncation: entry }))}`
     );
   }
 
@@ -230,6 +230,7 @@ export function assembleLoopEvidenceCapability(params: {
             record.entries.length > 1 ? tApp("analysis.loop.evidence.255", { question: record.question, title: entry.title }) : record.question,
           sourceQuestionId: questionId,
           data: entry.data,
+          truncation: entry,
         }));
       }),
   };

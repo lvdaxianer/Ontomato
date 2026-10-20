@@ -1,6 +1,10 @@
 import type { OutKeyRef } from "../../data-query/replay-plan";
 import type { QueryExecutionFact } from "../../data-query/query-fact";
-import { answerBodyText, datasetPlacement } from "@ontomato/contracts/query-execution";
+import {
+  answerBodyText,
+  datasetPlacement,
+  type ResultTruncation,
+} from "@ontomato/contracts/query-execution";
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
@@ -8,7 +12,12 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
 import { normalizeAnswerRows, type Dataset } from "../../data-query/adapter";
-import { parseQueryAnswerPayload } from "../../data-query/protocol";
+import {
+  combineResultTruncation,
+  parseQueryAnswerPayload,
+  parseResultTruncation,
+  type QueryAnswerPayload,
+} from "../../data-query/protocol";
 import type { HotReportReplayPathBinding, HotReportReplayPlan } from "../../data-query/replay-plan";
 import type { DimensionalizedQuestion } from "./dimension-types";
 import type { AnalysisQueryFact, DimensionQueryResult } from "../runtime/evidence-types";
@@ -24,7 +33,7 @@ import { environment } from "../../../config/environment";
 import { runtimeDataDir } from "../../../content/layout";
 import { backendPost, BackendUnavailableError } from "../../../utils/backend-client";
 import { createLogger } from "../../../logging/logger";
-import { tApp } from "../../../i18n";
+import { t, tApp } from "../../../i18n";
 
 
 const logger = createLogger("abc-replay");
@@ -92,14 +101,15 @@ type ReplayItem = {
   dsl?: unknown;
   code?: string;
   error?: string;
+  truncation?: ResultTruncation;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
-function answerRows(data: unknown): QueryResultRow[] {
-  return normalizeAnswerRows(parseQueryAnswerPayload(data, tApp("analysis.dimension.abc-replay.31")).answer);
+function answerPayload(data: unknown): QueryAnswerPayload {
+  return parseQueryAnswerPayload(data, tApp("analysis.dimension.abc-replay.31"));
 }
 
 function safeSessionId(sessionId: string | undefined): string {
@@ -156,7 +166,11 @@ export const defaultPythonRunner: PythonRunner = async ({ code, scriptPath, cwd,
   }
 };
 
-function parsePythonAnswer(stdout: string): { rows: QueryResultRow[]; error?: string } {
+function parsePythonAnswer(stdout: string): {
+  rows: QueryResultRow[];
+  truncation?: ResultTruncation;
+  error?: string;
+} {
   const line = stdout
     .split(/\r?\n/)
     .map((item) => item.trim())
@@ -166,18 +180,27 @@ function parsePythonAnswer(stdout: string): { rows: QueryResultRow[]; error?: st
 
   try {
     const parsed = JSON.parse(line);
-    const rows = answerRows(parsed);
+    const payload = answerPayload(parsed);
     const error =
       isRecord(parsed) && typeof parsed.error === "string" && parsed.error
         ? parsed.error
         : undefined;
-    return { rows, error };
+    return {
+      rows: normalizeAnswerRows(payload.answer),
+      truncation: combineResultTruncation([payload]),
+      error,
+    };
   } catch {
     return { rows: [], error: tApp("analysis.dimension.abc-replay.35") };
   }
 }
 
-function dataset(title: string, rows: QueryResultRow[], dsl?: unknown): Dataset {
+function dataset(
+  title: string,
+  rows: QueryResultRow[],
+  dsl?: unknown,
+  truncation?: ResultTruncation
+): Dataset {
   return {
     id: randomUUID(),
     name: title.replace(/[^\u4e00-\u9fa5a-zA-Z0-9_-]/g, "_").slice(0, 50) || "hot_report",
@@ -186,6 +209,7 @@ function dataset(title: string, rows: QueryResultRow[], dsl?: unknown): Dataset 
     data: rows,
     dsl,
     subQuestion: title,
+    ...truncation,
   };
 }
 
@@ -198,7 +222,10 @@ function table(title: string, rows: QueryResultRow[] | undefined, error?: string
 function toResult(items: ReplayItem[], plan: HotReportReplayPlan): AbcReplayExecutionResult {
   const completed = items.filter((item) => item.status === "completed" && item.rows);
   const datasetByItem = new Map(
-    completed.map((item) => [item, dataset(item.title, item.rows || [], item.dsl)])
+    completed.map((item) => [
+      item,
+      dataset(item.title, item.rows || [], item.dsl, item.truncation),
+    ])
   );
   const datasets = [...datasetByItem.values()];
   const errors = items
@@ -455,6 +482,10 @@ export async function executeAbcProgram(params: {
     const rawData = Array.isArray((payload as Record<string, unknown>).data)
       ? ((payload as Record<string, unknown>).data as Record<string, unknown>[])
       : [];
+    const truncation = parseResultTruncation(
+      payload as Record<string, unknown>,
+      ABC_PROGRAM_EXECUTE_ENDPOINT
+    );
 
     baseResult.status = "completed";
     baseResult.data = rawData;
@@ -470,6 +501,7 @@ export async function executeAbcProgram(params: {
       columns,
       data: rawData,
       subQuestion,
+      ...truncation,
     };
     baseResult.datasets = [dataset];
     baseResult.abcCodes = [code];
@@ -486,7 +518,9 @@ export async function executeAbcProgram(params: {
         baseResult.markdownTable = `${headerRow}\n${separatorRow}\n${dataRows}`;
     } else {
       // Display body and result table are one and the same.
-      baseResult.fullContent = baseResult.markdownTable = tApp("analysis.dimension.abc-replay.45", { subQuestion: subQuestion });
+      baseResult.fullContent = baseResult.markdownTable = truncation
+        ? `_${subQuestion}_\n\n${t("query.display.emptyPartial")}`
+        : tApp("analysis.dimension.abc-replay.45", { subQuestion: subQuestion });
     }
 
     return baseResult;
@@ -608,6 +642,7 @@ export async function executeAbcReplayPlan({
 
   const items: ReplayItem[] = [];
   const localPathByIndex = new Map<number, string>();
+  const truncationByIndex = new Map<number, ResultTruncation>();
 
   for (const step of plan.steps) {
     if (!step.dsl) continue;
@@ -634,8 +669,11 @@ export async function executeAbcReplayPlan({
       signal,
     });
     const rows = result.status === "completed" ? flattenQueryResultData(result.data) : [];
+    const truncation =
+      result.status === "completed" ? combineResultTruncation(result.datasets || []) : undefined;
 
-    if (rows.length === 0) {
+    // Zero rows of a partial result are not "no data": the step completes and stays marked.
+    if (rows.length === 0 && !truncation) {
       items.push({
         title,
         status: "failed",
@@ -649,7 +687,8 @@ export async function executeAbcReplayPlan({
       step.index,
       await writeAnswerFile(replayDir, plan.sessionId, step.index, rows)
     );
-    items.push({ title, status: "completed", rows, dsl: step.dsl });
+    if (truncation) truncationByIndex.set(step.index, truncation);
+    items.push({ title, status: "completed", rows, dsl: step.dsl, truncation });
   }
 
   for (const afterCalculation of plan.afterCalculations) {
@@ -693,11 +732,18 @@ export async function executeAbcReplayPlan({
     }
 
     const parsed = parsePythonAnswer(py.stdout);
-    if (parsed.error || parsed.rows.length === 0) {
+    // An after-calculation over a partial input is partial too, however few rows it outputs.
+    const truncation = combineResultTruncation(
+      [
+        ...afterCalculation.dependencySubQueryIndexes.map((index) => truncationByIndex.get(index)),
+        parsed.truncation,
+      ].filter((marker): marker is ResultTruncation => marker !== undefined)
+    );
+    if (parsed.error || (parsed.rows.length === 0 && !truncation)) {
       items.push({ title, status: "failed", error: parsed.error || tApp("analysis.dimension.abc-replay.57") });
       continue;
     }
-    items.push({ title, status: "completed", rows: parsed.rows, code: rewritten.code });
+    items.push({ title, status: "completed", rows: parsed.rows, code: rewritten.code, truncation });
   }
 
   return toResult(items, plan);

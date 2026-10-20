@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { AbcProgramDashboard } from "@ontomato/contracts/dashboard";
-import type { QueryDatasetIdentity } from "@ontomato/contracts/query-execution";
+import type { QueryDatasetIdentity, ResultTruncation } from "@ontomato/contracts/query-execution";
 import { createModel } from "../../config/model-factory";
 import { modelAgentName } from "../../logging/model-agents";
 import { renderPrompt } from "../../core/prompts/loader";
@@ -21,7 +21,8 @@ export type FieldDisplayPlanItem = {
 
 export type FieldDisplayPlan = Record<string, FieldDisplayPlanItem>;
 
-export interface Dataset extends QueryDatasetIdentity {
+/** A result dataset; a partial one carries the data engine's truncation marker unchanged. */
+export interface Dataset extends QueryDatasetIdentity, Partial<ResultTruncation> {
   name: string;
   description: string;
   columns: string[];
@@ -676,17 +677,23 @@ function sortHeaders(headers: string[], rows: Record<string, unknown>[]): string
     .map((x) => x.h);
 }
 
+/** The empty state of a table: a partial result only says its processed portion had no rows. */
+function emptyTableText(locale?: string, truncation?: Partial<ResultTruncation>): string {
+  return tForLocale(locale, truncation?.truncated ? "query.display.emptyPartial" : "query.display.empty");
+}
+
 export function renderDataAsTable(
   data: unknown,
   fieldDisplayPlan: FieldDisplayPlan | undefined,
   options?: {
     maxRows?: number;
     locale?: string;
+    truncation?: Partial<ResultTruncation>;
   }
 ): string {
   const normalized = normalizeData(data);
   if (normalized.length === 0) {
-    return tForLocale(options?.locale, "query.display.empty");
+    return emptyTableText(options?.locale, options?.truncation);
   }
   const plan =
     fieldDisplayPlan || fallbackDisplayPlan(collectAllHeaders(normalized), options?.locale);
@@ -763,6 +770,7 @@ export async function buildTableFromRows(
     outputKeyDescriptionMDTable?: string;
     code?: string;
     locale?: string;
+    truncation?: Partial<ResultTruncation>;
   }
 ): Promise<{
   tableSegment: string;
@@ -771,7 +779,7 @@ export async function buildTableFromRows(
 }> {
   if (rows.length === 0) {
     return {
-      tableSegment: tForLocale(options?.locale, "query.display.empty"),
+      tableSegment: emptyTableText(options?.locale, options?.truncation),
       normalizedRows: [],
     };
   }
@@ -821,7 +829,7 @@ export function extractAnswerFromData(data: unknown): string {
 }
 
 export function convertChunkToDataset(
-  chunk: { data: Record<string, unknown>[]; dsl?: unknown },
+  chunk: { data: Record<string, unknown>[]; dsl?: unknown; truncation?: ResultTruncation },
   index: number,
   locale?: string
 ): Dataset {
@@ -840,5 +848,6 @@ export function convertChunkToDataset(
     columns,
     data: chunk.data,
     dsl: chunk.dsl,
+    ...chunk.truncation,
   };
 }

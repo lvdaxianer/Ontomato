@@ -39,6 +39,8 @@ import type { DeepAnalysisTaskPayload } from "@ontomato/contracts/analysis-prese
 import { assembleLoopChartCapability } from "./chart";
 import { assembleLoopDispatchCapability, lastAssistantText } from "./dispatch";
 import { assembleLoopEvidenceCapability } from "./evidence";
+import { combineResultTruncation } from "../../data-query/protocol";
+import { partialReportNotice } from "../report/partial-result-notice";
 import { assembleLoopExternalMcpCapability } from "./external-mcp";
 import { assembleLoopNotebookCapability } from "./notebook";
 import { assembleLoopDataProbeCapability } from "./probe";
@@ -171,6 +173,7 @@ export async function runAnalysisLoopWorkflow(
       emit: sendEvent,
     });
     let notebook: ReturnType<typeof assembleLoopNotebookCapability>["notebook"];
+    const initialEvidence = new Map<string, { question: string; entries: QueryResultDatasetEntry[] }>();
     const persistArtifacts = async (
       status: "completed" | "failed" | "cancelled",
       report: string,
@@ -178,6 +181,12 @@ export async function runAnalysisLoopWorkflow(
       error?: string
     ) => {
       harnessStatus = status;
+      if (reportDeliverableEnabled && report.trim()) {
+        report = partialReportNotice(
+          userQuestion,
+          combineResultTruncation([...initialEvidence.values()].flatMap((item) => item.entries))
+        ) + report;
+      }
       if (reportDeliverableEnabled)
         trajectory.section({
           sectionId: "report",
@@ -225,10 +234,6 @@ export async function runAnalysisLoopWorkflow(
               (previous) => previous.requestSeq < requestSeq
             )
           : [];
-      const initialEvidence = new Map<
-        string,
-        { question: string; entries: QueryResultDatasetEntry[] }
-      >();
       for (const ref of previousTurns.flatMap((previous) => previous.evidenceRefs)) {
         const query = await getQueryRunBySource(ref);
         if (!query) continue;

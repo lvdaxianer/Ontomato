@@ -342,12 +342,17 @@ export async function analysisNode(state: GraphState, config?: any): Promise<Gra
       ? applyFieldDisplayPlan(data, resolvedData.fieldDisplayPlan, locale)
       : data;
     const dataContext =
-      data.length > 0
+      data.length > 0 || resolvedData.truncation
         ? [
             resolvedData.fieldDisplayPlan
               ? `fieldDisplayPlan=${JSON.stringify(resolvedData.fieldDisplayPlan)}`
               : "",
-            `dataView=${JSON.stringify(buildModelDataView(displayRows, { maxChars: 100_000 }))}`,
+            `dataView=${JSON.stringify(
+              buildModelDataView(displayRows, {
+                maxChars: 100_000,
+                truncation: resolvedData.truncation,
+              })
+            )}`,
           ]
             .filter(Boolean)
             .join("\n")

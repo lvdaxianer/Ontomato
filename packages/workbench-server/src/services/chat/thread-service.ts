@@ -21,6 +21,7 @@ import {
   type QueryRun,
 } from "../data-query/query-run-store";
 import { listTurnRuns } from "../turn-run/turn-run-store";
+import { combineResultTruncation } from "../data-query/protocol";
 import { deleteThreadBusinessData, deleteThreadMetadata } from "./thread-store";
 
 type ThreadDownloadPayload = {
@@ -117,6 +118,9 @@ function buildHistoryReadSnapshot(input: {
         rows: dataset.rows,
         dsl: dataset.dsl,
         subQuestion: dataset.subQuestion,
+        truncated: dataset.truncated,
+        rowLimit: dataset.rowLimit,
+        truncationHint: dataset.truncationHint,
       }))
     : [];
   const graphNodeIds = Array.isArray(queryRun?.nodeIds)
@@ -273,7 +277,7 @@ export async function getThreadMessagesPayload(
   };
 }
 
-export async function getThreadDataCsvDownload(
+export async function getThreadDataDownload(
   threadId: string,
   requestSeq: number,
   userId: string,
@@ -284,8 +288,9 @@ export async function getThreadDataCsvDownload(
   const queryRun = await getStoredPrimaryQueryRun(threadId, requestSeq);
   const datasets = queryRun ? extractDatasetsFromQueryRun(queryRun) : [];
   const rows = datasets.flatMap((dataset) => dataset.rows);
+  const truncation = combineResultTruncation(datasets);
 
-  if (!rows.length) {
+  if (!rows.length && !truncation) {
     throw new Error(t("api.threadNoDataDownload"));
   }
 
@@ -296,6 +301,14 @@ export async function getThreadDataCsvDownload(
     `data_${requestSeq}`
   );
 
+  // The download route chooses its actual MIME type and filename; partial data needs an envelope.
+  if (truncation) {
+    return {
+      fileName: `${baseName} (partial).json`,
+      contentType: "application/json; charset=utf-8",
+      body: JSON.stringify({ answer: rows, ...truncation }, null, 2),
+    };
+  }
   return {
     fileName: `${baseName}.csv`,
     contentType: "text/csv; charset=utf-8",

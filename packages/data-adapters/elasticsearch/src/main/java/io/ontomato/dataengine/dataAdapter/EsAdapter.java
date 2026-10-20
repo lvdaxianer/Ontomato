@@ -31,22 +31,19 @@ import lombok.extern.slf4j.Slf4j;
 /**
  * Elasticsearch / OpenSearch data adapter.
  *
- * <p>The engine has no JDBC connection and no cross-index join operator. This adapter therefore
- * translates the object-graph DSL itself: single-class reads push down to the query DSL, and a
- * cross-class join is executed here with bounded operators — a term semi-join pushdown, a hash
- * join with a bounded build side, or a streaming sort-merge — never by materializing an
- * unbounded result. Object CRUD mirrors the relational adapters one class (index) at a time.</p>
+ * <p>Single-class reads use native search and aggregation where an exact translation exists.
+ * Cross-index joins retain a bounded build side and stream large inputs, with term filters pushed
+ * into the search engine. A working set that reaches its bound produces a marked partial result;
+ * that marker survives later aggregation and projection. Object CRUD uses one class/index at a time.</p>
  */
 @Slf4j
 public class EsAdapter implements DataAdapter {
 
-	/** Preferred size of a hash build side; a larger class is streamed instead of materialized. */
-	static final int BUILD_SIZE = 1000;
 	/** Engine cap on a single terms clause. */
 	static final int MAX_TERMS = 65536;
 	/** Page size for streaming reads. */
 	static final int PAGE = 1000;
-	/** Default in-memory intermediate cap: beyond it the query fails loudly instead of risking an OOM. */
+	/** Default bound for application-side working sets; overflow returns a marked partial result. */
 	static final long DEFAULT_MAX_MATERIALIZE = 100_000;
 
 	private static final Set<String> SUPPORTED_TYPES = Set.of(
@@ -534,10 +531,9 @@ public class EsAdapter implements DataAdapter {
 		answer.put("mqls", generatedMqls);
 		if (rowLimit.truncated()) {
 			answer.put(DslRowLimit.TRUNCATED, true);
-			answer.put(DslRowLimit.ROW_LIMIT, rowLimit.effectiveLimit());
-			answer.put(DslRowLimit.TRUNCATION_HINT, DslRowLimit.truncationHint(rowLimit.effectiveLimit()));
-			log.warn("[" + sessionId + "] DSL result truncated at the default row limit of "
-					+ rowLimit.effectiveLimit());
+			answer.put(DslRowLimit.ROW_LIMIT, rowLimit.truncatedLimit());
+			answer.put(DslRowLimit.TRUNCATION_HINT, rowLimit.hint());
+			log.warn("[{}] {}", sessionId, rowLimit.hint());
 		}
 		answers.add(answer);
 		return JSON.toJSONString(answers, Feature.WriteMapNullValue);
@@ -551,6 +547,20 @@ public class EsAdapter implements DataAdapter {
 	 */
 	private List<JSONObject> executeTwoStep(JSONObject first, JSONObject second, List<String> generatedMqls,
 			DslRowLimit.Tracker rowLimit) throws Exception {
+		JSONObject firstOutput = first.getJSONObject("output");
+		if (!isAggregated(firstOutput) && !hasDistinct(firstOutput.getJSONArray("fields"))
+				&& firstOutput.getJSONObject("limit") == null && isAggregated(second.getJSONObject("output"))) {
+			// A plain, unbounded projection is only a rename, not a materialization boundary.
+			Map<String, JSONObject> columns = new HashMap<>();
+			for (Object item : firstOutput.getJSONArray("fields")) {
+				JSONObject field = (JSONObject) item;
+				columns.put(field.getString("as"), field);
+			}
+			JSONObject output = JSONObject.parseObject(second.getJSONObject("output").toJSONString());
+			if (resolveProjectedFields(output, columns)) {
+				return executeStep(JSONObject.of("graph", first.getJSONObject("graph"), "output", output), generatedMqls, rowLimit, true);
+			}
+		}
 		List<JSONObject> firstRows = executeStep(first, generatedMqls, rowLimit, false);
 		JSONArray secondObjects = second.getJSONObject("graph").getJSONArray("patterns").getJSONObject(0)
 				.getJSONArray("objects");
@@ -565,6 +575,22 @@ public class EsAdapter implements DataAdapter {
 			generatedMqls.add("TWO-STEP " + tmpAlias + " rows=" + rows.size());
 		}
 		return project(rows, second.getJSONObject("output"), rowLimit, true);
+	}
+
+	private boolean resolveProjectedFields(Object node, Map<String, JSONObject> columns) {
+		if (node instanceof JSONArray list) {
+			for (Object item : list) if (!resolveProjectedFields(item, columns)) return false;
+		} else if (node instanceof JSONObject object) {
+			if (object.containsKey("variable") && object.containsKey("field")) {
+				JSONObject column = columns.get(object.getString("field"));
+				if (column == null) return false;
+				object.put("variable", column.getString("variable"));
+				object.put("field", column.getString("field"));
+			} else {
+				for (Object value : object.values()) if (!resolveProjectedFields(value, columns)) return false;
+			}
+		}
+		return true;
 	}
 
 	/** One step: join the graph's objects, then project / aggregate / sort / limit. */
@@ -603,13 +629,25 @@ public class EsAdapter implements DataAdapter {
 		// Leaf filters and cardinalities.
 		Map<Integer, JSONObject> filters = new LinkedHashMap<>();
 		Map<Integer, Long> counts = new LinkedHashMap<>();
-		Map<Integer, List<JSONObject>> fetched = new LinkedHashMap<>();
 		for (Map.Entry<Integer, JSONObject> e : byIdx.entrySet()) {
 			JSONObject obj = e.getValue();
 			String index = EsNaming.sanitize(obj.getString("class"));
 			JSONObject query = objectQuery(obj, attrTypesByClass, enabledAttrsByClass);
 			filters.put(e.getKey(), query);
-			counts.put(e.getKey(), count(index, query));
+		}
+		JSONObject output = step.getJSONObject("output");
+		if (byIdx.size() == 1 && (relationships == null || relationships.isEmpty())) {
+			JSONObject object = objects.getJSONObject(0);
+			String index = EsNaming.sanitize(object.getString("class"));
+			if (nativeOutputSupported(output, index)) {
+				JSONObject query = filters.get(object.getInteger("idx"));
+				return isAggregated(output) || hasDistinct(output.getJSONArray("fields"))
+						? aggregateSingleIndex(index, query, output, generatedMqls, rowLimit, terminal)
+						: readSingleIndex(index, query, output, generatedMqls, rowLimit, terminal);
+			}
+		}
+		for (Map.Entry<Integer, JSONObject> e : byIdx.entrySet()) {
+			counts.put(e.getKey(), count(EsNaming.sanitize(e.getValue().getString("class")), filters.get(e.getKey())));
 		}
 
 		// Edges, resolved to the two ends and their join fields.
@@ -628,7 +666,6 @@ public class EsAdapter implements DataAdapter {
 		}
 
 		// Early termination: with no sort, no aggregation and no distinct, only the first `limit` rows matter.
-		JSONObject output = step.getJSONObject("output");
 		long stopAfter = earlyStopCount(output);
 
 		// Connected components over the edge endpoints.
@@ -636,8 +673,8 @@ public class EsAdapter implements DataAdapter {
 		if (isAggregated(output) && components.size() == 1) {
 			// Stream joined rows straight into the accumulators: memory stays proportional to the number
 			// of groups, not to the number of joined rows.
-			AggregatingSink sink = new AggregatingSink(output);
-			joinComponent(components.get(0), byIdx, edges, filters, counts, generatedMqls, stopAfter, sink);
+			AggregatingSink sink = new AggregatingSink(output, rowLimit);
+			joinComponent(components.get(0), byIdx, edges, filters, counts, generatedMqls, stopAfter, sink, rowLimit);
 			List<JSONObject> grouped = sink.finish(output);
 			sort(grouped, output.getJSONObject("sort"));
 			return limit(grouped, output.getJSONObject("limit"), rowLimit, terminal);
@@ -645,13 +682,278 @@ public class EsAdapter implements DataAdapter {
 		List<Map<String, JSONObject>> rows = null;
 		for (Set<Integer> component : components) {
 			List<Map<String, JSONObject>> componentRows = joinComponent(component, byIdx, edges, filters, counts,
-					generatedMqls, stopAfter, null);
-			rows = rows == null ? componentRows : cross(rows, componentRows);
+					generatedMqls, stopAfter, null, rowLimit);
+			rows = rows == null ? componentRows : cross(rows, componentRows, rowLimit);
 		}
 		if (rows == null) {
 			rows = new ArrayList<>();
 		}
 		return project(rows, output, rowLimit, terminal);
+	}
+
+	private boolean hasDistinct(JSONArray fields) {
+		return fields.stream().anyMatch(field -> Boolean.TRUE.equals(((JSONObject) field).getBoolean("distinct")));
+	}
+
+	/** Exact DISTINCT is supported through composite keys; mixed distinct measures retain the bounded calculation. */
+	private boolean nativeOutputSupported(JSONObject output, String index) {
+		List<JSONObject> fields = new ArrayList<>(output.getJSONArray("fields").toJavaList(JSONObject.class));
+		JSONObject group = output.getJSONObject("group_by");
+		if (group != null && group.getJSONArray("having") != null) {
+			fields.addAll(group.getJSONArray("having").toJavaList(JSONObject.class));
+		}
+		for (JSONObject field : fields) {
+			String fn = field.getString("function");
+			if (fn == null || fn.isBlank()) continue;
+			if (!Set.of("count", "sum", "avg", "min", "max").contains(fn.toLowerCase(Locale.ROOT))) return false;
+			if ("text".equals(fieldCaps(index).get(exactField(index, field.getString("field"))))) return false;
+			if (Boolean.TRUE.equals(field.getBoolean("distinct"))
+					&& !field.getString("field").equals(DslUtil.getPrimaryKey(classDefOfIndex(index)))
+					&& distinctMeasure(output) == null && !Set.of("min", "max").contains(fn.toLowerCase(Locale.ROOT))) return false;
+		}
+		JSONArray keys = group == null ? new JSONArray() : group.getJSONArray("fields");
+		if (!isAggregated(output) && hasDistinct(output.getJSONArray("fields"))) keys = output.getJSONArray("fields");
+		if (keys != null) {
+			for (Object item : keys) {
+				if ("text".equals(fieldCaps(index).get(exactField(index, ((JSONObject) item).getString("field"))))) return false;
+			}
+		}
+		JSONObject sort = output.getJSONObject("sort");
+		if (!isAggregated(output) && sort != null && sort.getJSONArray("fields") != null) {
+			for (Object item : sort.getJSONArray("fields")) {
+				String field = sourceSortField(((JSONObject) item).getString("field"), output.getJSONArray("fields"));
+				if ("text".equals(fieldCaps(index).get(exactField(index, field)))) return false;
+			}
+		}
+		return true;
+	}
+
+	private String sourceSortField(String name, JSONArray fields) {
+		for (Object item : fields) {
+			JSONObject field = (JSONObject) item;
+			if (name.equals(field.getString("as"))) return field.getString("field");
+		}
+		return name;
+	}
+
+	/** A shared DISTINCT input can be represented exactly by (group keys, measure) composite buckets. */
+	private JSONObject distinctMeasure(JSONObject output) {
+		List<JSONObject> fields = new ArrayList<>(output.getJSONArray("fields").toJavaList(JSONObject.class));
+		JSONObject group = output.getJSONObject("group_by");
+		if (group != null && group.getJSONArray("having") != null) fields.addAll(group.getJSONArray("having").toJavaList(JSONObject.class));
+		JSONObject measure = null;
+		for (JSONObject field : fields) {
+			String fn = field.getString("function");
+			if (fn == null || fn.isBlank()) continue;
+			if (!Boolean.TRUE.equals(field.getBoolean("distinct"))) return null;
+			if (measure != null && !measure.getString("field").equals(field.getString("field"))) return null;
+			measure = field;
+		}
+		if (measure != null) {
+			Set<String> groupKeys = new HashSet<>();
+			if (group != null && group.getJSONArray("fields") != null) {
+				for (Object item : group.getJSONArray("fields")) groupKeys.add(((JSONObject) item).getString("field"));
+			}
+			for (Object item : output.getJSONArray("fields")) {
+				JSONObject field = (JSONObject) item;
+				if ((field.getString("function") == null || field.getString("function").isBlank())
+						&& !groupKeys.contains(field.getString("field"))) return null;
+			}
+		}
+		return measure;
+	}
+
+	/** Push projection, ordering and page size down; only retained output rows consume the working set. */
+	private List<JSONObject> readSingleIndex(String index, JSONObject query, JSONObject output,
+			List<String> generatedMqls, DslRowLimit.Tracker rowLimit, boolean terminal) throws Exception {
+		JSONArray fields = output.getJSONArray("fields");
+		JSONObject limit = output.getJSONObject("limit");
+		boolean defaulted = limit == null || limit.getInteger("count") == null;
+		int offset = defaulted ? 0 : limit.getIntValue("offset");
+		long wanted = defaulted ? (terminal ? DslRowLimit.defaultRowLimit() : Long.MAX_VALUE) : limit.getIntValue("count");
+		if (terminal) rowLimit.terminalLimit((int) wanted, defaulted);
+		long readLimit = Math.min(wanted + (defaulted && terminal ? 1 : 0), maxMaterialize + 1);
+		if (wanted == Long.MAX_VALUE) readLimit = maxMaterialize + 1;
+		JSONArray source = new JSONArray();
+		for (Object item : fields) source.add(((JSONObject) item).getString("field"));
+		JSONArray order = new JSONArray();
+		JSONObject sort = output.getJSONObject("sort");
+		if (sort != null && sort.getJSONArray("fields") != null) {
+			for (Object item : sort.getJSONArray("fields")) {
+				JSONObject field = (JSONObject) item;
+				String name = sourceSortField(field.getString("field"), fields);
+				order.add(JSONObject.of(exactField(index, name), field.getString("order")));
+			}
+		}
+		List<JSONObject> rows = new ArrayList<>();
+		if (readLimit == 0) return rows;
+		generatedMqls.add("SEARCH /" + index + " " + JSONObject.of("query", query, "sort", order, "_source", source,
+				"offset", offset, "count", wanted));
+		String pit = openPit(index);
+		try {
+			JSONArray after = null;
+			long skipped = 0;
+			while (rows.size() < readLimit) {
+				int size = (int) Math.min(PAGE, (long) offset - skipped + readLimit - rows.size());
+				PageResult page = searchPage(index, pit, query, after,
+						JSONObject.of("size", size, "_source", source, "sort", order));
+				pit = page.pitId();
+				for (Object item : page.hits()) {
+					JSONObject hit = (JSONObject) item;
+					after = hit.getJSONArray("sort");
+					if (skipped < offset) { skipped++; continue; }
+					JSONObject doc = hit.getJSONObject("_source");
+					JSONObject row = new JSONObject();
+					for (Object selected : fields) {
+						JSONObject field = (JSONObject) selected;
+						row.put(field.getString("as"), doc.get(field.getString("field")));
+					}
+					rows.add(row);
+					if (rows.size() >= readLimit) break;
+				}
+				if (page.hits().size() < size || after == null) break;
+			}
+		} finally {
+			closePit(pit);
+		}
+		if (defaulted && terminal && wanted <= maxMaterialize && rows.size() > wanted) {
+			rows.subList((int) wanted, rows.size()).clear();
+			rowLimit.markTruncated();
+		}
+		trimWorkingSet(rows, "returned detail records", rowLimit);
+		return rows;
+	}
+
+	/** Native metrics and paged composite buckets avoid materializing the documents being aggregated. */
+	private List<JSONObject> aggregateSingleIndex(String index, JSONObject query, JSONObject output,
+			List<String> generatedMqls, DslRowLimit.Tracker rowLimit, boolean terminal) throws Exception {
+		JSONArray fields = output.getJSONArray("fields");
+		JSONObject group = output.getJSONObject("group_by");
+		JSONObject distinct = distinctMeasure(output);
+		if (distinct != null && !distinct.getString("field").equals(DslUtil.getPrimaryKey(classDefOfIndex(index)))) {
+			Map<String, JSONObject> unique = new LinkedHashMap<>();
+			if (group != null && group.getJSONArray("fields") != null) {
+				for (Object item : group.getJSONArray("fields")) {
+					JSONObject field = (JSONObject) item;
+					unique.put(field.getString("field"), field);
+				}
+			}
+			unique.put(distinct.getString("field"), distinct);
+			JSONArray keys = new JSONArray();
+			for (JSONObject field : unique.values()) {
+				keys.add(JSONObject.of("variable", field.getString("variable"), "field", field.getString("field"),
+						"as", field.getString("field"), "distinct", true));
+			}
+			List<JSONObject> values = aggregateSingleIndex(index, query, JSONObject.of("fields", keys), generatedMqls, rowLimit, false);
+			List<Map<String, JSONObject>> rows = new ArrayList<>();
+			for (JSONObject value : values) rows.add(Map.of(distinct.getString("variable"), value));
+			return project(rows, output, rowLimit, terminal);
+		}
+		JSONArray groupFields = group == null ? new JSONArray() : group.getJSONArray("fields");
+		if (groupFields == null) groupFields = new JSONArray();
+		if (!isAggregated(output)) groupFields = fields;
+		JSONObject aggs = new JSONObject();
+		Map<String, String> metricNames = new LinkedHashMap<>();
+		List<JSONObject> metrics = new ArrayList<>(fields.toJavaList(JSONObject.class));
+		JSONArray having = group == null ? null : group.getJSONArray("having");
+		if (having != null) metrics.addAll(having.toJavaList(JSONObject.class));
+		for (JSONObject field : metrics) {
+			String fn = field.getString("function");
+			if (fn == null || fn.isBlank() || metricNames.containsKey(sig(field))) continue;
+			String name = "m" + metricNames.size();
+			metricNames.put(sig(field), name);
+			String sourceField = field.getString("field");
+			String exact = exactField(index, sourceField);
+			fn = fn.toLowerCase(Locale.ROOT);
+			JSONObject agg = switch (fn) {
+				case "min", "max" -> JSONObject.of("top_hits", JSONObject.of("size", 1, "_source", JSONArray.of(sourceField),
+						"sort", JSONArray.of(JSONObject.of(exact, JSONObject.of("order", fn.equals("min") ? "asc" : "desc", "missing", "_last")))));
+				case "count" -> "*".equals(sourceField) ? JSONObject.of("filter", matchAll())
+						: JSONObject.of("value_count", JSONObject.of("field", exact));
+				default -> JSONObject.of(fn, JSONObject.of("field", exact));
+			};
+			aggs.put(name, agg);
+		}
+		JSONArray source = new JSONArray();
+		for (Object item : fields) {
+			JSONObject field = (JSONObject) item;
+			if (field.getString("function") == null || field.getString("function").isBlank()) source.add(field.getString("field"));
+		}
+		if (!source.isEmpty()) aggs.put("first", JSONObject.of("top_hits", JSONObject.of("size", 1, "_source", source)));
+		JSONObject body = JSONObject.of("size", 0, "query", query);
+		JSONArray sources = new JSONArray();
+		for (int i = 0; i < groupFields.size(); i++) {
+			JSONObject field = groupFields.getJSONObject(i);
+			sources.add(JSONObject.of("g" + i, JSONObject.of("terms", JSONObject.of("field", exactField(index, field.getString("field")), "missing_bucket", true))));
+		}
+		JSONObject composite = JSONObject.of("size", PAGE, "sources", sources);
+		body.put("aggs", sources.isEmpty() ? aggs : JSONObject.of("groups", JSONObject.of("composite", composite, "aggs", aggs)));
+		generatedMqls.add("AGGREGATE /" + index + " " + body);
+		List<JSONObject> rows = new ArrayList<>();
+		String pit = sources.isEmpty() ? null : openPit(index);
+		try {
+		while (true) {
+			if (pit != null) body.put("pit", JSONObject.of("id", pit, "keep_alive", "2m"));
+			JSONObject response = http().post(pit == null ? "/" + index + "/_search" : "/_search", body);
+			JSONObject values = response.getJSONObject("aggregations");
+			if (values == null) throw new IOException(dialect.label() + " aggregation response has no aggregations");
+			if (pit != null && response.getString("pit_id") != null) pit = response.getString("pit_id");
+			JSONObject groups = sources.isEmpty() ? null : values.getJSONObject("groups");
+			JSONArray buckets = sources.isEmpty() ? JSONArray.of(values) : groups == null ? null : groups.getJSONArray("buckets");
+			if (buckets == null) throw new IOException(dialect.label() + " aggregation response has no buckets");
+			for (Object item : buckets) {
+				JSONObject bucket = (JSONObject) item;
+				boolean include = true;
+				if (having != null) {
+					for (Object entry : having) {
+						JSONObject cond = (JSONObject) entry;
+						int c = compare(nativeMetric(bucket.getJSONObject(metricNames.get(sig(cond))), cond), cond.get("value"));
+						include &= switch (cond.getString("operator")) {
+							case ">" -> c > 0; case ">=" -> c >= 0; case "<" -> c < 0; case "<=" -> c <= 0; case "!=" -> c != 0; default -> c == 0;
+						};
+					}
+				}
+				if (!include) continue;
+				if (rows.size() >= maxMaterialize) {
+					markWorkingSetTruncated("aggregation groups", rowLimit);
+					sort(rows, output.getJSONObject("sort"));
+					return limit(rows, output.getJSONObject("limit"), rowLimit, terminal);
+				}
+				JSONObject row = new JSONObject();
+				JSONObject first = source.isEmpty() ? null : firstHitSource(bucket.getJSONObject("first"));
+				for (Object entry : fields) {
+					JSONObject field = (JSONObject) entry;
+					String name = metricNames.get(sig(field));
+					row.put(field.getString("as"), name == null ? (first == null ? null : first.get(field.getString("field")))
+							: nativeMetric(bucket.getJSONObject(name), field));
+				}
+				rows.add(row);
+			}
+			if (groups == null || buckets.isEmpty() || groups.getJSONObject("after_key") == null) break;
+			composite.put("after", groups.getJSONObject("after_key"));
+		}
+		} finally {
+			if (pit != null) closePit(pit);
+		}
+		sort(rows, output.getJSONObject("sort"));
+		return limit(rows, output.getJSONObject("limit"), rowLimit, terminal);
+	}
+
+	private JSONObject firstHitSource(JSONObject topHits) throws IOException {
+		JSONObject hits = topHits == null ? null : topHits.getJSONObject("hits");
+		if (hits == null || hits.getJSONArray("hits") == null) throw new IOException("Invalid top_hits aggregation response");
+		JSONArray rows = hits.getJSONArray("hits");
+		return rows.isEmpty() ? null : rows.getJSONObject(0).getJSONObject("_source");
+	}
+
+	private Object nativeMetric(JSONObject aggregation, JSONObject field) throws IOException {
+		if (aggregation == null) throw new IOException("Missing aggregation result for " + field.getString("field"));
+		String fn = field.getString("function").toLowerCase(Locale.ROOT);
+		if (fn.equals("min") || fn.equals("max")) {
+			JSONObject doc = firstHitSource(aggregation);
+			return doc == null ? null : doc.get(field.getString("field"));
+		}
+		return fn.equals("count") ? aggregation.getLong("*".equals(field.getString("field")) ? "doc_count" : "value") : aggregation.get("value");
 	}
 
 	private boolean isAggregated(JSONObject output) {
@@ -670,7 +972,7 @@ public class EsAdapter implements DataAdapter {
 
 	private List<Map<String, JSONObject>> joinComponent(Set<Integer> component, Map<Integer, JSONObject> byIdx,
 			List<Edge> edges, Map<Integer, JSONObject> filters, Map<Integer, Long> counts, List<String> generatedMqls,
-			long stopAfter, RowSink sink) throws Exception {
+			long stopAfter, RowSink sink, DslRowLimit.Tracker rowLimit) throws Exception {
 		List<Edge> componentEdges = new ArrayList<>();
 		for (Edge edge : edges) {
 			if (component.contains(edge.from) && component.contains(edge.to)) {
@@ -716,15 +1018,13 @@ public class EsAdapter implements DataAdapter {
 			long estimate = counts.getOrDefault(idx, 0L);
 			boolean emit = sink != null && idx.equals(last);
 			if (rows == null) {
-				if (estimate > maxMaterialize) {
-					throw budgetError(index, estimate, maxMaterialize);
-				}
-				List<JSONObject> docs = searchAll(index, query, generatedMqls, maxMaterialize);
+				List<JSONObject> docs = searchAll(index, query, generatedMqls, maxMaterialize + 1);
+				trimWorkingSet(docs, index, rowLimit);
 				if (emit) {
 					for (JSONObject doc : docs) {
 						Map<String, JSONObject> row = new LinkedHashMap<>();
 						row.put(alias, doc);
-						sink.accept(row);
+						if (!sink.accept(row)) break;
 					}
 					return null;
 				}
@@ -749,7 +1049,7 @@ public class EsAdapter implements DataAdapter {
 						hashJoinTo(rows, existingAlias, existingKey, docs, alias, newKey, sink);
 						return null;
 					}
-					rows = hashJoin(rows, existingAlias, existingKey, docs, alias, newKey);
+					rows = hashJoin(rows, existingAlias, existingKey, docs, alias, newKey, idx.equals(last) ? stopAfter : -1, rowLimit);
 				} else {
 					// Too large to materialize: stream it, probing the bounded build side. When the build keys
 					// fit one terms clause, push them down so the engine returns only the matching documents.
@@ -759,11 +1059,10 @@ public class EsAdapter implements DataAdapter {
 						streamJoinTo(rows, existingAlias, existingKey, index, query, alias, newKey, generatedMqls, push, sink);
 						return null;
 					}
-					rows = streamJoin(rows, existingAlias, existingKey, index, query, alias, newKey, generatedMqls, stopAfter, push);
+					// Only the last join may stop at the requested output count; earlier rows can still be filtered.
+					long stop = idx.equals(last) ? stopAfter : -1;
+					rows = streamJoin(rows, existingAlias, existingKey, index, query, alias, newKey, generatedMqls, stop, push, rowLimit);
 				}
-			}
-			if (rows.size() > maxMaterialize) {
-				throw budgetError("joined intermediate", rows.size(), maxMaterialize);
 			}
 		}
 		return rows == null ? new ArrayList<>() : rows;
@@ -785,7 +1084,7 @@ public class EsAdapter implements DataAdapter {
 				return -1;
 			}
 		}
-		return limit.getInteger("count");
+		return (long) limit.getIntValue("offset") + limit.getIntValue("count");
 	}
 
 	private void streamJoinTo(List<Map<String, JSONObject>> rows, String existingAlias, String existingKey,
@@ -827,7 +1126,7 @@ public class EsAdapter implements DataAdapter {
 						for (Map<String, JSONObject> match : matches) {
 							Map<String, JSONObject> joined = new LinkedHashMap<>(match);
 							joined.put(newAlias, doc);
-							sink.accept(joined);
+							if (!sink.accept(joined)) return;
 						}
 					}
 					searchAfter = hit.getJSONArray("sort");
@@ -855,9 +1154,17 @@ public class EsAdapter implements DataAdapter {
 		return array;
 	}
 
-	private IllegalStateException budgetError(String what, long size, long cap) {
-		return new IllegalStateException(dialect.label() + " graph query too large: " + what + " needs " + size
-				+ " rows in memory, above the " + cap + " cap. Add filters or narrow the join; streaming/spill beyond this cap is not enabled.");
+	private void markWorkingSetTruncated(String stage, DslRowLimit.Tracker rowLimit) {
+		rowLimit.markTruncated((int) maxMaterialize, "The working-set limit of " + maxMaterialize
+				+ " was reached in " + stage + ". The result is incomplete; subsequent statistics, rankings and empty results"
+				+ " describe only the processed portion, not all matching data.");
+	}
+
+	private <T> void trimWorkingSet(List<T> rows, String stage, DslRowLimit.Tracker rowLimit) {
+		if (rows.size() > maxMaterialize) {
+			rows.subList((int) maxMaterialize, rows.size()).clear();
+			markWorkingSetTruncated(stage, rowLimit);
+		}
 	}
 
 	/**
@@ -866,7 +1173,7 @@ public class EsAdapter implements DataAdapter {
 	 */
 	private List<Map<String, JSONObject>> streamJoin(List<Map<String, JSONObject>> rows, String existingAlias,
 			String existingKey, String index, JSONObject query, String newAlias, String newKey,
-			List<String> generatedMqls, long stopAfter, JSONArray buildKeys) throws Exception {
+			List<String> generatedMqls, long stopAfter, JSONArray buildKeys, DslRowLimit.Tracker rowLimit) throws Exception {
 		Map<String, List<Map<String, JSONObject>>> build = new HashMap<>();
 		for (Map<String, JSONObject> row : rows) {
 			JSONObject existing = row.get(existingAlias);
@@ -905,6 +1212,10 @@ public class EsAdapter implements DataAdapter {
 					List<Map<String, JSONObject>> matches = build.get(keyOf(doc.get(newKey)));
 					if (matches != null) {
 						for (Map<String, JSONObject> match : matches) {
+							if (out.size() >= maxMaterialize) {
+								markWorkingSetTruncated("joined intermediate", rowLimit);
+								return out;
+							}
 							Map<String, JSONObject> joined = new LinkedHashMap<>(match);
 							joined.put(newAlias, doc);
 							out.add(joined);
@@ -938,7 +1249,7 @@ public class EsAdapter implements DataAdapter {
 	}
 
 	private List<Map<String, JSONObject>> hashJoin(List<Map<String, JSONObject>> rows, String existingAlias,
-			String existingKey, List<JSONObject> newDocs, String newAlias, String newKey) {
+			String existingKey, List<JSONObject> newDocs, String newAlias, String newKey, long stopAfter, DslRowLimit.Tracker rowLimit) {
 		Map<String, List<JSONObject>> build = new HashMap<>();
 		for (JSONObject doc : newDocs) {
 			build.computeIfAbsent(keyOf(doc.get(newKey)), k -> new ArrayList<>()).add(doc);
@@ -954,9 +1265,14 @@ public class EsAdapter implements DataAdapter {
 				continue;
 			}
 			for (JSONObject match : matches) {
+				if (out.size() >= maxMaterialize) {
+					markWorkingSetTruncated("joined intermediate", rowLimit);
+					return out;
+				}
 				Map<String, JSONObject> joined = new LinkedHashMap<>(row);
 				joined.put(newAlias, match);
 				out.add(joined);
+				if (stopAfter > 0 && out.size() >= stopAfter) return out;
 			}
 		}
 		return out;
@@ -980,15 +1296,20 @@ public class EsAdapter implements DataAdapter {
 			for (JSONObject match : matches) {
 				Map<String, JSONObject> joined = new LinkedHashMap<>(row);
 				joined.put(newAlias, match);
-				sink.accept(joined);
+				if (!sink.accept(joined)) return;
 			}
 		}
 	}
 
-	private List<Map<String, JSONObject>> cross(List<Map<String, JSONObject>> left, List<Map<String, JSONObject>> right) {
+	private List<Map<String, JSONObject>> cross(List<Map<String, JSONObject>> left, List<Map<String, JSONObject>> right,
+			DslRowLimit.Tracker rowLimit) {
 		List<Map<String, JSONObject>> out = new ArrayList<>();
 		for (Map<String, JSONObject> l : left) {
 			for (Map<String, JSONObject> r : right) {
+				if (out.size() >= maxMaterialize) {
+					markWorkingSetTruncated("cross join intermediate", rowLimit);
+					return out;
+				}
 				Map<String, JSONObject> row = new LinkedHashMap<>(l);
 				row.putAll(r);
 				out.add(row);
@@ -1030,7 +1351,7 @@ public class EsAdapter implements DataAdapter {
 
 	/** Consumes joined rows one at a time; the aggregation path never materializes them. */
 	private interface RowSink {
-		void accept(Map<String, JSONObject> row);
+		boolean accept(Map<String, JSONObject> row);
 	}
 
 	/** A single running accumulator for one aggregate output column. */
@@ -1084,6 +1405,18 @@ public class EsAdapter implements DataAdapter {
 		private final Map<String, Object> plain = new LinkedHashMap<>();
 		private final Map<String, Acc> accs = new LinkedHashMap<>();
 
+		long additionalDistinctValues(Map<String, JSONObject> row, JSONArray fields) {
+			Set<String> additional = new HashSet<>();
+			for (Object item : fields) {
+				JSONObject field = (JSONObject) item;
+				if (field.getString("function") == null || !Boolean.TRUE.equals(field.getBoolean("distinct"))) continue;
+				Object value = value(row, field);
+				Acc acc = accs.get(sig(field));
+				if (value != null && (acc == null || !acc.seen.contains(String.valueOf(value)))) additional.add(sig(field));
+			}
+			return additional.size();
+		}
+
 		void accept(Map<String, JSONObject> row, JSONArray fields) {
 			for (int i = 0; i < fields.size(); i++) {
 				JSONObject field = fields.getJSONObject(i);
@@ -1104,7 +1437,7 @@ public class EsAdapter implements DataAdapter {
 				String function = field.getString("function");
 				if (function != null && !function.isBlank()) {
 					Acc acc = accs.get(sig(field));
-					out.put(field.getString("as"), acc == null ? null : acc.value());
+					out.put(field.getString("as"), acc == null ? new Acc(function, false).value() : acc.value());
 				} else {
 					out.put(field.getString("as"), plain.get(field.getString("as")));
 				}
@@ -1139,22 +1472,40 @@ public class EsAdapter implements DataAdapter {
 		private final JSONArray fields;
 		private final JSONArray groupFields;
 		private final Map<String, Group> groups = new LinkedHashMap<>();
+		private final DslRowLimit.Tracker rowLimit;
+		private long distinctValues;
 
-		AggregatingSink(JSONObject output) {
+		AggregatingSink(JSONObject output, DslRowLimit.Tracker rowLimit) {
 			this.fields = output.getJSONArray("fields");
 			JSONObject groupBy = output.getJSONObject("group_by");
 			this.groupFields = groupBy == null ? null : groupBy.getJSONArray("fields");
+			this.rowLimit = rowLimit;
+			if (groupFields == null || groupFields.isEmpty()) groups.put("", new Group());
 		}
 
 		@Override
-		public void accept(Map<String, JSONObject> row) {
+		public boolean accept(Map<String, JSONObject> row) {
 			StringBuilder key = new StringBuilder();
 			if (groupFields != null) {
 				for (int i = 0; i < groupFields.size(); i++) {
 					key.append(String.valueOf(value(row, groupFields.getJSONObject(i)))).append('\u0001');
 				}
 			}
-			groups.computeIfAbsent(key.toString(), k -> new Group()).accept(row, fields);
+			Group group = groups.get(key.toString());
+			if (group == null && groups.size() >= maxMaterialize) {
+				markWorkingSetTruncated("aggregation groups", rowLimit);
+				return false;
+			}
+			if (group == null) group = new Group();
+			long additional = group.additionalDistinctValues(row, fields);
+			if (distinctValues + additional > maxMaterialize) {
+				markWorkingSetTruncated("distinct aggregation values", rowLimit);
+				return false;
+			}
+			distinctValues += additional;
+			groups.put(key.toString(), group);
+			group.accept(row, fields);
+			return true;
 		}
 
 		List<JSONObject> finish(JSONObject output) {
@@ -1643,22 +1994,6 @@ public class EsAdapter implements DataAdapter {
 		return field;
 	}
 
-	/** Approximate number of distinct values of a field (HyperLogLog++); used to size a join. */
-	private long cardinality(String index, String field, JSONObject query) throws Exception {
-		JSONObject cardinality = new JSONObject();
-		cardinality.put("field", exactField(index, field));
-		JSONObject agg = new JSONObject();
-		agg.put("cardinality", cardinality);
-		JSONObject aggs = new JSONObject();
-		aggs.put("distinct_keys", agg);
-		JSONObject body = new JSONObject();
-		body.put("size", 0);
-		body.put("query", query);
-		body.put("aggs", aggs);
-		JSONObject response = http().post("/" + index + "/_search", body);
-		return response.getJSONObject("aggregations").getJSONObject("distinct_keys").getLongValue("value");
-	}
-
 	private JSONObject matchAll() {
 		JSONObject matchAll = new JSONObject();
 		matchAll.put("match_all", new JSONObject());
@@ -1724,10 +2059,14 @@ public class EsAdapter implements DataAdapter {
 	}
 
 	private PageResult searchPage(String index, String pit, JSONObject query, JSONArray searchAfter) throws Exception {
+		return searchPage(index, pit, query, searchAfter, new JSONObject());
+	}
+
+	private PageResult searchPage(String index, String pit, JSONObject query, JSONArray searchAfter, JSONObject options) throws Exception {
 		JSONObject response;
 		Boolean supported = shardDocSupported();
 		try {
-			response = http().post("/_search", pageBody(index, pit, query, searchAfter));
+			response = http().post("/_search", pageBody(index, pit, query, searchAfter, options));
 			if (supported == null) {
 				rememberShardDoc(true);
 			}
@@ -1738,7 +2077,7 @@ public class EsAdapter implements DataAdapter {
 			// Elasticsearch before 7.12 has PIT but no _shard_doc tiebreaker. Fall back to the class
 			// primary key once, then remember it for this cluster; a later page must not probe again.
 			rememberShardDoc(false);
-			response = http().post("/_search", pageBody(index, pit, query, searchAfter));
+			response = http().post("/_search", pageBody(index, pit, query, searchAfter, options));
 		}
 		// Elasticsearch may return a new pit_id per page; OpenSearch answers without one, so the
 		// current ID stays valid for the next page and for the final close.
@@ -1757,11 +2096,14 @@ public class EsAdapter implements DataAdapter {
 		return new PageResult(nextPit, hits);
 	}
 
-	private JSONObject pageBody(String index, String pit, JSONObject query, JSONArray searchAfter) throws Exception {
-		JSONObject body = new JSONObject();
-		body.put("size", PAGE);
+	private JSONObject pageBody(String index, String pit, JSONObject query, JSONArray searchAfter, JSONObject options) throws Exception {
+		JSONObject body = new JSONObject(options);
+		body.putIfAbsent("size", PAGE);
 		body.put("query", query);
-		body.put("sort", dialect.pitSort(pitSortField(index)));
+		JSONArray order = new JSONArray();
+		if (options.getJSONArray("sort") != null) order.addAll(options.getJSONArray("sort"));
+		order.addAll(dialect.pitSort(pitSortField(index)));
+		body.put("sort", order);
 		if (searchAfter != null) {
 			body.put("search_after", searchAfter);
 		}

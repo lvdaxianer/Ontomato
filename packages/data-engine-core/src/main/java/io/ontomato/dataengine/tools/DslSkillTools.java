@@ -137,11 +137,13 @@ public class DslSkillTools {
 				JSONArray answer = new JSONArray();
 				Boolean truncated = null;
 				Integer rowLimit = null;
+					String truncationHint = null;
 				if (data != null && data.size() > 0) {
 					JSONObject datum = data.getJSONObject(0);
 					answer = datum.getJSONArray("answer");
 					truncated = datum.getBoolean("truncated");
 					rowLimit = datum.getInteger("rowLimit");
+						truncationHint = datum.getString("truncationHint");
 				}
 				int total = answer.size();
 				while (answer.size() > maxRowSize) {
@@ -155,10 +157,12 @@ public class DslSkillTools {
 				ret += JSON.toJSONString(obj, JSONWriter.Feature.PrettyFormat, Feature.WriteMapNullValue) + "\n";
 				ret += "```\n";
 				if (Boolean.TRUE.equals(truncated)) {
-					ret += "IMPORTANT: this DSL gave no output.limit, so the engine applied its default row cap"
-							+ (rowLimit == null ? "" : " of " + rowLimit + " rows")
-							+ " and the result is INCOMPLETE. Add an explicit output.limit (with paging) or aggregate"
-							+ " before relying on it; the " + answer.size() + " rows shown below are only the first part.";
+						ret += "IMPORTANT: the result is INCOMPLETE"
+								+ (rowLimit == null ? ". " : " (processing or output cap: " + rowLimit + " rows). ")
+								+ (truncationHint == null ? "" : truncationHint + " ")
+								+ "You may deliver these partial results with their limitation. Statistics, rankings and empty"
+								+ " results apply only to the processed portion; do not treat this as an execution error or retry"
+								+ " merely to remove the notice.";
 				} else if (maxRowSize < total) {
 					ret += "This DSL query actually returned a total of " + total + " records (executing this DSL request in the Python program returns according to the actual situation). Because the data volume is too large, the `query result` here only shows the first " + maxRowSize + " records.";
 				}

@@ -348,6 +348,8 @@ export const en = {
   "query.datasetFallbackTitle": (params?: Record<string, any>) => `Dataset ${params?.index ?? 1}`,
   "query.display.empty":
     "There is currently no data to display. Try adjusting the filters or retry later.",
+  "query.display.emptyPartial": "No rows were returned from the processed portion of this partial result.",
+  "query.partialSource": "⚠️ Partial source data ({source}): a {rowLimit}-row cap was reached, so this may not cover all matching data. {hint}",
   "query.display.groupColumn": "Group",
   "query.harness.processHeading": "Query process",
   "query.harness.dataHeading": "Data results",

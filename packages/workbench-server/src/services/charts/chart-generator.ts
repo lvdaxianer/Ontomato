@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { ResultTruncation } from "@ontomato/contracts/query-execution";
 import type {
   AnalysisChartDiagnostic,
   AnalysisChartResult,
@@ -11,7 +12,7 @@ import { loadSkillContent } from "../../core/skills/discovery/loader";
 import { skillRuntime } from "../../core/skills/execution/runtime";
 import { skillRegistryManager } from "../../core/skills/registry/manager";
 import type { SkillMeta } from "../../core/skills/types";
-import { tApp } from "../../i18n";
+import { t, tApp } from "../../i18n";
 import { createLogger } from "../../logging/logger";
 import { buildModelDataView } from "../../utils/model-data-view";
 
@@ -38,6 +39,42 @@ export interface ChartDatasetCandidate {
   sourceSubQuestion: string;
   sourceQuestionId?: string;
   data: Record<string, unknown>[];
+  truncation?: Partial<ResultTruncation>;
+}
+
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+/**
+ * The deterministic notice of a partial source: the localized header with the data engine's hint
+ * verbatim, as an HTML block, so it does not depend on what a model writes about the data.
+ */
+export function partialSourceNoticeHtml(source: string, truncation: ResultTruncation): string {
+  return `<div style="margin:0 0 8px;padding:6px 8px;border-radius:4px;background:#fdf6ec;color:#b88230;font-size:12px;line-height:1.5">${escapeHtml(
+    t("query.partialSource", {
+      source,
+      rowLimit: truncation.rowLimit,
+      hint: truncation.truncationHint,
+    })
+  )}</div>`;
+}
+
+/**
+ * Writes the source's partial-result notice into the chart itself, so every report, snapshot and
+ * export that shows or saves the chart keeps it. Skills return either a fragment or a whole
+ * document; in a document the notice goes inside the body.
+ */
+function withPartialSourceNotice(html: string, source: string, truncation: ResultTruncation) {
+  const notice = partialSourceNoticeHtml(source, truncation);
+  const body = html.match(/<body[^>]*>/i);
+  if (!body || body.index === undefined) return `${notice}${html}`;
+  const at = body.index + body[0].length;
+  return `${html.slice(0, at)}${notice}${html.slice(at)}`;
 }
 
 function isNumeric(value: unknown): boolean {
@@ -155,7 +192,7 @@ export async function generateChartsFromCandidates(params: {
       const candidatesInfo = candidates
         .map((candidate) => {
           const fields = [...new Set(candidate.data.flatMap((row) => Object.keys(row)))];
-          return `sourceSubQuestion: ${candidate.sourceSubQuestion}\nfields: ${fields.join(", ")}\ndataEvidence: ${JSON.stringify(buildModelDataView(candidate.data))}`;
+          return `sourceSubQuestion: ${candidate.sourceSubQuestion}\nfields: ${fields.join(", ")}\ndataEvidence: ${JSON.stringify(buildModelDataView(candidate.data, { truncation: candidate.truncation }))}`;
         })
         .join("\n\n");
       params.onProgress?.({ stage: "planning", skills: availableSkills.map(({ skill }) => skill) });
@@ -244,13 +281,25 @@ export async function generateChartsFromCandidates(params: {
             );
             continue;
           }
+          const truncation = source.truncation?.truncated
+            ? {
+                truncated: true as const,
+                rowLimit: source.truncation.rowLimit!,
+                truncationHint: source.truncation.truncationHint!,
+              }
+            : undefined;
           charts.push({
             ...plan,
             chartId: `${scopeId}-${charts.length + 1}`,
             title: rendered.meta?.title || plan.title,
             chartType: rendered.meta?.chartType || plan.chartType,
             scopeId,
-            html: rendered.html,
+            ...(truncation
+              ? {
+                  ...truncation,
+                  html: withPartialSourceNotice(rendered.html, plan.sourceSubQuestion, truncation),
+                }
+              : { html: rendered.html }),
             dataCount: source.data.length,
             provenance: {
               sourceQuestionIds: [source.sourceQuestionId || plan.sourceSubQuestion],

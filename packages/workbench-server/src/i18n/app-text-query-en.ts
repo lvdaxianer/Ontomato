@@ -277,4 +277,6 @@ export const appTextQueryEn = {
   "queryFixed.277": "Data candidate '{sourceSubQuestion}' was not found or has no data",
   "queryFixed.278": "Visualization skill '{skillId}' is not available",
   "queryFixed.279": "Chart plan schema validation failed at: {paths}",
+  "queryFixed.280": "{v0} protocol error: a partial result needs truncated=true, a positive rowLimit and a truncationHint",
+  "queryFixed.281": "  Partial result: a processing or output limit of {rowLimit} was reached, so these rows (even zero) may not cover all matching data. {hint}",
 };

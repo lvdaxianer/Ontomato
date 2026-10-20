@@ -238,6 +238,9 @@ export function buildDimensionEvidence(results: DimensionQueryResult[]): Analysi
       data: entry.data,
       dataCount: entry.dataCount,
       fieldDisplayPlan: entry.fieldDisplayPlan,
+      truncated: entry.truncated,
+      rowLimit: entry.rowLimit,
+      truncationHint: entry.truncationHint,
       markdownTable:
         entry.markdownTable || (datasetEntries.length === 1 ? result.markdownTable : undefined),
       keyFindings: buildKeyFindingsFromRows(entry.data),

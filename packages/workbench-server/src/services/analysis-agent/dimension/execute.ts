@@ -491,6 +491,7 @@ async function runDimensionStage(
         sourceSubQuestion: item.questionText,
         sourceQuestionId: item.questionId,
         data: item.data,
+        truncation: item,
       })),
       maxCharts: Math.min(3, Math.max(2, successfulEvidence.length)),
       signal: ctx.signal,

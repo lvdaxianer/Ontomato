@@ -8,6 +8,7 @@ import type {
 import type {
   QueryDatasetIdentity,
   QueryExecutionDisplayFact,
+  ResultTruncation,
 } from "@ontomato/contracts/query-execution";
 import type { DeepAnalysisTaskPayload } from "@ontomato/contracts/analysis-presentation";
 import type { ChatClientEvent } from "@ontomato/contracts/chat";
@@ -40,7 +41,8 @@ export interface QueryExecutionFacts extends Omit<
   data?: Array<Record<string, unknown>> | Array<Array<Record<string, unknown>>>;
   /** Datasets saved before dataset ids existed have no `id`. */
   datasets?: Array<
-    Partial<QueryDatasetIdentity> & {
+    Partial<QueryDatasetIdentity> &
+      Partial<ResultTruncation> & {
       name?: string;
       description?: string;
       data?: Array<Record<string, unknown>>;
@@ -120,7 +122,7 @@ export interface ResponseSnapshot {
     rows: Array<Record<string, unknown>>;
     dsl?: unknown;
     subQuestion?: string;
-  }>;
+  } & Partial<ResultTruncation>>;
   /** API/live read model: composed from query_runs for history. */
   graphNodeIds?: string[];
   /** API/live read model: derived from the query data actually available in this turn. */

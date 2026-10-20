@@ -8,6 +8,7 @@ import {
   type QueryRun,
 } from "../../../data-query/query-run-store";
 import { createLogger } from "../../../../logging/logger";
+import type { ResultTruncation } from "@ontomato/contracts/query-execution";
 import type { FieldDisplayPlan } from "../../../data-query/adapter";
 import { currentDatasetRule } from "./current-dataset";
 
@@ -62,6 +63,12 @@ function fieldDisplayPlanFromDataset(dataset: any): FieldDisplayPlan | undefined
   const plan = dataset?.fieldDisplayPlan;
   return plan && typeof plan === "object" && !Array.isArray(plan)
     ? (plan as FieldDisplayPlan)
+    : undefined;
+}
+
+function truncationFromDataset(dataset: any): ResultTruncation | undefined {
+  return dataset?.truncated
+    ? { truncated: true, rowLimit: dataset.rowLimit, truncationHint: dataset.truncationHint }
     : undefined;
 }
 
@@ -155,9 +162,14 @@ function extractRowsFromQueryRun(
     : undefined;
 }
 
+/** A completed run is usable with rows, or as a partial result without rows: zero rows there are not "no data". */
 export function hasUsableQueryRun(queryRun?: QueryRun | null): boolean {
   const rows = extractRowsFromQueryRun(queryRun);
-  return queryRun?.status === "completed" && Array.isArray(rows) && rows.length > 0;
+  return (
+    queryRun?.status === "completed" &&
+    Array.isArray(rows) &&
+    (rows.length > 0 || !!truncationFromDataset(latestDatasetFromQueryRun(queryRun)))
+  );
 }
 
 export async function resolveAnalysisData(
@@ -169,6 +181,7 @@ export async function resolveAnalysisData(
       source: "current_query" | "historical";
       queryResult?: QueryExecutionFact;
       fieldDisplayPlan?: FieldDisplayPlan;
+      truncation?: ResultTruncation;
     }
   | undefined
 > {
@@ -178,12 +191,14 @@ export async function resolveAnalysisData(
   const currentRows = rowsFromDataset(currentDataset);
   const currentDatasets = currentQueryResult?.datasets;
   const currentFieldDisplayPlan = fieldDisplayPlanFromDataset(currentDataset);
+  const currentTruncation = truncationFromDataset(currentDataset);
   if (currentRows && currentRows.length > 0) {
     return {
       data: currentRows,
       source: "current_query",
       queryResult: currentQueryResult,
       fieldDisplayPlan: currentFieldDisplayPlan,
+      truncation: currentTruncation,
     };
   }
   if (Array.isArray(currentDatasets) && currentDatasets.length > 0) {
@@ -192,6 +207,7 @@ export async function resolveAnalysisData(
       source: "current_query",
       queryResult: currentQueryResult,
       fieldDisplayPlan: currentFieldDisplayPlan,
+      truncation: currentTruncation,
     };
   }
 
@@ -199,11 +215,14 @@ export async function resolveAnalysisData(
     try {
       const queryRun = await getQueryRunBySource(state.historicalQueryRef);
       const historicalRows = extractRowsFromQueryRun(queryRun);
-      if (historicalRows && historicalRows.length > 0) {
+      const historicalDataset = latestDatasetFromQueryRun(queryRun);
+      const historicalTruncation = truncationFromDataset(historicalDataset);
+      if (historicalRows && (historicalRows.length > 0 || historicalTruncation)) {
         return {
           data: historicalRows,
           source: "historical",
-          fieldDisplayPlan: fieldDisplayPlanFromDataset(latestDatasetFromQueryRun(queryRun)),
+          fieldDisplayPlan: fieldDisplayPlanFromDataset(historicalDataset),
+          truncation: historicalTruncation,
         };
       }
     } catch (error) {

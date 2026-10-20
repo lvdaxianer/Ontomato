@@ -196,6 +196,7 @@ export async function runAbcHarnessBranch(
             outputKeyDescriptionMDTable: dataContent.outputKeyDescriptionMDTable,
             code: dataContent.code,
             locale,
+            truncation: dataContent.truncation,
           }
         );
 

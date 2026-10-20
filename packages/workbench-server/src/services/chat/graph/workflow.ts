@@ -273,6 +273,9 @@ export async function runDataAgentWorkflow(params: {
           const datasets = extractDatasetsFromQueryRun(queryRun).map((dataset) => ({
             title: dataset.title,
             rows: dataset.rows,
+            truncated: dataset.truncated,
+            rowLimit: dataset.rowLimit,
+            truncationHint: dataset.truncationHint,
           }));
           if (datasets.length > 0) datasetsByRequestSeq.set(sourceRequestSeq, datasets);
         }

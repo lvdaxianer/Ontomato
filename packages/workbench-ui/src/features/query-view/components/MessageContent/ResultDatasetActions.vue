@@ -2,7 +2,8 @@
 /**
  * The actions of one result dataset, named when the body does not name it: data/DSL download, the
  * dashboard entry, and the on-demand-expanded DSL view, post-calculation program, and field lineage
- * details.
+ * details. A partial dataset shows its one completeness notice here, and its data downloads as JSON
+ * that carries the truncation marker beside the rows, so the saved file stays marked as partial.
  *
  * Download and detail dialogs belong to this component itself; both the standalone body card and
  * the shared execution view that use it get the full set of actions, and the caller only needs to
@@ -20,9 +21,10 @@ import {
   FileText,
   LayoutDashboard,
   List,
+  TriangleAlert,
 } from "lucide-vue-next";
 import ResultDetailDialogs from "./ResultDetailDialogs.vue";
-import { downloadCsvFromData, downloadDsl } from "../../utils/downloadUtils";
+import { downloadCsvFromData, downloadJson } from "../../utils/downloadUtils";
 import type { ResultDataset, ResultDetailRequest } from "./types";
 
 const props = defineProps<{
@@ -53,18 +55,24 @@ function sanitizeFilename(name: string) {
   return clean || "data";
 }
 
+function downloadFilename() {
+  return sanitizeFilename(props.dataset.subQuestion || props.dataset.title);
+}
+
 function downloadData() {
-  downloadCsvFromData(
-    props.dataset.rows,
-    sanitizeFilename(props.dataset.subQuestion || props.dataset.title)
-  );
+  const { rows, truncated, rowLimit, truncationHint } = props.dataset;
+  if (truncated) {
+    downloadJson(
+      { answer: rows, truncated, rowLimit, truncationHint },
+      `${downloadFilename()} (${t("chat.partialFileSuffix")})`
+    );
+    return;
+  }
+  downloadCsvFromData(rows, downloadFilename());
 }
 
 function downloadDatasetDsl() {
-  downloadDsl(
-    props.dataset.dsl,
-    sanitizeFilename(props.dataset.subQuestion || props.dataset.title)
-  );
+  downloadJson(props.dataset.dsl, downloadFilename());
 }
 
 function openDetail(kind: ResultDetailRequest["kind"]) {
@@ -83,6 +91,13 @@ function openDetail(kind: ResultDetailRequest["kind"]) {
     <div v-if="showTitle" class="result-dataset-head">
       <span class="result-dataset-title">{{ dataset.title }}</span>
     </div>
+    <div v-if="dataset.truncated" class="result-dataset-partial" role="note">
+      <TriangleAlert :size="14" class="result-dataset-partial-icon" />
+      <div>
+        <div>{{ t("chat.partialResult", { rowLimit: dataset.rowLimit }) }}</div>
+        <div class="result-dataset-partial-hint">{{ dataset.truncationHint }}</div>
+      </div>
+    </div>
     <div class="result-dataset-buttons">
       <button
         v-if="hasRows"
@@ -91,7 +106,7 @@ function openDetail(kind: ResultDetailRequest["kind"]) {
         @click="downloadData"
       >
         <Download :size="14" />
-        <span>{{ t("chat.downloadData") }}</span>
+        <span>{{ dataset.truncated ? t("chat.downloadPartialJson") : t("chat.downloadData") }}</span>
       </button>
       <button
         v-if="hasRows && dataset.dsl"
@@ -185,5 +200,23 @@ function openDetail(kind: ResultDetailRequest["kind"]) {
 }
 .result-dataset-btn {
   font-size: 12px;
+}
+.result-dataset-partial {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 8px;
+  padding: 6px 8px;
+  border-radius: var(--radius-md);
+  background: var(--el-color-warning-light-9);
+  color: var(--el-color-warning);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.result-dataset-partial-icon {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.result-dataset-partial-hint {
+  color: var(--el-text-color-secondary);
 }
 </style>

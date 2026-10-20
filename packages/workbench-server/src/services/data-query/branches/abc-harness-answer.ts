@@ -20,7 +20,7 @@ function buildHarnessDataEvidence(datasets: Dataset[], locale?: string): string 
       const displayRows = dataset.fieldDisplayPlan
         ? applyFieldDisplayPlan(dataset.data, dataset.fieldDisplayPlan, locale)
         : dataset.data;
-      const dataView = buildModelDataView(displayRows);
+      const dataView = buildModelDataView(displayRows, { truncation: dataset });
       const name =
         dataset.name || tForLocale(locale, "query.datasetFallbackTitle", { index: index + 1 });
 

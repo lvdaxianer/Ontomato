@@ -12,7 +12,7 @@ import {
   convertChunkToDataset,
   rowsFromQueryAnswerPayloads,
 } from "../../data-query/adapter";
-import { parseQueryAnswerPayloads } from "../../data-query/protocol";
+import { combineResultTruncation, parseQueryAnswerPayloads } from "../../data-query/protocol";
 import type { AnalysisQueryFact, DimensionQueryResult } from "./evidence-types";
 import { buildQueryResultDataFromDatasets, buildQueryResultDslFromDatasets } from "./query-result";
 import { executeDslViaBackend } from "../../data-query/dsl-executor";
@@ -83,9 +83,11 @@ export async function executeDslDirectly(params: {
     if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
       throw new Error(tApp("analysis.runtime.deep-analysis-tool.399"));
     }
-    const rawData = rowsFromQueryAnswerPayloads(
-      parseQueryAnswerPayloads((payload as Record<string, unknown>).data, tApp("analysis.runtime.deep-analysis-tool.400"))
+    const answerPayloads = parseQueryAnswerPayloads(
+      (payload as Record<string, unknown>).data,
+      tApp("analysis.runtime.deep-analysis-tool.400")
     );
+    const rawData = rowsFromQueryAnswerPayloads(answerPayloads);
 
     const outputKeyDescriptionMDTable =
       payload &&
@@ -100,12 +102,18 @@ export async function executeDslDirectly(params: {
       outputKeyDescriptionMDTable,
       locale,
     });
+    const truncation = combineResultTruncation(answerPayloads);
     const tableMarkdown = renderDataAsTable(rawData, fieldDisplayPlan, {
       maxRows: 20,
       locale,
+      truncation,
     });
 
-    const dataset = convertChunkToDataset({ data: rawData, dsl }, 0, locale);
+    const dataset = convertChunkToDataset(
+      { data: rawData, dsl, truncation },
+      0,
+      locale
+    );
     dataset.fieldDisplayPlan = fieldDisplayPlan;
     const datasets = [dataset];
 
@@ -269,6 +277,7 @@ export async function executeSubQuestionWithBranches(
             markdownTable: renderDataAsTable(dataset.data || [], dataset.fieldDisplayPlan, {
               maxRows: 20,
               locale,
+              truncation: dataset,
             }),
             dataCount: Array.isArray(dataset.data) ? dataset.data.length : 0,
           });
@@ -292,6 +301,7 @@ export async function executeSubQuestionWithBranches(
           {
             maxRows: 20,
             locale,
+            truncation: ret.datasets[0],
           }
         );
       } catch {

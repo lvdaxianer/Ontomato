@@ -50,5 +50,6 @@ export function buildDataset(
     data: rows,
     subQuestion: question,
     fieldDisplayPlan,
+    ...content.truncation,
   };
 }

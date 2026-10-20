@@ -2,7 +2,7 @@ import { Request, Response, Router } from "express";
 import { getCheckpointer } from "../../infrastructure/connection";
 import {
   deleteThread,
-  getThreadDataCsvDownload,
+  getThreadDataDownload,
   getThreadDslDownload,
   getThreadMessagesPayload,
 } from "../../services/chat/thread-service";
@@ -118,7 +118,7 @@ router.get(
     const userId = (req as AuthenticatedRequest).userId;
     const domainId = requireDomainId(req as AuthenticatedRequest);
     try {
-      const download = await getThreadDataCsvDownload(
+      const download = await getThreadDataDownload(
         threadId,
         parseInt(requestSeq, 10),
         userId,

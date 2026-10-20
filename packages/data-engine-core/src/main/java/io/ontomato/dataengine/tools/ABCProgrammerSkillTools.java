@@ -108,6 +108,7 @@ public class ABCProgrammerSkillTools {
 			} else {
 				ret = "Execution print output is empty";
 			}
+			ret += pythonExecuteResult.partialResultNotice();
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 			ret = "Execution error: " + e.getMessage();
@@ -201,6 +202,7 @@ public class ABCProgrammerSkillTools {
 				retMessage.put("data", answer);
 				retMessage.put("code", program.getCode());
 				retMessage.put("outKeyRefs", program.getOutKeyRefs());
+				execution.markCompleteness(retMessage);
 				
 				ABCHarnessTaskMessage message = new ABCHarnessTaskMessage();
 				message.setSessionId(sessionId);

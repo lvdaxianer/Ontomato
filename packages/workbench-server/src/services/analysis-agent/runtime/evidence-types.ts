@@ -1,4 +1,7 @@
-import type { QueryFactDatasetPreview as QueryResultDatasetPreview } from "@ontomato/contracts/query-execution";
+import type {
+  QueryFactDatasetPreview as QueryResultDatasetPreview,
+  ResultTruncation,
+} from "@ontomato/contracts/query-execution";
 /**
  * Evidence layer: normalized sub-question query results for charts and reports, with source tracing.
  */
@@ -10,7 +13,7 @@ import type { QueryExecutionFact } from "../../data-query/query-fact";
 /**
  * Evidence layer data structure - normalized query results for charts and reports
  */
-export interface AnalysisEvidence {
+export interface AnalysisEvidence extends Partial<ResultTruncation> {
   /** Sub-question ID */
   questionId: string;
   /** Sub-question text */

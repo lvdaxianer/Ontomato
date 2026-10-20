@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { configureI18n } from "../../../i18n";
 import { appTextEn } from "../../../i18n/app-text-en";
 import { en, enLocaleMeta } from "../../../i18n/locales/en";
-import { generateChartsFromCandidates } from "../chart-generator";
+import { generateChartsFromCandidates, partialSourceNoticeHtml } from "../chart-generator";
 
 configureI18n({
   defaultLocale: "en",
@@ -125,5 +125,43 @@ describe("generateChartsFromCandidates", () => {
     });
     expect(result.diagnostics[0].message).toContain("sales");
     expect(result.diagnostics[0].message).toContain("dept, count");
+  });
+
+  it("marks a chart drawn from a partial source and writes the source's notice into its html", async () => {
+    const marker = {
+      truncated: true as const,
+      rowLimit: 100000,
+      truncationHint: "Intermediate rows reached the processing cap.",
+    };
+    const partial = await generateChartsFromCandidates({
+      domainId: "domain-1",
+      userQuestion: "Sales by department",
+      scopeId: "scope-3",
+      candidates: [
+        {
+          sourceSubQuestion: "q1",
+          data: [{ dept: "Engineering", sales: 100 }],
+          truncation: marker,
+        },
+      ],
+      maxCharts: 1,
+    });
+
+    expect(partial.charts[0]).toMatchObject(marker);
+    expect(partial.charts[0].html).toBe(
+      `${partialSourceNoticeHtml("q1", marker)}<div id='chart'>rendered chart</div>`
+    );
+    expect(partialSourceNoticeHtml("q1", marker)).toContain(
+      "a 100000-row cap was reached, so this may not cover all matching data. Intermediate rows reached the processing cap."
+    );
+
+    const complete = await generateChartsFromCandidates({
+      domainId: "domain-1",
+      userQuestion: "Sales by department",
+      scopeId: "scope-4",
+      candidates: [{ sourceSubQuestion: "q1", data: [{ dept: "Engineering", sales: 100 }] }],
+      maxCharts: 1,
+    });
+    expect(complete.charts[0]).not.toHaveProperty("truncated");
   });
 });

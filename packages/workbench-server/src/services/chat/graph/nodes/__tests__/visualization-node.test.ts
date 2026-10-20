@@ -14,6 +14,7 @@ installNoDataVisualization(null);
 
 vi.mock("../../../../charts/chart-generator", () => ({
   generateChartsFromCandidates: vi.fn(),
+  partialSourceNoticeHtml: (source: string) => `<div>partial notice of ${source}</div>`,
 }));
 
 vi.mock("../../utils/data-resolver", () => ({
@@ -60,6 +61,45 @@ describe("visualizationNode", () => {
     expect(result.errors).toBeDefined();
     expect(result.errors![0].message).toBe(
       "Field 'service_count' bound to yField does not exist in data (existing fields: service_type, count)"
+    );
+  });
+
+  it("shows the source's partial notice, not 'no data', for a partial result without rows", async () => {
+    const { visualizationNode } = await import("../visualization-node");
+    const cache = await import("../../utils/query-artifact-cache");
+    const { generateChartsFromCandidates } = await import("../../../../charts/chart-generator");
+    const results: any[] = [];
+    vi.mocked(cache.getQueryArtifactCache).mockReturnValueOnce({
+      setVisualizationResult: (_ref: string, value: unknown) => results.push(value),
+    } as any);
+    vi.mocked(cache.resolveAnalysisData).mockResolvedValueOnce({
+      data: [],
+      source: "historical",
+      truncation: {
+        truncated: true,
+        rowLimit: 100000,
+        truncationHint: "Intermediate rows reached the processing cap.",
+      },
+    });
+    vi.mocked(generateChartsFromCandidates).mockClear();
+
+    await visualizationNode(
+      {
+        userQuestion: "Count by type",
+        threadId: "t1",
+        plan: { steps: [{ type: "visualization", instruction: "Count by type" }] },
+      } as any,
+      { configurable: { domainId: "domain-1", requestSeq: 1 } }
+    );
+
+    expect(generateChartsFromCandidates).not.toHaveBeenCalled();
+    expect(results[0].result).toEqual({
+      html: "<div>partial notice of Count by type</div>",
+      chartType: "none",
+      title: en["query.display.emptyPartial"],
+    });
+    expect(results[0].thinking).toContain(
+      "a 100000-row cap was reached, so this may not cover all matching data. Intermediate rows reached the processing cap."
     );
   });
 });

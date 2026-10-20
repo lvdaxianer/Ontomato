@@ -1,3 +1,5 @@
+import type { ResultTruncation } from "@ontomato/contracts/query-execution";
+import { parseResultTruncation } from "../protocol";
 import type { OutKeyRef } from "./types";
 
 export type HarnessEvent = {
@@ -14,6 +16,7 @@ export type HarnessDataContent = {
   code?: string;
   outputKeyDescriptionMDTable?: string;
   outKeyRefs?: OutKeyRef[];
+  truncation?: ResultTruncation;
 };
 
 const DATA_PAYLOAD_KEYS = ["data", "result", "answer", "rows", "output"];
@@ -65,6 +68,7 @@ export function normalizeHarnessDataContent(content: unknown): HarnessDataConten
     outputKeyDescriptionMDTable:
       typeof outputKeyDescriptionMDTable === "string" ? outputKeyDescriptionMDTable : undefined,
     outKeyRefs: Array.isArray(outKeyRefs) ? (outKeyRefs as OutKeyRef[]) : undefined,
+    truncation: parseResultTruncation(parsed, "ABC Harness DATA_TYPE"),
   };
 }
 export function extractHarnessMessage(content: unknown): string {

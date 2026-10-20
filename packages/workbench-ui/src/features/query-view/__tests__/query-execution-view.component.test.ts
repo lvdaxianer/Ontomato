@@ -3,8 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 import { datasetPlacement } from "@ontomato/contracts/query-execution";
 
 // Downloads are asserted by the rows each action hands over, not by a browser file save.
-vi.mock("../utils/downloadUtils", () => ({ downloadCsvFromData: vi.fn(), downloadDsl: vi.fn() }));
-import { downloadCsvFromData } from "../utils/downloadUtils";
+vi.mock("../utils/downloadUtils", () => ({ downloadCsvFromData: vi.fn(), downloadJson: vi.fn() }));
+import { downloadCsvFromData, downloadJson } from "../utils/downloadUtils";
 
 import QueryExecutionView from "../components/QueryExecutionView.vue";
 import MessageContent from "../components/MessageContent/index.vue";
@@ -661,5 +661,73 @@ describe("execution display view renders by facts", () => {
     expect(
       mount(QueryExecutionView, { props: {}, global }).find(".query-execution-view").exists()
     ).toBe(false);
+  });
+});
+
+/**
+ * A partial dataset carries the data engine's truncation marker through the saved facts. Its own
+ * actions show exactly one completeness notice and name its downloads as partial; complete datasets
+ * show none. A partial dataset with zero rows still shows the notice instead of passing as empty.
+ */
+describe("partial result datasets", () => {
+  const HINT = "Intermediate rows reached the processing cap; refine the filter.";
+  const PARTIAL: QueryExecutionFacts = {
+    ...MULTI,
+    datasets: [
+      { ...MULTI.datasets![0]!, truncated: true, rowLimit: 100000, truncationHint: HINT },
+      MULTI.datasets![1]!,
+    ],
+  };
+
+  it("shows one notice on the partial dataset only, with its cap and hint", () => {
+    const blocks = render(PARTIAL).findAll(placed);
+
+    expect(blocks.map((block) => block.findAll(".result-dataset-partial").length)).toEqual([1, 0]);
+    const notice = blocks[0]!.find(".result-dataset-partial").text();
+    expect(notice).toContain(t("chat.partialResult", { rowLimit: 100000 }));
+    expect(notice).toContain(HINT);
+  });
+
+  it("downloads the partial dataset as JSON with its marker and leaves complete ones as CSV", async () => {
+    vi.mocked(downloadCsvFromData).mockClear();
+    vi.mocked(downloadJson).mockClear();
+    const w = render(PARTIAL);
+
+    expect(buttonLabels(w.findAll(placed)[0]!)).not.toContain(t("chat.downloadData"));
+    await clickButton(w.findAll(placed)[0]!, t("chat.downloadPartialJson"));
+    await clickButton(w.findAll(placed)[1]!, t("chat.downloadData"));
+
+    expect(vi.mocked(downloadJson)).toHaveBeenCalledWith(
+      {
+        answer: PARTIAL.datasets![0]!.data,
+        truncated: true,
+        rowLimit: 100000,
+        truncationHint: HINT,
+      },
+      `Construction sites by town (${t("chat.partialFileSuffix")})`
+    );
+    expect(vi.mocked(downloadCsvFromData).mock.calls.map((call) => call[1])).toEqual([
+      "Town list",
+    ]);
+  });
+
+  it("keeps the notice for a partial dataset with zero rows", () => {
+    const w = render({
+      fullContent: `### Matching sites\n\n${datasetPlacement("ds-empty")}`,
+      datasets: [
+        {
+          id: "ds-empty",
+          subQuestion: "Matching sites",
+          data: [],
+          truncated: true,
+          rowLimit: 100000,
+          truncationHint: HINT,
+        },
+      ],
+    });
+
+    expect(w.findAll(".result-dataset-partial")).toHaveLength(1);
+    expect(buttonLabels(w.find(placed))).not.toContain(t("chat.downloadData"));
+    expect(buttonLabels(w.find(placed))).not.toContain(t("chat.downloadPartialJson"));
   });
 });

@@ -42,6 +42,9 @@ export function buildResultDatasets(
       subQuestion: dataset?.subQuestion,
       code: codes?.[index] || undefined,
       outKeyRefs: outKeyRefs?.[index],
+      truncated: dataset?.truncated,
+      rowLimit: dataset?.rowLimit,
+      truncationHint: dataset?.truncationHint,
     }));
   }
   // Persisted legacy rows may have only flattened data rows without a structured dataset: same

@@ -20,6 +20,7 @@ import java.util.List;
 import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONArray;
 import com.alibaba.fastjson2.JSONObject;
+import io.ontomato.dataengine.bean.PythonExecuteResult;
 import io.ontomato.dataengine.bean.function.Parameter;
 import io.ontomato.dataengine.bean.metricView.MetricView;
 import io.ontomato.dataengine.bean.metricView.MetricViewContent;
@@ -321,9 +322,10 @@ public class MetricViewController {
 			if (timeoutMinutes <= 0) {
 				timeoutMinutes = 1;
 			}
-			JSONArray data = metricViewService.execute(id, p, lang, user, curUserDataPermission, timeoutMinutes);
+			Object[] o = metricViewService.execute(id, p, lang, user, curUserDataPermission, timeoutMinutes);
 			ret.put("success", true);
-			ret.put("data", data);
+			ret.put("data", o[0]);
+			((PythonExecuteResult)o[1]).markCompleteness(ret);
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 			ret.put("success", false);
@@ -346,9 +348,10 @@ public class MetricViewController {
 			if (timeoutMinutes <= 0) {
 				timeoutMinutes = 1;
 			}
-			JSONArray data = metricViewService.testExecute(metricView, p, lang, user, curUserDataPermission, timeoutMinutes);
+			Object[] o = metricViewService.testExecute(metricView, p, lang, user, curUserDataPermission, timeoutMinutes);
 			ret.put("success", true);
-			ret.put("data", data);
+			ret.put("data", o[0]);
+			((PythonExecuteResult)o[1]).markCompleteness(ret);
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 			ret.put("success", false);

@@ -1,8 +1,7 @@
 package io.ontomato.dataengine.dataAdapter;
 
 /**
- * Single source of truth for the row cap a data adapter applies when a DSL step omits
- * {@code output.limit}, and for reporting it when that cap actually truncates a result.
+ * Default output cap and shared completeness reporting for output or intermediate truncation.
  *
  * <p>The cap is a DSL-level semantic — it bounds what the engine returns to the caller — so it is
  * defined once here instead of as a per-adapter string literal. An omitted limit is <em>not</em>
@@ -17,7 +16,7 @@ public final class DslRowLimit {
 	/** Default number of rows a terminal step returns when it omits {@code output.limit}. */
 	public static final int DEFAULT_ROW_LIMIT = 20000;
 
-	/** Answer key: {@code true} when the default cap truncated the returned rows. */
+	/** Answer key: {@code true} when an output cap or an incomplete input limits the result. */
 	public static final String TRUNCATED = "truncated";
 	/** Answer key: the cap that was hit (present only when {@link #TRUNCATED} is true). */
 	public static final String ROW_LIMIT = "rowLimit";
@@ -44,14 +43,15 @@ public final class DslRowLimit {
 	}
 
 	/**
-	 * Per-call state threaded from the DSL to SQL/Cypher translation into the result assembly, so the
-	 * adapter knows whether the cap it applied to the terminal step was its own default. Only a
-	 * defaulted cap may truncate silently, so only then is the answer marked.
+	 * Per-call state for terminal limits and the first actual truncation. A later aggregate or smaller
+	 * output must not erase the fact that its input was incomplete.
 	 */
 	public static final class Tracker {
 		private int effectiveLimit = -1;
 		private boolean defaulted;
 		private boolean truncated;
+		private int truncatedLimit;
+		private String hint;
 
 		/** Record the cap applied to the terminal step. {@code defaulted} = it was the engine default. */
 		public void terminalLimit(int limit, boolean defaulted) {
@@ -61,7 +61,24 @@ public final class DslRowLimit {
 
 		/** Mark that the defaulted cap actually dropped rows. */
 		public void markTruncated() {
-			this.truncated = true;
+			markTruncated(effectiveLimit, DslRowLimit.truncationHint(effectiveLimit));
+		}
+
+		/** Keep the first incomplete input fact when a later projection also reaches its output cap. */
+		public void markTruncated(int limit, String hint) {
+			if (!truncated) {
+				this.truncated = true;
+				this.truncatedLimit = limit;
+				this.hint = hint;
+			}
+		}
+
+		public int truncatedLimit() {
+			return truncatedLimit;
+		}
+
+		public String hint() {
+			return hint;
 		}
 
 		public boolean defaulted() {

@@ -8,7 +8,11 @@ import {
   rowsFromQueryAnswerPayloads,
   type Dataset,
 } from "../adapter";
-import { parseQueryAnswerPayload, parseQueryAnswerPayloads } from "../protocol";
+import {
+  combineResultTruncation,
+  parseQueryAnswerPayload,
+  parseQueryAnswerPayloads,
+} from "../protocol";
 import { t, tApp } from "../../../i18n";
 import { backendGet } from "../../../utils/backend-client";
 import { runWithConcurrency } from "../../../utils/concurrency";
@@ -108,6 +112,7 @@ export async function fetchHotCards(params: {
           ? parseQueryAnswerPayloads(payload, tApp("queryFixed.250"))
           : [parseQueryAnswerPayload(payload, tApp("queryFixed.250"))];
         const rawData = rowsFromQueryAnswerPayloads(answerPayloads);
+        const truncation = combineResultTruncation(answerPayloads);
         const abcProgram = parseAbcProgram(json?.abcProgram);
         if (!abcProgram) {
           throw new Error(tApp("queryFixed.251"));
@@ -122,10 +127,15 @@ export async function fetchHotCards(params: {
             outputKeyDescriptionMDTable: json?.outputKeyDescriptionMDTable,
             code: abcProgram?.code,
             locale,
+            truncation,
           }
         );
 
-        const dataset = convertChunkToDataset({ data: normalizedRows }, 0, locale);
+        const dataset = convertChunkToDataset(
+          { data: normalizedRows, truncation },
+          0,
+          locale
+        );
         dataset.abcProgram = abcProgram;
         dataset.subQuestion = card.atomicAsk;
         dataset.description = card.atomicAsk;

@@ -1,7 +1,7 @@
 package io.ontomato.dataengine.dataAdapter;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
@@ -10,15 +10,19 @@ import java.util.Set;
 
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
+import org.testcontainers.DockerClientFactory;
+import org.testcontainers.containers.GenericContainer;
+import org.testcontainers.containers.wait.strategy.Wait;
 
 import com.alibaba.fastjson2.JSONArray;
 import com.alibaba.fastjson2.JSONObject;
 
 /**
  * Proves the bounded join engine: a class larger than the in-memory cap is streamed (never
- * materialized) and a join whose intermediate exceeds the cap fails loudly instead of risking
- * an OOM. Runs against {@code ONTOMATO_TEST_ES_URL}; skipped when it is not set.
+ * materialized) and oversized working sets produce marked partial results instead of an OOM.
+ * Uses an explicit test endpoint or an isolated Testcontainers engine.
  *
  * <p>The cap is lowered through {@code ontomato.es.maxMaterialize} so a few hundred documents
  * exercise the streaming path.</p>
@@ -39,16 +43,36 @@ class EsAdapterScaleTest {
 	private static String url;
 	private static String user;
 	private static String password;
+	private static GenericContainer<?> container;
 
 	private final String ns = "scale_" + System.nanoTime() + "_";
 
 	@BeforeAll
 	static void connect() {
-		Assumptions.assumeTrue(EXTERNAL_URL != null,
-				"ONTOMATO_TEST_ES_URL is not set; skipping the scale tests");
-		url = EXTERNAL_URL;
-		user = EXTERNAL_USER;
-		password = EXTERNAL_PASSWORD;
+		if (EXTERNAL_URL != null) {
+			url = EXTERNAL_URL;
+			user = EXTERNAL_USER;
+			password = EXTERNAL_PASSWORD;
+			return;
+		}
+		Assumptions.assumeTrue(DockerClientFactory.instance().isDockerAvailable(), "Docker is unavailable");
+		String image = System.getenv().getOrDefault("ONTOMATO_TEST_ES_IMAGE", DIALECT == EsDialect.OPENSEARCH
+				? "opensearchproject/opensearch:2.19.0" : "docker.elastic.co/elasticsearch/elasticsearch:9.5.5");
+		container = new GenericContainer<>(image).withEnv("discovery.type", "single-node")
+				.withEnv("ES_JAVA_OPTS", "-Xms512m -Xmx512m").withExposedPorts(9200)
+				.waitingFor(Wait.forHttp("/").forPort(9200).withStartupTimeout(java.time.Duration.ofMinutes(3)));
+		if (DIALECT == EsDialect.OPENSEARCH) {
+			container.withEnv("DISABLE_SECURITY_PLUGIN", "true").withEnv("DISABLE_INSTALL_DEMO_CONFIG", "true");
+		} else {
+			container.withEnv("xpack.security.enabled", "false");
+		}
+		container.start();
+		url = "http://" + container.getHost() + ":" + container.getMappedPort(9200);
+	}
+
+	@AfterAll
+	static void stopEngine() {
+		if (container != null) container.stop();
 	}
 
 	@Test
@@ -66,12 +90,21 @@ class EsAdapterScaleTest {
 	}
 
 	@Test
-	void joinIntermediateBeyondTheCapFailsLoudly() throws Exception {
+	void joinIntermediateReturnsPartialAndDoesNotMislabelTheExactBoundary() throws Exception {
 		String previous = System.getProperty(CAP);
 		System.setProperty(CAP, "100");
 		try {
-			seed(300, 300); // every big row matches, so the joined set is 300 > cap
-			assertThrows(IllegalStateException.class, () -> read(joinDsl()));
+			seed(300, 100);
+			JSONObject complete = answer(joinDsl());
+			assertEquals(100, complete.getJSONArray("answer").size());
+			assertNull(complete.getBoolean("truncated"));
+			cleanup();
+			seed(300, 101);
+			JSONObject partial = answer(joinDsl());
+			assertEquals(100, partial.getJSONArray("answer").size());
+			assertEquals(true, partial.getBoolean("truncated"));
+			assertEquals(100, partial.getIntValue("rowLimit"));
+			assertTrue(partial.getString("truncationHint").contains("joined intermediate"));
 		} finally {
 			restore(previous);
 			cleanup();
@@ -95,11 +128,94 @@ class EsAdapterScaleTest {
 	}
 
 	@Test
+	void partialIntermediateSurvivesAggregationAndACompleteNextQuery() throws Exception {
+		String previous = System.getProperty(CAP);
+		System.setProperty(CAP, "100");
+		try {
+			seed(300, 300);
+			JSONArray dsls = JSONArray.parseArray(twoStepDsl());
+			dsls.getJSONObject(0).getJSONObject("answer").getJSONArray("steps").getJSONObject(0)
+					.getJSONObject("output").put("limit", JSONObject.of("count", 200, "offset", 0));
+			EsAdapter adapter = adapter(readRule());
+			JSONObject result = JSONArray.parseArray(adapter.executeDsl(dsls.toJSONString(), "scale", null, new java.util.ArrayList<>())).getJSONObject(0);
+			assertEquals(true, result.getBoolean("truncated"));
+			assertEquals(100, result.getIntValue("rowLimit"));
+			assertEquals(100L, result.getJSONArray("answer").stream().mapToLong(row -> ((JSONObject) row).getLongValue("cnt")).sum());
+			dsls.getJSONObject(0).getJSONObject("answer").getJSONArray("steps").getJSONObject(1)
+					.getJSONObject("output").getJSONObject("group_by").put("having", JSONArray.of(JSONObject.of(
+							"variable", "tmp", "field", "small_id", "function", "count", "operator", ">", "value", 1000)));
+			JSONObject empty = answer(dsls.toJSONString());
+			assertTrue(empty.getJSONArray("answer").isEmpty());
+			assertEquals(true, empty.getBoolean("truncated"));
+			JSONObject complete = JSONArray.parseArray(adapter.executeDsl(aggregateOverJoinDsl(), "next", null, new java.util.ArrayList<>())).getJSONObject(0);
+			assertNull(complete.getBoolean("truncated"));
+			assertEquals(300L, complete.getJSONArray("answer").stream().mapToLong(row -> ((JSONObject) row).getLongValue("cnt")).sum());
+		} finally { restore(previous); cleanup(); }
+	}
+
+	@Test
+	void nativeGroupBudgetAndJoinDistinctBudgetRemainExplicit() throws Exception {
+		String previous = System.getProperty(CAP);
+		System.setProperty(CAP, "10");
+		try {
+			seed(30, 30);
+			JSONObject step = joinStep();
+			JSONObject pattern = step.getJSONObject("graph").getJSONArray("patterns").getJSONObject(0);
+			pattern.getJSONArray("objects").remove(1);
+			pattern.remove("relationship");
+			JSONObject output = step.getJSONObject("output");
+			output.getJSONArray("fields").add(JSONObject.of("variable", "b", "field", "id", "as", "count", "function", "count"));
+			output.put("group_by", JSONObject.of("fields", JSONArray.of(JSONObject.of("variable", "b", "field", "id"))));
+			JSONObject groups = answer(JSONArray.of(oneStepAnswer(step)).toJSONString());
+			assertEquals(10, groups.getJSONArray("answer").size());
+			assertEquals(true, groups.getBoolean("truncated"));
+			JSONObject joined = joinStep();
+			JSONObject count = joined.getJSONObject("output").getJSONArray("fields").getJSONObject(0);
+			count.put("function", "count");
+			count.put("distinct", true);
+			JSONObject distinct = answer(JSONArray.of(oneStepAnswer(joined)).toJSONString());
+			assertEquals(10L, distinct.getJSONArray("answer").getJSONObject(0).getLongValue("big_id"));
+			assertEquals(true, distinct.getBoolean("truncated"));
+		} finally { restore(previous); cleanup(); }
+	}
+
+	@Test
+	void nativeLimitSortCountAndExactDistinctDoNotLoadTheWholeIndex() throws Exception {
+		String previous = System.getProperty(CAP);
+		System.setProperty(CAP, "10");
+		try {
+			seed(300, 300);
+			JSONObject step = joinStep();
+			JSONObject pattern = step.getJSONObject("graph").getJSONArray("patterns").getJSONObject(0);
+			pattern.getJSONArray("objects").remove(1);
+			pattern.remove("relationship");
+			JSONObject output = step.getJSONObject("output");
+			output.put("limit", JSONObject.of("offset", 2, "count", 3));
+			output.put("sort", JSONObject.of("fields", JSONArray.of(JSONObject.of("field", "big_id", "order", "desc"))));
+			JSONObject sample = answer(JSONArray.of(oneStepAnswer(step)).toJSONString());
+			assertEquals(List.of("b97", "b96", "b95"), sample.getJSONArray("answer").stream().map(row -> ((JSONObject) row).getString("big_id")).toList());
+			assertNull(sample.getBoolean("truncated"));
+			output.remove("sort");
+			output.remove("limit");
+			JSONObject field = output.getJSONArray("fields").getJSONObject(0);
+			field.put("function", "count");
+			JSONObject count = answer(JSONArray.of(oneStepAnswer(step)).toJSONString());
+			assertEquals(300L, count.getJSONArray("answer").getJSONObject(0).getLongValue("big_id"));
+			assertNull(count.getBoolean("truncated"));
+			field.put("field", "small_id");
+			field.put("distinct", true);
+			JSONObject distinct = answer(JSONArray.of(oneStepAnswer(step)).toJSONString());
+			assertEquals(2L, distinct.getJSONArray("answer").getJSONObject(0).getLongValue("big_id"));
+			assertNull(distinct.getBoolean("truncated"));
+		} finally { restore(previous); cleanup(); }
+	}
+
+	@Test
 	void streamingAggregationAvoidsTheIntermediateCap() throws Exception {
 		String previous = System.getProperty(CAP);
 		System.setProperty(CAP, "100");
 		try {
-			// The same 300 joined rows that make a plain join fail (test 2) are fine here: aggregation
+			// The same 300 joined rows that truncate a plain join are complete here: aggregation
 			// streams into per-group accumulators instead of materializing the joined set.
 			seed(300, 300);
 			List<JSONObject> rows = read(aggregateOverJoinDsl());
@@ -148,9 +264,13 @@ class EsAdapterScaleTest {
 	}
 
 	private List<JSONObject> read(String dsl) throws Exception {
+		return answer(dsl).getJSONArray("answer").toJavaList(JSONObject.class);
+	}
+
+	private JSONObject answer(String dsl) throws Exception {
 		EsAdapter adapter = adapter(readRule());
 		JSONArray answers = JSONArray.parseArray(adapter.executeDsl(dsl, "scale", null, new java.util.ArrayList<>()));
-		return answers.getJSONObject(0).getJSONArray("answer").toJavaList(JSONObject.class);
+		return answers.getJSONObject(0);
 	}
 
 	private void cleanup() {
