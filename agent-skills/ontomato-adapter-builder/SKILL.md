@@ -1,67 +1,96 @@
 ---
 name: ontomato-adapter-builder
-description: Build and prove a new Ontomato data adapter. Create the Maven module and DataAdapterProvider registration, implement the DataAdapter read and write paths, translate DSL to the engine's native query language under the fail-closed execution contract, and validate it with the shared contract suite against a real engine. Use when adding support for a database, search engine, graph store or proprietary store; completing a read-only adapter's write path; fixing silently dropped or truncated DSL; or changing how namespaces, edges, time values or vector attributes are handled.
+description: Build, test and expose a new Ontomato data adapter. Create the Maven module and DataAdapterProvider, implement the DataAdapter read and write paths against the real DSL and response contract, add the shared contract-suite test and provider test, and make the adapter configurable in the existing frontend without writing Vue code. Use when adding a database, search engine, graph store or proprietary store; completing a read-only adapter's write path; fixing dropped or truncated DSL results; or changing namespaces, edges, time values, vectors or connection fields.
 ---
 
 # Ontomato adapter builder
 
-An adapter is the only place that knows how one data source stores and queries objects. Everything above it speaks DSL; everything below it speaks the engine's native language. Build the adapter so that boundary stays honest.
+An adapter is the only layer that knows how one data source stores and queries objects. Everything
+above it speaks DSL; everything below it speaks the engine's native language. This guide gives the
+exact contracts so a general-purpose coding agent can implement, test and expose an adapter without
+reading the existing adapters first.
 
 ## Non-negotiables
 
-1. **Never silently drop, ignore or truncate a DSL construct.** A valid construct is either rendered faithfully or rejected with a located `DslContractViolationException`. "I did not understand this condition, so I ran without it" is a wrong answer that looks correct.
-2. **The planner stays adapter-blind.** Do not put adapter capabilities into prompts or make the ABC programmer choose per database. Capability differences are enforced in the adapter (throw) or declared to the test suite, never negotiated in natural language.
-3. **Compiling is not done.** An adapter is done only after the shared contract suite passes against a real engine, with the run counts recorded.
-4. **The application pom decides what is installed.** A module in the root pom only builds; a dependency in `apps/data-engine/pom.xml` is what makes the type appear in a deployment.
-5. **One representation per concept.** Edges are either a key field on one side or a real relationship. Pick one, declare it through capabilities, and never let the read and write paths disagree.
-6. **Do not patch around an adapter in core.** If behavior belongs to one engine, it belongs in that adapter module.
+1. **Never silently drop, ignore or truncate a DSL construct.** Render it faithfully or throw a
+   located `DslContractViolationException`. A query that ran without an unrenderable condition is a
+   wrong answer that looks correct.
+2. **The planner stays adapter-blind.** Do not put adapter capabilities into prompts. Enforce
+   differences in the adapter (throw) or declare them to the test suite (capabilities).
+3. **Compiling is not done.** The shared contract suite must pass against a real engine, and the
+   run counts must be recorded. A skipped engine is not a pass.
+4. **The application pom decides what is installed.** A module in the root pom only builds; a
+   dependency in `apps/data-engine/pom.xml` makes the type appear in a deployment.
+5. **One edge representation per engine.** A key field on one side or a real relationship. Never
+   let the read and write paths disagree.
+6. **No per-adapter frontend code.** The configuration page is metadata-driven from the provider.
+   If you find yourself editing Vue for one adapter, the provider contract is wrong.
+7. **One module owns one engine family.** Copy the closest adapter module; do not extract a shared
+   base class across modules. A dialect difference that leaks into a shared base will eventually
+   break an unrelated engine.
 
-## 1. Classify the adapter first
+## 1. Contract map
 
-The implementation shape follows the source's nature. Identify it before writing code:
-
-| Kind | Examples | Read path | Write path | Template |
-| --- | --- | --- | --- | --- |
-| Relational, full | PostgreSQL, MySQL, SQL Server, DuckDB | DSL → SQL | DDL + DML, real tables | `PostgreAdapter` |
-| Relational, read-only | GaussDB, Oracle, DB2, DM | DSL → SQL against existing tables | throw `UnsupportedDataAdapterOperationException` | `GaussDBAdapter` |
-| Search engine | Elasticsearch, OpenSearch | DSL → REST search, bounded joins | index/delete documents | `EsAdapter` + `EsDialect` |
-| Graph store | Neo4j | DSL patterns → Cypher paths | nodes + real relationships | `Neo4jAdapter` |
-| Proprietary store | M3 | DSL → MQL / script call | MQL writes | `M3Adapter` (enterprise) |
-| Composite | multiple sources | route per class, delegate | route per class, delegate | `MultiDataSourceAdapter` |
-
-Read the closest existing adapter end to end before writing anything. The full SQL adapters are near-copies with dialect differences; the non-SQL adapters are where design decisions are made.
+| File | Role |
+| --- | --- |
+| `packages/data-engine-core/src/main/java/io/ontomato/dataengine/dataAdapter/DataAdapter.java` | The interface every adapter implements |
+| `.../dataAdapter/DataAdapterProvider.java` | One installed type: metadata + factory |
+| `.../dataAdapter/DataAdapterRegistry.java` | Collects providers by `type()`, rejects duplicates |
+| `.../dataAdapter/DataAdapterConnection.java` | Saved connection: `url`, `company`, `user`, `password` |
+| `.../dataAdapter/DslContractViolationException.java` | Located, machine-readable rejection |
+| `.../dataAdapter/DslRowLimit.java` | Default row cap and truncation reporting |
+| `.../dataAdapter/UnsupportedDataAdapterOperationException.java` | Read-only/unsupported operation |
+| `.../dataAdapter/ConfigurationProblem.java` | Located ontomap/configuration problem |
+| `packages/data-adapter-test-support/.../AbstractDataAdapterTest.java` | Shared contract suite |
+| `.../DataAdapterCapability.java` | Capability gates for the suite |
+| `packages/data-adapters/<engine>/` | The adapter module |
+| `apps/data-engine/pom.xml` | The installed-adapter list |
+| `packages/workbench-ui/src/features/system/components/business-config/DataAdapterConfigCard.vue` | The metadata-driven configuration card |
 
 ## 2. Module and registration
 
-Create `packages/data-adapters/<name>/`:
+Create `packages/data-adapters/<engine>/`:
 
 ```text
 pom.xml
 src/main/java/io/ontomato/dataengine/dataAdapter/
-  <Name>Adapter.java
-  <Name>AdapterProvider.java
+  <Engine>Adapter.java
+  <Engine>AdapterProvider.java
 src/test/java/io/ontomato/dataengine/dataAdapter/
-  <Name>AdapterTest.java
+  <Engine>AdapterTest.java
+  <Engine>AdapterProviderTest.java
 ```
 
-Copy `packages/data-adapters/postgresql/pom.xml` and change `artifactId` to `data-adapter-<name>`. Keep `data-engine-core` as a compile dependency and `data-adapter-test-support` as test scope; add the driver and Testcontainers module as needed. The parent is the repository root with `<relativePath>../../../pom.xml</relativePath>` and version `${revision}`.
+Copy `packages/data-adapters/postgresql/pom.xml` and change only `artifactId` to
+`data-adapter-<engine>`. Keep:
 
-Register in three places, or the adapter is invisible:
+- parent: repository root, `<relativePath>../../../pom.xml</relativePath>`, version `${revision}`;
+- `data-engine-core` compile dependency;
+- `data-adapter-test-support` test dependency;
+- the engine driver, version managed in the root pom;
+- the Testcontainers module for the engine, plus `testcontainers:junit-jupiter`.
 
-1. Root `pom.xml` `<modules>`: `packages/data-adapters/<name>`.
-2. `apps/data-engine/pom.xml` `<dependencies>`: `data-adapter-<name>`. This list alone decides which types the edition reports and offers; a root module that is not listed still builds but is never installed (gaussdb is currently in that position in the open-source build).
-3. The driver, in the root pom's `dependencyManagement` if no adapter owns it yet.
+Root pom: add `<module>packages/data-adapters/<engine></module>`. Application pom: add the
+`data-adapter-<engine>` dependency. A module that is not in the application pom builds but is never
+installed (`gaussdb` is currently in that position in the open-source build).
 
-The provider is a Spring `@Component`; `DataAdapterRegistry` collects all providers and fails fast on a duplicate `type()`. No manual registration list exists.
+Version-managed drivers already in the root pom:
 
-Checklist before writing the adapter:
+| Engine | Coordinates | Version |
+| --- | --- | --- |
+| PostgreSQL | `org.postgresql:postgresql` | 42.7.3 |
+| SQL Server | `com.microsoft.sqlserver:mssql-jdbc` | 12.8.1.jre11 |
+| DuckDB | `org.duckdb:duckdb_jdbc` | 1.5.5.1 |
+| Neo4j | `org.neo4j.driver:neo4j-java-driver` | 5.26.3 |
+| Elasticsearch REST | `org.elasticsearch.client:elasticsearch-rest-client` | 9.5.5 |
 
-- `type()` is the stable API value stored in `BusinessConfig.dataAdapter`; never rename it after release.
-- `label()` is the user-facing name.
-- `requiresJoinFields()` says whether relationships name `fromField`/`toField` that this engine joins on. Key-field engines return `true`; graph engines and search engines that join by document key return `false`.
-- `connectionFields()` returns only `url`, `company`, `user`, `password`.
-- `connectionExamples()` gives hints, not secrets.
-- `create(...)` receives the caller's real `jsonRule`. Do not swallow it and do not build the adapter from a cached/empty rule: SQL adapters read `classDef` from `jsonRule`, so a null rule fails at the first DSL query.
+MySQL uses the MySQL connector declared in the module/root; keep its version there if it is not in
+the table.
+
+## 3. Provider: metadata + factory
+
+The provider is a Spring `@Component`. `DataAdapterRegistry` injects every provider and keys it by
+`type()`. The registry fails fast on a duplicate type. There is no separate registration list.
 
 ```java
 @Component
@@ -76,7 +105,7 @@ public class FooAdapterProvider implements DataAdapterProvider {
     }
 
     @Override public Map<String, String> connectionExamples() {
-        return Map.of("url", "jdbc:foo://host:port/db");
+        return Map.of("url", "jdbc:foo://host:5432/db", "user", "foo");
     }
 
     @Override public DataAdapter create(DataAdapterConnection connection,
@@ -86,191 +115,739 @@ public class FooAdapterProvider implements DataAdapterProvider {
 }
 ```
 
-## 3. Implement `DataAdapter`
+Contract details:
 
-`io.ontomato.dataengine.dataAdapter.DataAdapter` has three groups of methods.
+- `type()` is the stable value stored in `BusinessConfig.dataAdapter`. Never rename it after a
+  release. Multiple `type()` values may share one adapter class (Elasticsearch/OpenSearch).
+- `label()` is the user-facing name shown in the configuration select.
+- `requiresJoinFields()` is `true` when relationships name `fromField`/`toField` that the engine
+  joins on (relational, search); `false` for graph engines whose edges are real relationships.
+- `connectionFields()` only ever contains `url`, `company`, `user`, `password`. The controller
+  reads only declared fields, so an undeclared field is silently discarded.
+- `connectionExamples()` supplies input hints, never secrets.
+- `create(...)` must pass the caller's real `jsonRule` to the adapter. Do not cache an adapter per
+  connection and do not substitute an empty rule: SQL adapters read `classDef` from `jsonRule`.
+- The default `create(BusinessConfig, ...)` picks the connection saved under `type()`. Override it
+  only for a type that needs more than one connection (the multi-source adapter).
 
-**Connection and metadata**
+Connection fields by engine:
 
-- `openConnection()`: JDBC connection. Non-JDBC adapters throw; do not fake a `Connection`.
-- `testConnection()`: default probes JDBC. Override for non-JDBC with a real protocol probe (Bolt, HTTP root/health) and return the same result shape as `DataAdapterConnectionTester`.
-- `getSampleDataFileName`, `querySampleDataByClassName`: sample-data support. Implement when the adapter owns storage; return `UnsupportedDataAdapterOperationException` when it cannot.
-- `validateClassNameFormat`, `validatePrimaryKeyName`: refuse names this engine cannot quote, case-fold or key on.
-- `timeConditionsAsEpochMillis()`, `timeConditionZone()`: see time handling below. Leave the defaults unless the engine truly requires epoch millis.
-- `validateOntoMap(jsonRule)`: declare constraints the adapter imposes on the semantic layer, returning `ConfigurationProblem`s. Default empty is correct for a single-source adapter.
-- `sandboxClassName`, `sandboxObjectId`: keep vector-table names and ids aligned with the adapter's own sandbox naming. Relational adapters prefix class names and return ids unchanged; M3 returns `/sandbox/Class` and prefixes ids.
+| Engine | `connectionFields()` |
+| --- | --- |
+| PostgreSQL, MySQL, SQL Server, Neo4j | `url`, `user`, `password` |
+| DuckDB | `url` only |
+| Elasticsearch, OpenSearch | `url`, `user`, `password` |
+| M3 | `url`, `company`, `user`, `password` |
+| Multi-source | empty; it overrides `create(BusinessConfig, ...)` |
 
-**Query path**
+### Provider test
 
-- `executeDsl(queryJson, sessionId, mode, generatedMqls)`: parse DSL and run it. This is the hot path; it must be total over the DSL grammar.
-- `query(dsl, sandboxId, domainId, vectorResourceDao, dataRagConfig)`: object-graph query used by higher layers; same contract.
-- `queryVectorAttr(classDef, attrName, objectId)`: read one vector attribute as a `JSONArray`. Missing object is `IllegalArgumentException`.
+Every provider gets a small test that pins the metadata the frontend consumes:
 
-**Write path**
+```java
+class FooAdapterProviderTest {
+    private final FooAdapterProvider provider = new FooAdapterProvider();
 
-- `createNamespace` / `truncateNamespace` / `dropNamespace`
-- `createClass(namespace, classDef)`, `createEdgeType(namespace, edgeName)`
-- `insertObjects` / `updateObjects` / `deleteObjects`
-- `createEdge` / `deleteEdge`
+    @Test void metadata() {
+        assertEquals("foo", provider.type());
+        assertEquals("FooDB", provider.label());
+        assertTrue(provider.requiresJoinFields());
+        assertEquals(List.of("url", "user", "password"), provider.connectionFields());
+        assertEquals("jdbc:foo://host:5432/db", provider.connectionExamples().get("url"));
+    }
+}
+```
 
-For read-only adapters every write method throws `new UnsupportedDataAdapterOperationException(type, "createClass")` and similar. Do not leave empty methods that report success.
+## 4. The `DataAdapter` interface
 
-## 4. Read path: DSL to native
+Implement every method. A read-only adapter throws `UnsupportedDataAdapterOperationException` for
+every write method; it must not leave an empty method that reports success.
 
-Read the DSL model before coding: `steps[]`, each with `objects[]` (class, alias, conditions), `relationships[]` (type, from/to classes, min/max hops), `output` (attributes, aggregates, aliases, group-by flags), and optional sort/limit. A two-step DSL projects in step 0 and aggregates in step 1.
+### Connection, metadata and limits
 
-Implementation rules:
+| Method | Contract |
+| --- | --- |
+| `Connection openConnection() throws SQLException` | JDBC connection. Non-JDBC adapters throw `UnsupportedDataAdapterOperationException`. |
+| `JSONObject testConnection() throws Exception` | Probe without touching saved config. JDBC default uses `DataAdapterConnectionTester`; non-JDBC overrides with a native probe. |
+| `boolean timeConditionsAsEpochMillis()` | Default `false`: pass the DSL's time value through as a literal. Override only when the store requires epoch millis (M3). |
+| `TimeZone timeConditionZone()` | Zone used only when the previous method is `true`; `null` = deployment zone. |
+| `String getSampleDataFileName(...)` | Sample-data support, or throw unsupported. |
+| `String querySampleDataByClassName(...)` | Sample-data support, or throw unsupported. |
+| `void validateClassNameFormat(String)` | Reject names the engine cannot quote/case-fold. |
+| `void validatePrimaryKeyName(String)` | Reject an attribute the engine cannot key on. The admin layer already enforces exactly one `varchar` primary key; most adapters no-op this. |
+| `String sandboxClassName(String sandboxId, String className)` | The physical class/table name under a sandbox. Relational: `sandboxId + className`; M3: `/sandbox/Class`. |
+| `String sandboxObjectId(String sandboxId, String objectId)` | M3 prefixes ids; relational returns the id unchanged. |
+| `List<ConfigurationProblem> validateOntoMap(Map<String,Object> jsonRule)` | Default empty. Only a composite adapter imposes ontomap constraints. |
 
-1. **Preserve every construct or throw.** Walk all conditions and outputs. If an operator, type pair, nesting or join arity cannot be rendered, throw with a precise `dslPath`. Never use `if (condition != null)` as a reason to skip.
-2. **Let contract exceptions escape.** Adapters commonly wrap everything in `catch (Exception e)`. Put `catch (DslContractViolationException e) { throw e; }` first in every such block, or the violation is flattened into a generic "failed to convert DSL" and tests fail with the wrong type.
-3. **Fail closed on unknown constructs.** An unknown operator, a missing `field`, a `timeseries` block this adapter does not implement, or a condition keyed by field name instead of `field` must throw `INVALID_GRAMMAR`/`UNSUPPORTED_CONSTRUCT`. Do not guess.
-4. **Enforce the row limit.** The engine caps a terminal step without an explicit `limit` at `DslRowLimit` (default 20000, overridable by `ontomato.dsl.defaultRowLimit`). Query `cap + 1` rows and report `truncated` / `rowLimit` rather than returning a silently short answer. Only the terminal step is capped; an inner materialization uses the adapter's own materialization budget. An explicit `limit` is not a truncation.
-5. **Keep class naming consistent.** Read paths generally use the namespace-prefixed table name from the DSL; write paths use the plain class name from `classDef`. Do not mix them: a write that looks up `classDef` with a prefixed name silently finds nothing. Use the existing `graphRule()` / `prefixedGraphRule()` helpers where the template does.
-6. **Escape and type-map deliberately.** Quote identifiers per dialect, escape string literals, and map DSL/scalar types to engine types in one place. `like` semantics differ between read and write paths in the SQL templates: the read path adds `%...%`; the write path does not. Match the contract suite, not intuition.
-7. **Time values are literals by default.** Do not convert a date/timestamp condition to epoch millis unless the engine requires it. For SQL engines, format as `yyyy-MM-dd HH:mm:ss` in the JVM's zone; for engines that store epoch millis, override `timeConditionsAsEpochMillis()` and define the zone. Read values back in the source's own textual form so a value can be fed back as a condition. `DuckDB`'s `INT32` overflow and GaussDB's millis-as-seconds bug are the known failure modes of getting this wrong.
-8. **Two steps are not one query with a different name.** Step 0 produces the projection set, step 1 aggregates it. SQL uses a nested subquery; Neo4j uses `WITH` then `RETURN`; ES materializes. Step 1's `variable` names the intermediate table and its `class` is not read by any current adapter. If your engine has no notion of a subquery, materialize with a hard budget and throw when it is exceeded.
+### Query
 
-### Violation shape
+| Method | Contract |
+| --- | --- |
+| `String executeDsl(String queryJson, String sessionId, DslExecutionMode mode, List<String> generatedMqls)` | Translate and run one DSL. Append the generated native query to `generatedMqls`. |
+| `Map<String,Object> query(JSONObject dsl, String sandboxId, String domainId, VectorResourceDao vectorResourceDao, DataRagConfig dataRagConfig)` | Object-graph path used by higher layers. Same semantics as `executeDsl`. |
+| `JSONArray queryVectorAttr(Map<String,Object> classDef, String attrName, String objectId)` | Read one vector attribute; `IllegalArgumentException` when the object is missing. |
+
+### Write
+
+| Method | Contract |
+| --- | --- |
+| `createNamespace`, `truncateNamespace`, `dropNamespace` | Create the schema/prefix; clear data; remove schema and data. Verify the engine's response. |
+| `createClass(String namespace, Map<String,Object> classDef)` | Create the table/collection/index from `classDef.className` + `classDef.attrs`. |
+| `createEdgeType(String namespace, String edgeName)` | Only meaningful for relationship-edge engines; no-op for key-field engines. |
+| `insertObjects(String namespace, Map<String,Object> classDef, JSONArray objs)` | Write only declared, enabled attributes. |
+| `updateObjects(String namespace, Map<String,Object> classDef, JSONObject setValues, JSONObject where)` | Reject primary-key changes and unknown fields. |
+| `deleteObjects(String namespace, Map<String,Object> classDef, JSONObject where)` | No condition clears the class. |
+| `createEdge`, `deleteEdge` | Key-field engines update the side named by `fromField`; graph engines create/delete a real relationship. |
+
+## 5. Read path: the exact DSL and response
+
+### Request envelope
+
+`queryJson` is a JSON **array** of DSL documents. Take element 0. The DSL is under `answer`:
+
+```json
+[
+  {
+    "answer": {
+      "steps": [
+        {
+          "graph": {
+            "patterns": [
+              {
+                "objects": [
+                  {
+                    "class": "person",
+                    "variable": "p",
+                    "idx": 0,
+                    "conditions": {
+                      "properties": {
+                        "field": "age",
+                        "operator": ">",
+                        "value": 18
+                      }
+                    }
+                  },
+                  {
+                    "class": "org",
+                    "variable": "o",
+                    "idx": 1
+                  }
+                ],
+                "relationship": [
+                  { "from": 0, "to": 1, "type": ["works_at"] }
+                ]
+              }
+            ]
+          },
+          "output": {
+            "fields": [
+              { "variable": "p", "field": "name", "as": "name" },
+              { "variable": "o", "field": "id", "function": "count", "as": "orgs" }
+            ],
+            "group_by": {
+              "fields": [{ "variable": "p", "field": "name" }],
+              "having": [
+                { "variable": "o", "field": "id", "function": "count", "operator": ">", "value": 1 }
+              ]
+            },
+            "sort": { "fields": [{ "field": "orgs", "order": "desc" }] },
+            "limit": { "count": 100, "offset": 0 }
+          }
+        }
+      ]
+    }
+  }
+]
+```
+
+Rules that follow from this shape:
+
+- `objects[].class` is the table/collection name the read path resolves. `variable` is the alias.
+  `idx` identifies the object for relationship endpoints.
+- `relationship[].from` and `to` are `idx` values, not class names. `type` is an array; the first
+  entry is the relation name. `type:["*"]` means any type in the graph engines.
+- An omitted `relationship` means a single-object query.
+- A two-step DSL has `steps[1]`. Step 0 projects; step 1 aggregates over those projected columns.
+  SQL wraps step 0 as a subquery; Neo4j chains `WITH` then `RETURN`; ES materializes.
+
+### Conditions
+
+The condition tree lives at `conditions.properties`:
+
+```json
+{ "and": [ {"field":"age","operator":">","value":18},
+           {"or": [ {"field":"name","operator":"like","value":"Ada"},
+                    {"field":"name","operator":"is","value":null} ]} ] }
+```
+
+- `and` / `or` / `not` are arrays of condition objects.
+- A leaf is `{field, operator, value}`. `field` is mandatory; a condition keyed by field name is
+  invalid DSL and must throw `INVALID_GRAMMAR`.
+- Operators are exactly: `=`, `!=`, `like`, `not like`, `>`, `>=`, `<=`, `<`, `between`, `in`,
+  `is`, `is not`.
+- `conditions.timeseries` is a construct this adapter does not implement (unless the engine does,
+  as M3 does). Throw `UNSUPPORTED_CONSTRUCT` before walking the property tree.
+- `conditions.text.query` is a full-text shortcut over every enabled string attribute. Implement
+  it or reject it; never ignore it.
+- Type-directed rendering: string operators need quoting; numeric operators need no quotes;
+  date/timestamp operators go through the engine's time literal helper. A (operator, type) pair the
+  adapter cannot render is `UNSUPPORTED_OPERATOR_FOR_TYPE` naming the operator, field and type.
+
+### Output
+
+- `output.fields[]` entries: `variable`, `field`, `function` (optional), `distinct` (optional),
+  `as` (the result alias). A field without `variable` is an expression in step 1.
+- `output.group_by.fields[]` uses `{variable, field}`; `having[]` uses `{variable, field,
+  function, operator, value}`.
+- `output.sort.fields[]` uses `{field, order}`; `order` is `desc` or omitted/ascending.
+- `output.limit` is `{count, offset}`. It is not an integer.
+- `distinct` applies to the field it is set on; only the first distinct field in a projection is
+  rendered as `distinct`.
+
+### Sample data
+
+If the adapter claims `SAMPLE_DATA`, implement both methods against the same convention:
+
+- `getSampleDataFileName(sampleDataDirName, className)` returns
+  `conf/<sampleDataDirName>/<className>.json` (a path relative to the deployment).
+- `querySampleDataByClassName(className, attrs)` selects the requested attributes from the class
+  with `limit 1`, returns the row as a JSON string, and truncates any string value longer than 100
+  characters to `first 100 + "..."`. An empty class returns `<className> class has no data`.
+
+If the engine cannot support it, do not declare `SAMPLE_DATA`.
+
+### Response envelope
+
+`executeDsl` returns a JSON **array**:
+
+```json
+[
+  {
+    "answer": [ { "name": "Ada", "orgs": 2 } ],
+    "mqls": [ "select ..." ]
+  }
+]
+```
+
+When the default row cap truncated the result, the same answer object also carries:
+
+```json
+{ "truncated": true, "rowLimit": 20000, "truncationHint": "The result was capped ..." }
+```
+
+Serialize with `WriteMapNullValue` so null attributes survive. Do not return `{"data": ...}` and do
+not return a bare array of rows.
+
+### Row limit
+
+Use `DslRowLimit`, do not hard-code 20000:
+
+1. If the terminal step has no `output.limit`, apply `DslRowLimit.defaultRowLimit()` and record
+   `tracker.terminalLimit(cap, true)`; query `cap + 1` rows.
+2. If the result has more than `cap` rows, remove the probe row and set `truncated`, `rowLimit`
+   and `truncationHint` on the answer, and log a WARN.
+3. If `output.limit` exists, apply `count`/`offset` and `tracker.terminalLimit(count, false)`.
+   Only a defaulted cap can be reported as truncation.
+4. Cap only the terminal step. An inner materialization is bounded by the adapter's own budget,
+   not by the DSL row cap.
+
+### Time values
+
+- Default: pass the DSL's temporal value through as a literal, formatted in the deployment zone.
+  Do not convert to epoch millis unless the engine requires it.
+- SQL: format `date` as `yyyy-MM-dd`, `timestamp` as `yyyy-MM-dd HH:mm:ss`.
+- Read temporal columns back in the source's textual form (`yyyy-MM-dd` / `yyyy-MM-dd HH:mm:ss`)
+  so a returned value can feed straight back as a condition.
+- Override `timeConditionsAsEpochMillis()`/`timeConditionZone()` only for an engine whose store
+  language requires millis (M3). Never reinterpret an existing customer's stored convention by
+  guessing.
+
+### Contract errors
 
 ```java
 throw new DslContractViolationException(
     DslContractViolationException.Code.UNSUPPORTED_OPERATOR_FOR_TYPE,
-    "steps[0].objects[p].conditions",
-    "operator '" + op + "' is not supported for field '" + field + "' (" + type + ")");
+    "steps[0].graph.patterns[0].objects[0].conditions.properties",
+    "operator 'like' on field 'age' of type 'int' is not supported by FooAdapter");
 ```
 
-Codes are deliberately few and stable: `INVALID_GRAMMAR`, `UNSUPPORTED_CONSTRUCT`, `UNSUPPORTED_OPERATOR_FOR_TYPE`, `UNSUPPORTED_JOIN_ARITY`. Callers switch on them.
+Codes: `INVALID_GRAMMAR`, `UNSUPPORTED_CONSTRUCT`, `UNSUPPORTED_OPERATOR_FOR_TYPE`,
+`UNSUPPORTED_JOIN_ARITY`. The `dslPath` must point at the offending node.
 
-## 5. Write path
+Adapters commonly wrap translation in `catch (Exception)`. Put
+`catch (DslContractViolationException e) { throw e; }` first in every such block, or the violation
+is flattened into a generic conversion error and the planner cannot retry.
 
-Mirror the relational template unless the storage model forbids it.
+## 5b. The legacy `query()` path
 
-**Namespaces.** `createNamespace` creates the schema/database prefix. `truncateNamespace` removes data but keeps the schema. `dropNamespace` removes both. Verify success: several engines reject a drop while data exists and still return HTTP 200 or a success payload. `truncate` then `drop`, and surface the engine's error message if it still refuses.
+`query()` is not a synonym for `executeDsl()`. It is the object-graph entry used by the planner
+and it has its own pipeline. Implement it as follows, in this order:
 
-**Classes.** `createClass` creates the table/collection/index from the `classDef` attribute list. Map every scalar the semantic layer allows, including `vector` as text (PostgreSQL `text`, MySQL/SQL Server `nvarchar(max)`, DuckDB `VARCHAR`). A primary-key attribute is mandatory and must be a string type; `AdminServiceImpl` validates this before the adapter sees it, but the adapter should still reject a definition it cannot key.
+1. Wrap the single DSL in a JSON array and serialize with `WriteMapNullValue`:
+   `JSONArray.of(dsl)`.
+2. `DslUtil.normalizeClassNames(dslStr, classDefs)` — resolves the DSL's class names against the
+   domain's `classDef` list.
+3. `DslUtil.setConditionTimeColumnToCorrectFormat(dslStr, dataRagConfig.getDslMightTimeFormats(),
+   classDefs, timeConditionsAsEpochMillis(), timeConditionZone())` — the only place time conditions
+   are normalized for this path. It is why an adapter must not convert again in `query()`.
+4. If `sandboxId` is non-empty, prefix every `classDef.className` with the sandbox id **and**
+   rewrite every `steps[0].graph.patterns[0].objects[].class` with the same prefix
+   (`addSandboxId` behavior). Do not mutate the caller's original map; copy it.
+5. Call `HttpRequestUtil.executeDsl(dataRagConfig, this, dslStr, null, true, jsonRule,
+   vectorResourceDao, userDataPermission, DslExecutionMode.OPTIMIZED, domainId)[1]` to get a
+   `DslExecutionResult`.
+6. Put `result.data()` into the returned map. If `result.failed()`, put
+   `error = MultiThreadAIChatService.rawErrorText(result.failure().cause())` instead of throwing.
 
-**Objects.** `insertObjects` writes only attributes declared by `classDef`. Do not invent columns and do not strip fields ad hoc; a relationship-only property has no column because the semantic layer does not declare it. `updateObjects` must reject changes to the primary key and unknown fields, and must translate the same condition grammar as the read path. `deleteObjects` without a condition empties the class, as the contract requires.
+`query()` therefore has **two** outcomes: a data map or a data map with `error`. `executeDsl()`
+throws. Do not collapse them.
 
-**Edges.** Two legal representations:
+The `mode` argument of `executeDsl` selects the execution path (`OPTIMIZED` for `query()`);
+`sessionId` is for log correlation; `generatedMqls` is an output list the adapter appends to.
 
-- **Key field** (relational, search): the relationship is stored as a field on one side, selected by `fromField`/`toField`. `createEdge`/`deleteEdge` update that field. `requiresJoinFields()` returns `true`. Do not declare `RELATIONSHIP_EDGES`.
-- **Real relationship** (graph): `createEdge` creates an actual edge; `deleteEdge` removes it; `fromField`/`toField` are ignored, and a relationship definition without them must not fail. Declare `RELATIONSHIP_EDGES` and override `seedEdges()` in the test.
+## 6. Write path: `jsonRule`, objects and edges
 
-Never mix the two. The contract suite asserts edges through the read path when `RELATIONSHIP_EDGES` is declared and through the foreign-key column otherwise.
+`jsonRule` is the domain ontomap:
 
-**Vectors.** A vector attribute is a text column holding a JSON array `[{"path":"...","text":"..."},...]`. The write API's insert/update deliberately excludes vector attributes; vectors arrive through `appendVector`/`updateVector`/`deleteVector`, which call `queryVectorAttr` and write back. The adapter must keep the text format exact and return an empty array for null/blank.
+```json
+{
+  "classDef": [
+    {
+      "className": "person",
+      "attrs": [
+        { "name": "id", "type": "varchar", "primaryKey": true, "enable": true },
+        { "name": "name", "type": "varchar", "enable": true },
+        { "name": "age", "type": "int", "enable": true },
+        { "name": "bio", "type": "text", "enable": true },
+        { "name": "org_id", "type": "varchar", "enable": true }
+      ]
+    }
+  ],
+  "relationship_rule": {
+    "works_at": { "fromclass": "person", "toclass": "org", "fromField": "org_id", "toField": "id" }
+  }
+}
+```
 
-## 6. Non-JDBC adapters
+- `classDef[].className` is the plain class name. The read path resolves physical names through
+  the namespace/sandbox; the write path looks up `classDef` by the plain name. Do not pass a
+  prefixed name to a write lookup.
+- `attrs[]` uses `name`, `type`, `primaryKey`, `enable`. Types are `varchar`, `text`, `int`,
+  `long`, `double`, `date`, `timestamp`, `vector` (and the engine's exact scalar names where the
+  semantic layer allows them).
+- `relationship_rule` is keyed by the relation name; each entry has `fromclass`, `toclass`, and,
+  for key-field engines, `fromField`/`toField`. Graph engines ignore the fields and must not fail
+  when they are absent.
 
-The JDBC-shaped methods still exist; make their unsupported status explicit.
+### Namespace is a table-name prefix, not a schema
 
-- `openConnection()` throws `UnsupportedDataAdapterOperationException`.
-- `testConnection()` performs the engine's own probe and returns a meaningful reachable/version message.
-- `JDBC_CONNECTION` is absent from the test capabilities; the suite skips the JDBC probe.
-- Do not construct a non-JDBC adapter through `createForTest`: it passes `jsonRule = null`, and adapters that read class definitions from `jsonRule` will `NullPointerException` on their first DSL query. Build with the caller's real rule.
+This is the single most common wrong assumption. In the relational, search and graph adapters,
+**namespace is a prefix prepended to the class/table name in the current schema or database**. It
+is not a schema, keyspace or database that the adapter creates.
 
-**Elasticsearch / OpenSearch.** One adapter, two types, dialect object (`EsDialect`) for PIT open/close, pit id field and sort tiebreaker. Constraints that shaped the implementation:
+- `createNamespace` is a **no-op** for PostgreSQL, MySQL, SQL Server, DuckDB, Elasticsearch and
+  Neo4j. Do not create a schema or database.
+- `truncateNamespace` reads the current schema (`SELECT current_schema()`, `SELECT DATABASE()`, or
+  `SELECT SCHEMA_NAME()`), lists `information_schema.tables` where `table_type = 'BASE TABLE'`, and
+  deletes rows from every table whose lower-cased name starts with the lower-cased namespace.
+- `dropNamespace` does the same enumeration and drops those tables.
+- `createClass` computes `fullClassName = namespace + classDef.className` **even outside a
+  sandbox**. `insertObjects`, `updateObjects`, `deleteObjects`, `createEdge` and `deleteEdge` use
+  the same rule.
+- `sandboxClassName`/`sandboxObjectId` are the single source of truth for those names. Do not
+  duplicate the prefix rule in `createClass`, `insertObjects` and the read path.
+- For M3 the namespace is a path segment and the parent must exist; for ES it is an index prefix;
+  for Neo4j it is applied through the label/naming helper.
 
-- `index.max_result_window` (default 10000) is below the engine row limit, so use PIT + `search_after`; never `from`/`size` for deep paging.
-- `_shard_doc` is the correct tiebreaker but is unavailable on older ES (for example 7.10.2). Probe once per cluster URL + dialect, fall back to a sortable keyword primary key only on the exact "no mapping for `_shard_doc`" error, and cache the capability. Do not fall back on every 400.
-- Joins are bounded by a materialization budget (`ontomato.es.maxMaterialize`); exceed it with a clear error instead of risking OOM. Prefer `terms` pushdown for a small side, bounded application-side hash join as the fallback, and streaming aggregation.
-- OpenSearch's PIT API and sort rules differ from Elasticsearch's. Put the difference in the dialect, not in `if (isOpenSearch)` branches scattered through the adapter.
+Type maps differ by dialect and are part of the contract, not an implementation detail:
 
-**Neo4j.** Edges are relationships. Translate each pattern into a directed path fragment; a shared center becomes a shared variable. Only the first pattern is used, matching the current planner. Cap `max_hops = -1` at a documented finite value (currently 10). Step 0 emits `MATCH ... WHERE ... WITH`, step 1 emits `RETURN ... [ORDER BY] [SKIP/LIMIT]`; using `RETURN` in step 0 loses the projection. Apply a materialization cap so a large result is rejected rather than loaded into heap.
+| DSL type | PostgreSQL | MySQL | SQL Server | DuckDB |
+| --- | --- | --- | --- | --- |
+| `varchar` | `varchar(200)` | `varchar(255)` | `nvarchar(255)` | `varchar` |
+| `text` | `text` | `longtext` | `nvarchar(max)` | `varchar` |
+| `int` | `int4` | `int` | `int` | `integer` |
+| `long` | `int8` | `bigint` | `bigint` | `bigint` |
+| `double` | `float8` | `double` | `float` | `double` |
+| `date` | `date` | `date` | `date` | `date` |
+| `timestamp` | `timestamp` | `datetime` | `datetime2` | `timestamp` |
+| `vector` | `text` | `longtext` | `nvarchar(max)` | `varchar` |
 
-**M3.** Class names are paths and the parent namespace must exist before a class. Reads need `output.to_user = true` or the answer is `null` with `status: ok`. Object ids are namespace-prefixed on read; normalize on the test side. `dropNamespace` and `createEdge` can report success while doing nothing (undeclared relation field); verify by reading back, and treat a mismatch as a defect rather than as test noise.
+### Objects: exact recipes
 
-## 7. Composite adapters
+**`createClass`**
 
-Only build one when the product asks for multi-source routing. Keep it a facade: it implements `DataAdapter` and delegates, so no downstream call site changes. The hard rules learned from `MultiDataSourceAdapter`:
+1. `fullClassName = namespace + classDef.className`.
+2. Iterate `classDef.attrs`; skip `enable == false`; skip types outside the engine's supported set;
+   map each type with the dialect table above.
+3. Emit `create table <fullClassName> (<field> <type>, ...)`.
+4. Vector is stored as text in every SQL adapter.
 
-- Route from `BusinessConfig.multiDataSource`, not from the ontomap: `SandboxServiceImpl` constructs the adapter with `jsonRule = null`.
-- Build a delegate per call with the caller's real `jsonRule`; do not cache by source id and do not use `createForTest`.
-- Routing is decided by step 0's object classes. Cross-source joins are not a graph query: throw `UNSUPPORTED_CONSTRUCT` with the class-to-source mapping in the detail. Never split a join silently.
-- Rewrite physical edge names on the read path as well as the write path, or a configured `realEdge` name makes graph reads return empty.
-- Domain-level flags (`requiresJoinFields`, `timeConditionsAsEpochMillis`, `timeConditionZone`) must be zero-cost values; each delegate applies its own time conversion internally, so the facade must not convert twice.
-- Validate configuration up front: duplicate routes, unknown sources, nested composites, uninstalled types.
+**`insertObjects`**
 
-## 8. Prove it with the contract suite
+1. `inSandbox = namespace != null && !namespace.isBlank()`;
+   `fullClassName = inSandbox ? namespace + classDef.className : classDef.className`.
+2. Build the field list from **enabled** attrs with supported types; record the index of the
+   `primaryKey` attribute.
+3. If there is no primary key, throw. If an object's primary-key value is null/blank, throw:
+   `The insert statement must contain the primary key [<pk>] field`.
+4. Write only those fields; `null` stays `null`; strings escape single quotes; date/timestamp go
+   through `toSqlValue` with `yyyy-MM-dd` / `yyyy-MM-dd HH:mm:ss`.
+5. Execute the batch; surface the engine's error, do not swallow it.
 
-Every adapter test extends `AbstractDataAdapterTest`. The suite supplies the semantics; the concrete test supplies the environment and the fixture.
+**`updateObjects`**
+
+1. Same `inSandbox`/`fullClassName` rule.
+2. Reject a `setValues` key that is the primary key, and any key not in the enabled attrs.
+3. Build the WHERE with the same condition grammar as the read path (`generateWhere` /
+   `buildWhere`), using the attribute type map so literals are quoted correctly.
+4. Date/timestamp use the same two formats; no epoch conversion.
+5. A zero-row update is a valid outcome; do not turn it into an error unless the calling contract
+   says so.
+
+**`deleteObjects`**
+
+1. Same `inSandbox`/`fullClassName` rule.
+2. `where == null` or empty means delete all rows in the class.
+3. Otherwise build the WHERE with the same condition grammar.
+
+**`createEdge` / `deleteEdge`**
+
+1. Resolve the rule by relation name from `relationship_rule`.
+2. `createEdge` updates the source table row identified by `sourceObjId`, setting `fromField` to
+   `targetObjId`; `deleteEdge` clears that field scoped to the exact pair.
+3. The update predicate is the source primary key, not `toField`; use the rule's field names.
+4. Verify the affected-row count where the driver reports it. A delete of a non-existent edge is
+   idempotent; a create of an edge into a missing row is a lost write and should surface.
+
+### Edges
+
+**Key-field engines** (relational, search):
+
+- A relationship is stored as a field on the source side (`fromField`) pointing at the target's
+  key (`toField`).
+- `createEdge`: update the source row identified by the source id, setting `fromField` to the
+  target id (or update the side the schema names).
+- `deleteEdge`: clear that field, scoped to the exact pair.
+- `requiresJoinFields()` is `true`; do not declare `RELATIONSHIP_EDGES`.
+
+**Relationship-edge engines** (graph):
+
+- `createEdge` creates a real edge; `deleteEdge` deletes it.
+- `fromField`/`toField` are ignored; a relationship definition without them is valid.
+- `requiresJoinFields()` is `false`; declare `RELATIONSHIP_EDGES`; override `seedEdges()` in the
+  test.
+
+### Vectors
+
+A vector attribute is a text column holding `[{"path":"...","text":"..."},...]`. The ordinary
+insert/update path does not write it; `appendVector`/`updateVector`/`deleteVector` call
+`queryVectorAttr` and write the text back. Keep the JSON array format exact; null/blank reads as
+an empty array.
+
+## 7. Non-JDBC engines
+
+### Elasticsearch and OpenSearch
+
+One adapter, two types, one dialect object. `EsAdapterProvider` is abstract with
+`ElasticsearchAdapterProvider` and `OpensearchAdapterProvider` subclasses pinning the dialect.
+`EsDialect` owns every difference:
+
+| Concern | Elasticsearch | OpenSearch |
+| --- | --- | --- |
+| Open PIT | `POST /<index>/_pit` | `POST /<index>/_search/point_in_time` |
+| PIT id key | `id` | `pit_id` |
+| Close PIT | `DELETE /_pit` body `{"id": ...}` | `DELETE /_search/point_in_time` body `{"pit_id": [...]}` |
+| Sort tiebreaker | `_shard_doc`, or a keyword primary key when `_shard_doc` is unavailable | keyword primary key (`_shard_doc` is rejected on older versions) |
+
+Implementation rules:
+
+- `index.max_result_window` (default 10000) is below the engine row cap. Use PIT +
+  `search_after`; never `from`/`size` for deep paging.
+- `_shard_doc` is the official tiebreaker but is absent on older ES (7.10.2 is a known case).
+  Probe once per cluster URL + dialect; on the exact "No mapping found for [_shard_doc]" error,
+  fall back to a sortable `keyword` primary key and cache the capability. Do not retry every 400.
+- Bound join materialization with `ontomato.es.maxMaterialize` (default 100000) and throw a clear
+  error when exceeded. Prefer `terms` pushdown for a small side; use a bounded application-side
+  hash join only as a fallback; stream aggregation.
+- A multi-hop/variable-length relationship is out of scope for the first version; one hop is.
+- `truncateNamespace`/`dropNamespace` enumerate indices by prefix and delete them; do not assume
+  the engine has schemas.
+- `createClass` creates an index with explicit mappings; keyword fields for ids and join keys.
+
+#### Concrete PIT / fallback algorithm
+
+1. Resolve the class primary key from `classDef`; verify it is a `keyword` field with
+   `_field_caps`. If it is not, a `_shard_doc` failure has no safe fallback — throw a clear error.
+2. Open a PIT for the index with `keep_alive=1m`; use `EsDialect.openPitPath` and `parsePitId`.
+3. First page: `sort = EsDialect.pitSort(null)` (ES `_shard_doc`; OpenSearch primary key).
+4. On `HTTP 400` whose body contains exactly `No mapping found for [_shard_doc]`, mark the cluster
+   URL + dialect as `_shard_doc`-less, **reopen the PIT**, and retry the same page with
+   `EsDialect.pitSort(primaryKey)`. Do not rethrow the probe error.
+5. Any other 400 is a real error: rethrow with the body.
+6. Cache the capability in a static `ConcurrentHashMap` keyed by URL + dialect; a later query skips
+   the failing probe.
+7. Walk pages with `search_after`; stop at the requested size or an empty page; always close the
+   PIT in `finally`.
+
+#### Join budget pipeline
+
+1. Single object: one `_search` with the condition `bool`.
+2. Before a join, `_count` each side to estimate cardinality.
+3. Order joins small-side-first; build a hash set on the small side.
+4. If the small side fits `index.max_terms_count` (default 65536), push `terms` into the large side
+   and avoid materializing it. Otherwise use the bounded application-side hash join.
+5. The materialized row budget is `ontomato.es.maxMaterialize` (default 100000). Exceeding it is a
+   clear error, never an OOM.
+6. Aggregations stream: hold only the grouping key and the accumulator, not all rows.
+7. A multi-hop relationship is one hop in v1; anything else is `UNSUPPORTED_CONSTRUCT`.
+
+### Neo4j
+
+- `openConnection()` throws; `testConnection()` runs `RETURN 1` and `CALL db.labels()` and returns
+  a catalog report (`kind`, `databaseProduct`, `catalog`, `schema`, `tables`, `elapsedMs`).
+- Classes map to node labels, objects to nodes, relationships to real edges.
+- Read path: each object becomes a node pattern; each relationship becomes a directed path
+  fragment; a star sharing a center uses the same variable. `type:["*"]` is any type; multiple
+  types use `-[:a|b*min..max]->`; `max_hops = -1` is capped at 10.
+- Two steps: step 0 emits `MATCH ... WHERE ... WITH <projected aliases>`, step 1 emits
+  `RETURN <aggregation> [ORDER BY] [SKIP/LIMIT]`. Using `RETURN` in step 0 loses the projection.
+- Bound materialization (`ontomato.neo4j.maxMaterialize`, default 100000); throw rather than load
+  a huge result into heap.
+- `insertObjects` writes only `classDef` attributes; there is no separate edge column.
+- Capabilities: `FULL` minus `JDBC_CONNECTION`, plus `RELATIONSHIP_EDGES` (and `SAMPLE_DATA`,
+  `EDGE_CRUD`, `GRAPH_QUERY`, `VECTOR_ATTR`).
+- Relationship details: `type` may contain several names. Render one type as `-[:a]->`, several as
+  `-[:a|b]->`, and `["*"]` as `-[]->` (any type). `min_hops`/`max_hops` default to 1; `max_hops =
+  -1` becomes `*min..10` (`MAX_HOPS = 10`).
+- A star pattern shares the center variable: the first occurrence carries the label, later
+  occurrences reuse the variable without repeating it.
+- Labels: the class name is the label; the namespace is applied through the sandbox naming helper,
+  not as a `_ns` property. Do not invent a property-based namespace.
+- Two-step: step 0 projects aliases with `WITH`; step 1 aggregates with `RETURN`. In step 1, a field
+  whose `variable` equals the intermediate object name has that prefix stripped before rendering.
+
+### M3
+
+- Class names are paths (`/<ns>/<class>`); the parent namespace must exist before `createClass`.
+- Reads require `output.to_user = true`; otherwise the response is `status: ok` with `answer: null`.
+- Object ids are namespace-prefixed on read; normalize in the test.
+- `dropNamespace` and `createEdge` can report success while doing nothing (a drop with data, or an
+  edge into an undeclared relation field). Read back and treat a mismatch as a defect.
+- `timeConditionsAsEpochMillis()` is `true`; define the zone.
+- Capabilities: `FULL` minus `JDBC_CONNECTION` and `EDGE_CRUD`; `sourceRendersTimeseries()` is
+  `true`.
+- The row cap must still be applied and reported.
+
+## 8. Unit tests: the shared contract suite
+
+Every adapter test extends `AbstractDataAdapterTest`. Supply the environment and the fixture; the
+suite supplies the semantics.
 
 ```java
 class FooAdapterTest extends AbstractDataAdapterTest {
 
+    private static final String EXTERNAL_URL = System.getenv("ONTOMATO_TEST_FOO_URL");
+    private static String url;
+    private final String ns = "it_" + System.nanoTime() + "_";
+
+    @BeforeAll
+    static void startDatabase() {
+        if (EXTERNAL_URL != null) {
+            url = EXTERNAL_URL;
+            return;
+        }
+        assumeTrue(dockerAvailable(),
+                "Docker is not running and ONTOMATO_TEST_FOO_URL is not set; skipping Foo contract tests");
+        // start the engine's Testcontainers container, assign url/user/password
+    }
+
     @Override protected DataAdapter newAdapter(JSONObject jsonRule) {
-        return new FooAdapter(connection(), jsonRule);
+        DataAdapterConnection c = new DataAdapterConnection();
+        c.setUrl(url);
+        c.setUser(user);
+        c.setPassword(password);
+        return new FooAdapter(c, jsonRule);
     }
 
     @Override protected Set<DataAdapterCapability> capabilities() {
-        return DataAdapterCapability.FULL;           // or READ_ONLY, or a custom set
+        return DataAdapterCapability.FULL;
     }
 
-    @Override protected String namespace() { return "ontomato_test_foo"; }
+    @Override protected String namespace() { return ns; }
+    @Override protected String primaryKey() { return "id"; }
 
-    @Override protected JSONObject classDef() { /* one primary key + every scalar type */ }
+    @Override protected JSONObject classDef() {
+        JSONObject def = new JSONObject();
+        def.put("className", "person");
+        JSONArray attrs = new JSONArray();
+        attrs.add(attr("id", "varchar", true));
+        attrs.add(attr("name", "varchar", false));
+        attrs.add(attr("bio", "text", false));
+        attrs.add(attr("age", "int", false));
+        attrs.add(attr("score", "long", false));
+        attrs.add(attr("height", "double", false));
+        attrs.add(attr("birthday", "date", false));
+        attrs.add(attr("created_at", "timestamp", false));
+        def.put("attrs", attrs);
+        return def;
+    }
 
-    @Override protected JSONArray testObjects() { /* rows used by CRUD tests */ }
-
-    // Graph fixtures: three classes, two relationships, seed objects.
-    @Override protected List<JSONObject> graphClassDefs() { ... }
-    @Override protected JSONObject relationshipRule() { ... }
-    @Override protected Map<String, JSONArray> graphSeed() { ... }
+    @Override protected JSONArray testObjects() { return /* five rows */; }
+    @Override protected List<JSONObject> graphClassDefs() { return /* three classes */; }
+    @Override protected JSONObject relationshipRule() { return /* relation -> fromclass/toclass/fromField/toField */; }
+    @Override protected Map<String, JSONArray> graphSeed() { return /* per class rows */; }
+    // Relationship-edge adapter only:
+    @Override protected List<SeedEdge> seedEdges() {
+        return List.of(new SeedEdge("works_at", 0, "p1", 1, "c1"));
+    }
 }
 ```
 
-Capability declaration is a promise, not a convenience. `FULL` includes `JDBC_CONNECTION`, `READ_QUERY`, `SAMPLE_DATA`, `NAMESPACE_LIFECYCLE`, `CLASS_SCHEMA`, `OBJECT_CRUD`, `EDGE_CRUD`, `GRAPH_QUERY`, `VECTOR_ATTR`; it deliberately excludes `RELATIONSHIP_EDGES`. `READ_ONLY` is `JDBC_CONNECTION`, `READ_QUERY`, `SAMPLE_DATA`. Declaring `EDGE_CRUD` when the engine cannot create the relationship field makes the suite fail — correctly.
+Fixture contract:
 
-Environment contract:
+- `namespace()` must be unique per test instance (`"it_" + System.nanoTime() + "_"`), not a fixed
+  literal. The suite creates and drops its own tables.
+- `classDef()` uses `className` + `attrs`; one primary key (`varchar`) and one attribute of every
+  scalar the adapter supports. `attr(name, type, primaryKey)` is a suite helper.
+- `testObjects()` must include a null string, a quoted string, every scalar type, a date and a
+  timestamp.
+- `graphClassDefs()` is three classes in `person → org → project` order. `graphSeed()` carries
+  populated join fields for key-field adapters. Relationship-edge adapters return
+  `relationshipRule()` without `fromField`/`toField` and override `seedEdges()`.
+- `graphClassDefsWithTime()`, `firstRelation()`, `secondRelation()`, `graphRule()`,
+  `prefixedGraphRule()` and `seedGraph()` are provided by the suite; do not duplicate them.
+- Missing Docker/external URL is a **skip**, never a failure.
 
-- `newAdapter` decides where the engine comes from: Testcontainers, an external URL from `ONTOMATO_TEST_<ENGINE>_URL` / `_USER` / `_PASSWORD`, or an embedded file (DuckDB). Missing external configuration is a **skip**, not a failure.
-- `namespace()` must be unique per run; the suite creates and drops its own tables.
-- The fixture must cover every scalar type the adapter claims, a date and a timestamp column, and populated join fields.
-- Keep adapter-specific tests outside the shared suite: protocol/HTTP behavior, dialect differences, scale bounds, capability probing. The suite proves semantics; it does not prove your engine adapter.
+Capability sets:
 
-Commands (root has the Maven wrapper; the enterprise repository has no wrapper, so point `-f` at its pom):
+| Kind | Capabilities |
+| --- | --- |
+| Full relational | `DataAdapterCapability.FULL` |
+| Read-only relational | `READ_ONLY` (`JDBC_CONNECTION`, `READ_QUERY`, `SAMPLE_DATA`) |
+| Neo4j | `FULL` − `JDBC_CONNECTION` + `RELATIONSHIP_EDGES` |
+| Elasticsearch/OpenSearch | `FULL` − `JDBC_CONNECTION` (no `RELATIONSHIP_EDGES`) |
+| M3 | `FULL` − `JDBC_CONNECTION` − `EDGE_CRUD`; `sourceRendersTimeseries() = true` |
+
+Add adapter-specific tests outside the shared suite for protocol behavior, dialect differences,
+scale bounds and capability probing. The suite proves semantics; it does not prove your protocol.
+
+### Test environment matrix
+
+| Engine | External URL override | Container image |
+| --- | --- | --- |
+| PostgreSQL | `ONTOMATO_TEST_PG_URL`, `_USER`, `_PASSWORD` | `postgres:16-alpine` |
+| MySQL | `ONTOMATO_TEST_MYSQL_URL`, `_USER`, `_PASSWORD` | MySQL 8 |
+| SQL Server | `ONTOMATO_TEST_MSSQL_URL`, `_USER`, `_PASSWORD` | `mcr.microsoft.com/mssql/server` |
+| DuckDB | embedded file; no external URL | none |
+| Neo4j | `ONTOMATO_TEST_NEO4J_URL`, `_USER`, `_PASSWORD` | `neo4j:5.26.0` |
+| Elasticsearch | `ONTOMATO_TEST_ES_URL`, `_USER`, `_PASSWORD` | `ONTOMATO_TEST_ES_IMAGE` (default ES 9.x) |
+| OpenSearch | same ES variables + `ONTOMATO_TEST_ES_DIALECT=opensearch` | OpenSearch 2.19 |
+
+The JDBC URL for SQL Server testing needs
+`encrypt=false;trustServerCertificate=true`. DuckDB uses `jdbc:duckdb:/absolute/path/file.duckdb`
+(a bare path fails with `No suitable driver`).
+
+Commands:
 
 ```bash
-# one adapter, with its dependencies
+# one adapter with its dependencies
 ./mvnw -pl packages/data-adapters/foo -am test -Dtest=FooAdapterTest \
   -Dsurefire.failIfNoSpecifiedTests=false
 
-# whole module, including extra tests
+# whole module
 ./mvnw -pl packages/data-adapters/foo -am test
 
-# against an external engine instead of a container
-ONTOMATO_TEST_FOO_URL=jdbc:foo://127.0.0.1:1234/db \
-ONTOMATO_TEST_FOO_USER=test ONTOMATO_TEST_FOO_PASSWORD=test \
+# external engine
+ONTOMATO_TEST_FOO_URL=... ONTOMATO_TEST_FOO_USER=... ONTOMATO_TEST_FOO_PASSWORD=... \
 ./mvnw -pl packages/data-adapters/foo -am test -Dtest=FooAdapterTest
 ```
 
-Read `target/surefire-reports/TEST-*.xml` for the real counts. Report `tests run / failures / errors / skipped`; a skip caused by a missing engine is not a pass.
+The enterprise repository has no Maven wrapper; run the public wrapper with `-f` pointing at the
+enterprise pom. Read `target/surefire-reports/TEST-*.xml` for counts. Report
+`tests run / failures / errors / skipped`; explain every skip.
 
-## 9. Field notes and traps
+## 9. Frontend configuration
 
-- **`information_schema` labels.** MySQL and SQL Server return `TABLE_NAME`, not `table_name`. `getString("table_name")` returns null and the loop silently does nothing. Alias every metadata column to the exact lowercase name you read.
-- **Stale test classes.** Deleting a test source does not remove its `.class` from `target/test-classes`; Surefire still runs it. `rm -rf target` after moving or deleting tests.
-- **Masked environment values.** Long generated Java can contain `***` where a secret-shaped literal was masked during editing. Grep for `\*\*\*` before compiling.
-- **`-pl` without `-am`.** The parent uses `${revision}`, so a single-module build cannot resolve siblings. Always `-am`; install first if you switch to `-pl` alone.
-- **`-Dtest` with `-am`.** Modules without a matching test fail the reactor. Add `-Dsurefire.failIfNoSpecifiedTests=false`.
-- **Container registries.** Docker Hub is unreachable in the development network; use `docker.m.daocloud.io` for PostgreSQL/MySQL/Neo4j, `docker.elastic.co` for Elasticsearch, `mcr.microsoft.com` for SQL Server (slow without VPN). Remove test containers and images afterwards; disk is limited.
-- **Long runs look dead.** An absent Surefire report right after a poll does not mean the process was killed. Wait for completion and check the XML; ES image pulls and M3 suites take minutes.
-- **Generated MQL/DSL debugging.** When a real environment fails, capture the exact request and response before changing code. For M3, a portal HTML response almost always means wrong auth headers, not a missing endpoint.
-- **Read/write naming split.** The single most common silent bug: read path uses the prefixed class name, write path looks up the plain one. Assert both directions in a real query.
-- **Version drift on the engine.** Capability probing belongs in the adapter (ES `_shard_doc`, M3 `to_user`), not in deployment notes. A supported version range stated only in documentation will be violated.
+The configuration page is entirely metadata-driven. A new adapter requires **no Vue edit**.
 
-## 10. Review gate
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /businessConfig/dataAdapters` | Returns `{currentType, adapters:[{type,label,requiresJoinFields,fields,examples}]}` |
+| `POST /businessConfig/useDataAdapter` | Saves `{type,url,company,user,password}` for the selected type; only declared fields are read |
+| `POST /businessConfig/testDataAdapter` | Builds a throwaway adapter from the posted values and returns `data` from `testConnection()` |
 
-Before declaring an adapter finished:
+What the page does with your provider metadata:
 
-- [ ] Module registered in the root pom **and** the application pom.
-- [ ] `type()` stable, provider has no duplicate, `create` forwards the real `jsonRule`.
-- [ ] Every `DataAdapter` method is implemented or throws a typed unsupported error; no empty success.
-- [ ] Read path handles every condition/output construct or throws a located violation; contract exceptions pass through `catch`.
-- [ ] Terminal row limit returns `truncated` rather than a short row set.
-- [ ] Time conditions are literals unless the engine requires epoch millis, with the zone defined.
-- [ ] Edge representation is single and declared; relationship-edge adapters ignore `fromField`/`toField`.
-- [ ] Write path verifies engine responses; no success assumed from HTTP 200 alone.
-- [ ] Contract suite run against a real engine; counts recorded, skips explained.
-- [ ] Adapter-specific tests cover the engine's dialect and bounds.
-- [ ] README or adapter javadoc states the supported engine versions and the known limits.
+- `BusinessConfig.vue` fills the adapter select from `label` and shows the saved type.
+- `DataAdapterConfigCard.vue` renders one input per entry in `fields`, with `examples` as hints and
+  `requiresJoinFields` controlling the relationship-field guidance.
+- `adapterDisplay` (`labelWidth`, `urlSpan`, `credentialSpan`) is an edition-level layout prop; do
+  not add per-adapter layout code.
+- `testConnection()` drives the "Test connection" result panel. Return a useful report:
+  `kind`, `databaseProduct`, `databaseVersion`, `driverName`, `driverVersion`, `catalog`,
+  `schema`, `tables:[{name,type}]`, `elapsedMs` for catalog-style sources; the JDBC tester already
+  does this for JDBC adapters.
+
+Checklist for the UI:
+
+- `type` is stable and lowercase; `label` is human-readable and distinct.
+- `connectionFields` covers exactly what the input must collect; no hidden fields.
+- `connectionExamples` are realistic and contain no credentials.
+- For a search engine, the test report lists indices as `tables` so the user can see the catalog.
+- For a graph engine, `CALL db.labels()` supplies the table list.
+- No adapter-specific branch is added to `BusinessConfig.vue` or `DataAdapterConfigCard.vue`.
+
+## 10. Field notes and traps
+
+- **DSL root**: `answer.steps`, `graph.patterns[0]`, `objects[].variable`, relationship `from`/`to`
+  indices, `type` array. The request is an array.
+- **Response**: `[{answer, mqls, truncated?, rowLimit?, truncationHint?}]`, `WriteMapNullValue`.
+- **`catch` flattening**: always rethrow `DslContractViolationException` first.
+- **`information_schema` labels**: MySQL/SQL Server return `TABLE_NAME`; alias to lowercase
+  `table_name` or the loop silently does nothing.
+- **Read/write class naming**: read path uses the resolved physical name; write path looks up
+  `classDef` by the plain class name. Mixing them silently finds nothing.
+- **`like`**: the read path adds `%...%` when the value has no wildcard; the write path's `buildWhere`
+  does not. Match the suite.
+- **`distinct`**: only the first distinct projection field is rendered as `distinct`.
+- **Row cap**: terminal step only, `cap+1` probe, report `truncated`; an explicit limit is not a
+  truncation.
+- **Time**: literals by default; textual read-back; epoch millis only for M3; DuckDB `INT32`
+  overflow and GaussDB millis-as-seconds are known failure modes.
+- **Stale test classes**: deleting a test source leaves its `.class` in `target/test-classes`;
+  `rm -rf target` after moving/deleting tests.
+- **Masked values**: grep for `***` after generating large Java; a masked secret-shaped literal
+  becomes a compile error.
+- **`-pl` without `-am`**: the parent uses `${revision}`; always `-am`.
+- **`-Dtest` with `-am`**: add `-Dsurefire.failIfNoSpecifiedTests=false`.
+- **Registries**: Docker Hub is unreachable in the development network; use
+  `docker.m.daocloud.io` for PostgreSQL/MySQL/Neo4j, `docker.elastic.co` for Elasticsearch,
+  `mcr.microsoft.com` for SQL Server. Remove containers and images after testing.
+- **Long runs look dead**: an absent Surefire report immediately after a poll is not a killed
+  process. Wait for completion and read the XML.
+- **M3**: `to_user=true`; parent namespace first; drop/createEdge may report success without doing
+  anything; ids are prefixed.
+- **ES**: PIT + `search_after`; `_shard_doc` capability probe and keyword fallback; OpenSearch PIT
+  path/id/close body differ; `max_result_window` is 10000.
+- **Neo4j**: one directed path per relationship; `WITH` in step 0; `max_hops=-1` capped at 10.
+- **Multi-source**: route from `BusinessConfig`, build delegates with the caller's real `jsonRule`,
+  route step 0 only, reject cross-source joins with `UNSUPPORTED_CONSTRUCT`, rewrite physical edge
+  names on read and write.
+
+## 11. Review gate
+
+- [ ] Module in root pom **and** application pom.
+- [ ] `type()` stable; provider test asserts type/label/join-fields/fields/examples.
+- [ ] Provider `create` forwards the real `jsonRule`.
+- [ ] Every `DataAdapter` method implemented or throws a typed unsupported error.
+- [ ] Request envelope, step shape, conditions, operators, output and response envelope match the
+      contract above.
+- [ ] Contract exceptions pass through `catch`; unknown operators/fields/timeseries are rejected.
+- [ ] Terminal row cap uses `DslRowLimit` and reports `truncated`.
+- [ ] Time values use literals by default, with textual read-back.
+- [ ] One edge representation, declared through capabilities; relationship-edge adapters ignore
+      `fromField`/`toField` and override `seedEdges()`.
+- [ ] Write path writes only declared attributes and rejects primary-key/unknown-field updates.
+- [ ] Contract suite run against a real engine; counts recorded; skips explained.
+- [ ] Provider metadata is sufficient for the configuration page; no Vue change.
+- [ ] Adapter-specific tests cover the protocol, dialect and bounds.
