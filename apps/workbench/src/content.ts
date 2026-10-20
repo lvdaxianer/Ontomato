@@ -4,7 +4,7 @@ import { workbenchServerResourceRoot } from "@ontomato/workbench-server/content/
 
 const shared = (...segments: string[]) => path.join(workbenchServerResourceRoot, ...segments);
 
-/** The OSS edition uses only the shared package's built-in English default resources. */
+/** The OSS edition uses the shared package's built-in runtime resources; the app entry configures UI language packs. */
 export function ossContentLayout(runtimeRoot: string): ContentLayout {
   return {
     runtimeRoot,

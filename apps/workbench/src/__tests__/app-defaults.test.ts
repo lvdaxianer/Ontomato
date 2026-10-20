@@ -15,6 +15,13 @@ import {
   installWorkbenchProduct,
 } from "@ontomato/workbench-server";
 import { buildHeaders, getApiConfig } from "@ontomato/workbench-server/config/data-query-api";
+import {
+  getDefaultLocale,
+  getOutputLanguageInstruction,
+  getLanguageName,
+  languageSwitchEnabled,
+  setLocale,
+} from "@ontomato/workbench-server/i18n/index";
 import { batchAppendChartFieldMapper } from "@ontomato/workbench-server/services/dashboard/planning/core/chart-recommender";
 import { datasetSchemaService } from "@ontomato/workbench-server/services/data-query/dataset-schema";
 import { runWithLogContext } from "@ontomato/workbench-server/logging/log-context";
@@ -43,6 +50,18 @@ afterEach(() => {
 afterAll(() => fs.rmSync(runtimeRoot, { recursive: true, force: true }));
 
 describe("open-source application defaults", () => {
+  it("starts in Simplified Chinese and keeps English selectable", () => {
+    expect(getDefaultLocale()).toBe("zh-CN");
+    expect(languageSwitchEnabled()).toBe(true);
+    expect(getLanguageName("zh-CN")).toBe("简体中文");
+    expect(getLanguageName("en")).toBe("English");
+    expect(getOutputLanguageInstruction()).toContain("简体中文");
+
+    setLocale("en");
+    expect(buildHeaders(getApiConfig())["Accept-Language"]).toBe("en");
+    setLocale("zh-CN");
+  });
+
   it("provides default system model config with harness mode and default timeout", () => {
     expect(getSystemModelConfig("oss-domain")).toEqual({
       abcQuestionMode: "harness",
@@ -50,9 +69,10 @@ describe("open-source application defaults", () => {
     });
   });
 
-  it("always asks DataRAG for English, even when the caller passes another locale", () => {
-    expect(buildHeaders(getApiConfig(), undefined, undefined, "zh-CN")["Accept-Language"]).toBe("en");
-    expect(buildHeaders(getApiConfig())["Accept-Language"]).toBe("en");
+  it("asks DataRAG for the active Chinese locale by default", () => {
+    expect(buildHeaders(getApiConfig(), undefined, undefined, "en")["Accept-Language"]).toBe("en");
+    setLocale("zh-CN");
+    expect(buildHeaders(getApiConfig())["Accept-Language"]).toBe("zh-CN");
   });
 
   it("strips chart field annotations with the open-source parenthesis rule", async () => {
