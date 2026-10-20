@@ -92,9 +92,10 @@ export function buildBundle(options, { name, deployDir, installDir, images, vali
     ...(process.env.REGISTRY_AUTH_FILE ? ["--authfile", resolve(process.env.REGISTRY_AUTH_FILE)] : []),
   ]);
 
-  const archive = `${staging}.tar.gz`;
+  // Not gzipped: package/mirror_*.tar already holds compressed layers, so gzip barely shrinks it but costs a lot of CPU.
+  const archive = `${staging}.tar`;
   rmSync(archive, { force: true });
-  execute("tar", ["--no-xattrs", "--exclude=.DS_Store", "--exclude=__pycache__", "--exclude=*.pyc", "-czf", archive, "-C", bundleRoot, base], {
+  execute("tar", ["--no-xattrs", "--exclude=.DS_Store", "--exclude=__pycache__", "--exclude=*.pyc", "-cf", archive, "-C", bundleRoot, base], {
     env: { ...process.env, COPYFILE_DISABLE: "1" },
   });
   console.log(`BUNDLE_TAR=${archive}`);

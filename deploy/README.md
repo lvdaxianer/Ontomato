@@ -58,7 +58,7 @@ Each product image is checked for the expected architecture, component and versi
 then resolved to an immutable platform digest. `REGISTRY_AUTH_FILE` can point to
 an oc-mirror-compatible auth JSON; credentials are never copied into a delivery.
 
-The result is `.build/bundle/ontomato-<version>-<time>-<arch>.tar.gz`, including
+The result is `.build/bundle/ontomato-<version>-<time>-<arch>.tar`, including
 this deployment template, `offline/` and `package/`. `package/mirror_*.tar` files
 are oc-mirror's own archives. The initial `bootstrap.tar.gz` contains Registry 3.1.2
 and the pinned oc-mirror 4.22.17 tool image. Subsequent packages omit bootstrap.
