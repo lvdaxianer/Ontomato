@@ -62,6 +62,8 @@ The result is `.build/bundle/ontomato-<version>-<time>-<arch>.tar.gz`, including
 this deployment template, `offline/` and `package/`. `package/mirror_*.tar` files
 are oc-mirror's own archives. The initial `bootstrap.tar.gz` contains Registry 3.1.2
 and the pinned oc-mirror 4.22.17 tool image. Subsequent packages omit bootstrap.
+The Registry is pinned by digest; the bundle option `--registry-repository`
+(default `docker.io/library/registry`) only chooses which repository serves that digest.
 Do not use `docker load` on `mirror_*.tar`.
 
 On the disconnected machine, extract the first bundle and run:

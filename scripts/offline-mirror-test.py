@@ -126,7 +126,8 @@ class DeliveryTests(unittest.TestCase):
         refs = list(self.data["images"].values())
         return SimpleNamespace(state=self.root / "state", output=self.root / "exported", arch="arm64",
                                version="4.0.1", workbench=refs[0], data_engine=refs[1], manager=refs[2],
-                               postgres=refs[3], bootstrap=False, insecure_source=False, network=None, authfile=None)
+                               postgres=refs[3], bootstrap=False, insecure_source=False, network=None, authfile=None,
+                               registry_repository=mirror.REGISTRY_REPOSITORY)
 
     def test_export_rejects_mutable_tag_before_creating_state(self):
         args = self.export_args()
@@ -157,10 +158,11 @@ class DeliveryTests(unittest.TestCase):
     def test_cross_architecture_export_runs_the_engine_tool_and_ships_the_target_tool(self):
         args = self.export_args()
         args.bootstrap = True
+        args.registry_repository = "mirror.example.com/copies/registry"
         def write_archive(*_):
             (args.state / "export").mkdir()
             (args.state / "export/mirror_000001.tar").write_bytes(b"archive")
-        def save(tool, target, arch):
+        def save(tool, target, arch, registry_repository):
             target.write_bytes(b"bootstrap")
             return "ontomato-offline-registry:3.1.2-" + arch
         with patch.object(mirror, "engine_arch", return_value="amd64"), \
@@ -171,7 +173,15 @@ class DeliveryTests(unittest.TestCase):
         self.assertEqual([call.args[1] for call in tool.call_args_list], ["amd64", "arm64"])
         self.assertEqual(invoke.call_args.args[0], mirror.tool_image("amd64"))
         self.assertEqual(bootstrap.call_args.args[0], mirror.tool_image("arm64"))
+        self.assertEqual(bootstrap.call_args.args[3], "mirror.example.com/copies/registry")
         self.assertEqual(mirror.verify_bundle(args.output)["tool"], mirror.tool_image("arm64"))
+
+    def test_bootstrap_registry_keeps_the_pinned_digest_from_any_repository(self):
+        with patch.object(mirror, "resolve_image", side_effect=ValueError("stop")) as resolve, \
+                self.assertRaisesRegex(ValueError, "stop"):
+            mirror.save_bootstrap("tool", self.root / "bootstrap.tar.gz", "arm64", "mirror.example.com/copies/registry")
+        self.assertEqual(resolve.call_args.args, ("mirror.example.com/copies/registry@" + mirror.REGISTRY_DIGEST, "arm64"))
+        self.assertEqual(mirror.REGISTRY_REPOSITORY, "docker.io/library/registry")
 
     def test_tool_build_runs_no_target_architecture_instruction(self):
         _, unpack, final = (Path(mirror.HERE) / "Dockerfile").read_text().split("\nFROM ")

@@ -13,7 +13,9 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 TOOL_VERSION = "4.22.17"
 TOOL_IMAGE = "ontomato-oc-mirror:" + TOOL_VERSION
-REGISTRY_IMAGE = "registry@sha256:ddf754342cfc8acc51a56d5d0ab6af06826461864460636d8bd5c546dab2a7b8"
+# The bootstrap Registry is pinned by digest; only the repository serving it may vary (e.g. a mirror copy).
+REGISTRY_DIGEST = "sha256:ddf754342cfc8acc51a56d5d0ab6af06826461864460636d8bd5c546dab2a7b8"
+REGISTRY_REPOSITORY = "docker.io/library/registry"
 TOOL_SHA = {
     "amd64": "2a2e3a3be56a5a44fca7c1e9249e7ed32a9dbf04c67225281c232b1cc31afe42",
     "arm64": "1d1c755a7581e6bfbeab0198c6ad4349f2761918d53a88523e105e7362c14e5e",
@@ -123,8 +125,8 @@ def mirror(tool, state, args, network=None, authfile=None):
     run(command + [tool, "--cache-dir", "/work/cache", "--remove-signatures"] + args)
 
 
-def save_bootstrap(tool, target, arch):
-    registry_ref = resolve_image("docker.io/library/" + REGISTRY_IMAGE, arch)
+def save_bootstrap(tool, target, arch, registry_repository):
+    registry_ref = resolve_image(registry_repository + "@" + REGISTRY_DIGEST, arch)
     # A tag survives docker save/load; digest-only references do not on every engine.
     registry_tag = "ontomato-offline-registry:3.1.2-" + arch
     run(["docker", "tag", registry_ref, registry_tag])
@@ -164,7 +166,8 @@ def export(args):
     tool = tool_image(args.arch)
     registry_tag = "ontomato-offline-registry:3.1.2-" + args.arch
     if args.bootstrap:
-        registry_tag = save_bootstrap(ensure_tool(state, args.arch), state / "bootstrap.tar.gz", args.arch)
+        registry_tag = save_bootstrap(ensure_tool(state, args.arch), state / "bootstrap.tar.gz", args.arch,
+                                      args.registry_repository)
     flags = ["-c", "/work/imageset.yaml"]
     if args.insecure_source:
         flags += ["--src-tls-verify=false"]
@@ -258,6 +261,8 @@ def main():
     for name in ("state", "output", "version"):
         exp.add_argument("--" + name, required=True)
     exp.add_argument("--bootstrap", action="store_true", help="Include Registry and oc-mirror images for a first installation")
+    exp.add_argument("--registry-repository", default=REGISTRY_REPOSITORY,
+                     help="Repository serving the pinned bootstrap Registry digest")
     exp.add_argument("--authfile", help="Container auth JSON with inline credentials; never copied to a delivery")
     exp.add_argument("--network", help="Docker network for the exporter")
     exp.add_argument("--insecure-source", action="store_true")
