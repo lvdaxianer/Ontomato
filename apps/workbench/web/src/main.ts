@@ -4,8 +4,10 @@ import "./theme.css";
 import "@ontomato/workbench-ui/styles/style.css";
 import "./narrow-dialogs.css";
 import "@ontomato/workbench-ui/styles/admin-common.css";
+import zhCn from "element-plus/es/locale/lang/zh-cn";
 import en from "element-plus/es/locale/lang/en";
 import publicEn from "@ontomato/workbench-ui/locales/en";
+import publicZhCn from "@ontomato/workbench-ui/locales/zh-CN";
 import {
   adminGroups,
   AdminLayout,
@@ -57,22 +59,22 @@ const adminLayout: AdminLayoutConfig = {
 
 startWorkbenchWeb({
   language: {
-    supported: ["en"],
-    defaultLocale: "en",
-    initialLocale: "en",
-    switchEnabled: false,
+    supported: ["zh-CN", "en"],
+    defaultLocale: "zh-CN",
+    initialLocale: "zh-CN",
+    switchEnabled: true,
     save: null,
-    messages: { en: publicEn },
-    elementLocale: () => en,
+    messages: { "zh-CN": publicZhCn, en: publicEn },
+    elementLocale: (locale) => (locale === "zh-CN" ? zhCn : en),
   },
   auth: anonymousAuthHost,
   errorPunctuation: { detailSeparator: ":", listSeparator: ";" },
   ontologyManagerEntry: {
     themeMessage: "ontomato-theme",
     localeMessage: null,
-    frameTitle: "Ontology Manager",
-    missingUrlTitle: "Ontology manager address not configured",
-    missingUrlDescription: "Please set ONTOLOGY_MANAGER_URL in the Ontomato service and redeploy.",
+    frameTitle: "本体管理器",
+    missingUrlTitle: "未配置本体管理器地址",
+    missingUrlDescription: "请在 Ontomato 服务中设置 ONTOLOGY_MANAGER_URL 后重新部署。",
   },
   content: workbenchContent,
   // The open-source /observe has no permission gate: the turn diagnosis entry is visible to all users.
