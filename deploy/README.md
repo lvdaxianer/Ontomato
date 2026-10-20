@@ -125,8 +125,11 @@ LDAP, company sync, SSO, service/node ID, card URL, data adapter and production
 connection by removing that prefix in `.env` **and** its `${...}` placeholders in
 `backend_data/conf/application.yml` (locally `apps/data-engine/.dev/conf/application.yml`).
 `POSTGRE_USER_NAME` / `POSTGRE_PASSWORD` become `POSTGRES_USER` / `POSTGRES_PASSWORD`;
-`POSTGRE_JDBC_URL` / `POSTGRE_DRIVER_CLASS` become `DATA_ENGINE_JDBC_URL` /
-`DATA_ENGINE_JDBC_DRIVER`. Keep customized values and resolve duplicate keys before restarting.
+`POSTGRE_DRIVER_CLASS` becomes `DATA_ENGINE_JDBC_DRIVER`. In `application.yml`, replace
+`url: ${POSTGRE_JDBC_URL:}` with the template line
+`url: ${DATA_ENGINE_JDBC_URL:jdbc:postgresql://${POSTGRES_HOST:localhost}:${POSTGRES_PORT:5432}/datarag}`;
+renaming the placeholder alone leaves the URL empty, because Compose no longer injects one.
+Keep customized values and resolve duplicate keys before restarting.
 The JDBC override is only needed for a nonstandard database connection; otherwise both
 clients use `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_USER`, `POSTGRES_PASSWORD`.
 The workbench retains its own database, and Java retains `datarag`.
