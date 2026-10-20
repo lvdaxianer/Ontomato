@@ -47,7 +47,8 @@ class DeliveryTests(unittest.TestCase):
         target.write_text("WORKBENCH_IMAGE=previous\n")
         args = SimpleNamespace(bundle=self.bundle, state=self.root / "state", port=5000,
                                project="fixture", output_env=target)
-        with patch.object(mirror, "run"), patch.object(mirror, "ensure_mirror_network"), patch.object(mirror, "mirror", side_effect=ValueError("missing baseline")):
+        with patch.object(mirror, "run"), patch.object(mirror, "engine_arch", return_value="arm64"), \
+                patch.object(mirror, "ensure_mirror_network"), patch.object(mirror, "mirror", side_effect=ValueError("missing baseline")):
             with self.assertRaisesRegex(ValueError, "baseline"):
                 mirror.import_bundle(args)
         self.assertEqual(target.read_text(), "WORKBENCH_IMAGE=previous\n")
@@ -62,13 +63,27 @@ class DeliveryTests(unittest.TestCase):
         target = self.root / "images.env"
         args = SimpleNamespace(bundle=self.bundle, state=state, port=5100,
                                project="fixture", output_env=target)
-        with patch.object(mirror, "run"), patch.object(mirror, "ensure_mirror_network"), patch.object(mirror, "mirror") as invoke:
+        with patch.object(mirror, "run"), patch.object(mirror, "engine_arch", return_value="arm64"), \
+                patch.object(mirror, "ensure_mirror_network"), patch.object(mirror, "mirror") as invoke:
             mirror.import_bundle(args)
         self.assertEqual((history / "previous").read_text(), "keep")
         self.assertEqual(len(list((state / "imports").glob("*.json"))), 1)
         self.assertFalse((state / "incoming/mirror_999999.tar").exists())
         self.assertIn("WORKBENCH_IMAGE=127.0.0.1:5100/product/workbench_image@sha256:" + "a" * 64, target.read_text())
         self.assertIn("docker://registry:5000", invoke.call_args[0][2])
+
+    def test_cross_architecture_import_runs_the_engine_tool_and_registry(self):
+        args = SimpleNamespace(bundle=self.bundle, state=self.root / "state", port=5102,
+                               project="fixture", output_env=self.root / "images.env")
+        with patch.object(mirror, "run") as run, patch.object(mirror, "engine_arch", return_value="amd64"), \
+                patch.object(mirror, "ensure_mirror_network"), patch.object(mirror, "mirror") as invoke:
+            mirror.import_bundle(args)
+        inspected = [call.args[0][-1] for call in run.call_args_list if call.args[0][:3] == ["docker", "image", "inspect"]]
+        self.assertEqual(inspected, [mirror.tool_image("amd64"), mirror.registry_image("amd64")])
+        compose = next(call for call in run.call_args_list if "compose" in call.args[0])
+        self.assertEqual(compose.kwargs["env"]["MIRROR_REGISTRY_IMAGE"], mirror.registry_image("amd64"))
+        self.assertEqual(invoke.call_args.args[0], mirror.tool_image("amd64"))
+        self.assertIn("WORKBENCH_IMAGE=127.0.0.1:5102/", args.output_env.read_text())
 
     def test_registry_is_attached_to_the_mirror_network_when_compose_left_it_out(self):
         with patch.object(mirror, "run", side_effect=["cid", json.dumps({"p_default": {}}), None]) as run:
@@ -114,7 +129,8 @@ class DeliveryTests(unittest.TestCase):
         target = self.root / "images.env"
         args = SimpleNamespace(bundle=self.bundle, state=self.root / "state", port=5000,
                                project="fixture", output_env=target)
-        with patch.object(mirror, "run"), patch.object(mirror, "ensure_mirror_network"), patch.object(mirror, "mirror"):
+        with patch.object(mirror, "run"), patch.object(mirror, "engine_arch", return_value="arm64"), \
+                patch.object(mirror, "ensure_mirror_network"), patch.object(mirror, "mirror"):
             mirror.import_bundle(args)
         self.assertIn("WORKBENCH_IMAGE=127.0.0.1:5000/a:" + build + "@" + digest, target.read_text())
 

@@ -80,7 +80,9 @@ docker compose up -d --wait --wait-timeout 600
 
 Registry listens only on `127.0.0.1:5000`. The default project is
 `ontomato-offline`; `--port` and `--project` can select an isolated instance. The
-site's application images are pulled by digest from this local Registry.
+site's application images are pulled by digest from this local Registry. Like export,
+import runs the Docker engine's own oc-mirror and Registry images; on a site these
+are the bundled ones.
 
 For updates, extract the new bundle outside the existing deployment directory.
 Run its import command with the same state directory. After successful import,

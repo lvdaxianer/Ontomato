@@ -84,6 +84,10 @@ def tool_image(arch):
     return TOOL_IMAGE + "-" + arch
 
 
+def registry_image(arch):
+    return "ontomato-offline-registry:3.1.2-" + arch
+
+
 def engine_arch():
     # oc-mirror runs in a container on this Docker engine, so the engine picks the runnable tool.
     arch = run(["docker", "version", "--format", "{{.Server.Arch}}"], capture=True)
@@ -128,7 +132,7 @@ def mirror(tool, state, args, network=None, authfile=None):
 def save_bootstrap(tool, target, arch, registry_repository):
     registry_ref = resolve_image(registry_repository + "@" + REGISTRY_DIGEST, arch)
     # A tag survives docker save/load; digest-only references do not on every engine.
-    registry_tag = "ontomato-offline-registry:3.1.2-" + arch
+    registry_tag = registry_image(arch)
     run(["docker", "tag", registry_ref, registry_tag])
     import gzip
     with gzip.open(target, "wb", compresslevel=1) as out:
@@ -164,7 +168,7 @@ def export(args):
     # target architecture's tool is what the site loads and runs on import.
     exporter = ensure_tool(state, engine_arch())
     tool = tool_image(args.arch)
-    registry_tag = "ontomato-offline-registry:3.1.2-" + args.arch
+    registry_tag = registry_image(args.arch)
     if args.bootstrap:
         registry_tag = save_bootstrap(ensure_tool(state, args.arch), state / "bootstrap.tar.gz", args.arch,
                                       args.registry_repository)
@@ -194,7 +198,7 @@ def verify_bundle(bundle):
     if data.get("schema") != 1 or data.get("arch") not in TOOL_SHA or set(data.get("images", {})) != set(IMAGE_KEYS):
         raise ValueError("Invalid delivery metadata")
     expected_tool = tool_image(data["arch"])
-    expected_registry = "ontomato-offline-registry:3.1.2-" + data["arch"]
+    expected_registry = registry_image(data["arch"])
     if data.get("tool") != expected_tool or data.get("registry") != expected_registry:
         raise ValueError("This tool version does not match the delivery; use its bundled offline/ directory")
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.+-]*", data.get("version", "")):
@@ -231,9 +235,14 @@ def import_bundle(args):
     state.mkdir(parents=True, exist_ok=True)
     if "bootstrap.tar.gz" in data["files"]:
         run(["docker", "load", "-i", bundle / "bootstrap.tar.gz"])
-    for image in (data["tool"], data["registry"]):
+    # Like export, run this engine's own tool and Registry: they only copy and store layers, so a delivery
+    # imports on any engine (the release host keeps an arm64 import target on amd64 without emulation).
+    # On a site the engine is the delivery architecture, i.e. the bundled images.
+    arch = engine_arch()
+    tool, registry = tool_image(arch), registry_image(arch)
+    for image in (tool, registry):
         run(["docker", "image", "inspect", image], capture=True)
-    env = dict(os.environ, MIRROR_STATE=str(state), MIRROR_PORT=str(args.port), MIRROR_REGISTRY_IMAGE=data["registry"])
+    env = dict(os.environ, MIRROR_STATE=str(state), MIRROR_PORT=str(args.port), MIRROR_REGISTRY_IMAGE=registry)
     run(["docker", "compose", "-p", args.project, "-f", HERE / "compose.yml", "up", "-d"], env=env)
     ensure_mirror_network(args.project, env)
     # Keep import history beside the cache. Only incoming archives change each time.
@@ -244,8 +253,8 @@ def import_bundle(args):
     for name in data["files"]:
         if name == "imageset.yaml" or name.startswith("mirror_"):
             shutil.copyfile(bundle / name, incoming / name)
-    mirror(data["tool"], state, ["-c", "/work/incoming/imageset.yaml", "--from", "file:///work/incoming",
-                               "--dest-tls-verify=false", "docker://registry:5000"], args.project + "_mirror")
+    mirror(tool, state, ["-c", "/work/incoming/imageset.yaml", "--from", "file:///work/incoming",
+                         "--dest-tls-verify=false", "docker://registry:5000"], args.project + "_mirror")
     # Receipts record successful Registry imports only, not application upgrades.
     receipts = state / "imports"
     receipts.mkdir(exist_ok=True)
