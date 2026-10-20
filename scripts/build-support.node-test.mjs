@@ -106,9 +106,10 @@ test("the build stamp takes the app repo's revision and any dirty source dirties
   );
 });
 test("final image labels identify component and version", () => {
-  assert.deepEqual(imageLabels("ontomato", "4.0.1"), [
+  assert.deepEqual(imageLabels("ontomato", "4.0.1", "4.0.1-build"), [
     "--label", "org.opencontainers.image.version=4.0.1",
     "--label", "io.ontomato.component=ontomato",
+    "--label", "io.ontomato.build=4.0.1-build",
   ]);
 });
 test("the staging directory is fixed per builder and emptied before every build", () =>
@@ -123,3 +124,24 @@ test("the staging directory is fixed per builder and emptied before every build"
     assert.equal(stagingDirectory(dir, "workbench", "arm64", "runtime"), context);
     assert.equal(existsSync(join(context, "again.txt")), false);
   }));
+
+// Synthetic local-build fixtures must not inherit the outer CI build identity.
+delete process.env.CI_PIPELINE_ID;
+delete process.env.GITHUB_RUN_ID;
+
+test("CI components share one build identity and a rerun gets a new identity", () => {
+  const entries = [{ id: "ontomato", root: "/repo", revision: "a".repeat(40), dirty: false }];
+  try {
+    process.env.GITHUB_RUN_ID = "123";
+    process.env.GITHUB_RUN_ATTEMPT = "1";
+    assert.equal(buildStamp("4.1.0-dev", "/repo", entries), "4.1.0-dev-ci123.1-gaaaaaaaaaaaa");
+    process.env.GITHUB_RUN_ATTEMPT = "2";
+    assert.equal(buildStamp("4.1.0-dev", "/repo", entries), "4.1.0-dev-ci123.2-gaaaaaaaaaaaa");
+    process.env.CI_PIPELINE_ID = "456";
+    assert.equal(buildStamp("4.1.0-dev", "/repo", entries), "4.1.0-dev-ci456-gaaaaaaaaaaaa");
+  } finally {
+    delete process.env.GITHUB_RUN_ID;
+    delete process.env.GITHUB_RUN_ATTEMPT;
+    delete process.env.CI_PIPELINE_ID;
+  }
+});

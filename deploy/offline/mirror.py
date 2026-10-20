@@ -63,6 +63,11 @@ def resolve_image(ref, arch):
     image = json.loads(run(["docker", "image", "inspect", resolved], capture=True))[0]
     if image["Os"] != "linux" or image["Architecture"] != arch:
         raise ValueError("Wrong image platform: " + resolved)
+    labels = image.get("Config", {}).get("Labels") or {}
+    version = labels.get("org.opencontainers.image.version")
+    if version:
+        tag = labels.get("io.ontomato.build") or version + "-" + digest.split(":")[1][:12]
+        resolved = repository(ref) + ":" + tag + "@" + digest
     return resolved
 
 
@@ -134,11 +139,11 @@ def export(args):
     validate_sources(sources)
     state.mkdir(parents=True, exist_ok=True)
     # This oc-mirror version needs a destination tag even for digest sources.
-    # A digest-derived tag pins the pull and remains stable across exports.
+    # Preserve the readable build tag; the digest pins the actual content.
     # JSON is a YAML subset; no YAML dependency is required at the site.
     config = {"apiVersion": "mirror.openshift.io/v2alpha1", "kind": "ImageSetConfiguration",
               "mirror": {"additionalImages": [
-                  {"name": repository(ref) + ":mirror-" + ref.split("@sha256:")[1] + "@" + ref.split("@")[1]}
+                  {"name": ref if ref.split("@")[0] != repository(ref) else repository(ref) + ":mirror-" + ref.split("@sha256:")[1] + "@" + ref.split("@")[1]}
                   for ref in dict.fromkeys(sources.values())]}}
     (state / "imageset.yaml").write_text(json.dumps(config, indent=2) + "\n")
     tool = ensure_tool(state, args.arch)

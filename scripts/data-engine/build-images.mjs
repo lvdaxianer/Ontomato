@@ -177,7 +177,7 @@ export async function buildJavaApp(app, { parsed }) {
     "image",
     "--load",
     ...pipArgs(),
-    ...imageLabels(app.component, version),
+    ...imageLabels(app.component, version, stamp),
     ...labelArgs(app.labels),
     "-t",
     tag,

@@ -89,6 +89,25 @@ class DeliveryTests(unittest.TestCase):
         self.assertEqual(ref, "example.com/arbitrary/image@" + digest)
         self.assertEqual(run.call_args_list[0].args[0], ["docker", "pull", "--platform", "linux/arm64", ref])
 
+    def test_build_tag_survives_resolution_and_offline_import_with_the_same_digest(self):
+        raw = b'{"schemaVersion":2}\n'
+        digest = "sha256:" + hashlib.sha256(raw).hexdigest()
+        build = "4.1.0-dev-ci123-gabc"
+        image = {"Os": "linux", "Architecture": "arm64", "Config": {"Labels": {
+            "org.opencontainers.image.version": "4.1.0-dev", "io.ontomato.build": build}}}
+        with patch.object(mirror.subprocess, "check_output", return_value=raw), \
+                patch.object(mirror, "run", side_effect=["", json.dumps([image])]):
+            ref = mirror.resolve_image("example.com/a:edge", "arm64")
+        self.assertEqual(ref, "example.com/a:" + build + "@" + digest)
+        self.data["images"]["WORKBENCH_IMAGE"] = ref
+        self.write_manifest()
+        target = self.root / "images.env"
+        args = SimpleNamespace(bundle=self.bundle, state=self.root / "state", port=5000,
+                               project="fixture", output_env=target)
+        with patch.object(mirror, "run"), patch.object(mirror, "mirror"):
+            mirror.import_bundle(args)
+        self.assertIn("WORKBENCH_IMAGE=127.0.0.1:5000/a:" + build + "@" + digest, target.read_text())
+
     def test_resolve_single_manifest_hashes_exact_bytes(self):
         raw = b'{"schemaVersion":2}\n'
         image = {"Os": "linux", "Architecture": "arm64"}

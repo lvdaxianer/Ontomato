@@ -477,3 +477,7 @@ test("assemble writes own packages, resources, links and web without pairing met
     realpathSync(join(armStage, "packages/ent-lib")),
   );
 });
+
+// Synthetic local-build fixtures must not inherit the outer CI build identity.
+delete process.env.CI_PIPELINE_ID;
+delete process.env.GITHUB_RUN_ID;

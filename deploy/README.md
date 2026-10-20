@@ -9,12 +9,15 @@ is a fourth service. The site needs Docker Engine 26+, Compose v2 and Python 3.8
 cp .env.example .env
 # Set ARCH, POSTGRES_PASSWORD and PUBLIC_HOST in .env.
 echo 'COMPOSE_FILE=docker-compose.yml:docker-compose.ghcr.yml' >> .env
-echo 'ONTOMATO_VERSION=4.0.1' >> .env
+echo 'ONTOMATO_VERSION=<version-and-build-tag>' >> .env
 docker compose pull
 docker compose up -d --wait --wait-timeout 600
 ```
 
-Update `ONTOMATO_VERSION`, then repeat pull and up. Images come from GHCR. Build
+CI publishes a shared `<version>-ci<run>.<attempt>-g<commit>` tag for all three images,
+as well as `edge`, release and `latest` aliases. Use the full build tag above so
+`docker ps` shows the deployed build. Update `ONTOMATO_VERSION`, then repeat pull
+and up. Images come from GHCR. Build
 and publication happen before deployment; Compose has no build step.
 
 ### Automatic updates (optional)
@@ -108,3 +111,31 @@ Workbench port is 3000, manager 3005 and data engine 18087. Override them in `.e
 `frontend_data` maps to `/app/data`, and `backend_data` to `/deploy`. Initial
 `initdb.sql` creates the product databases. Services default to UTC; set `TZ` for
 another timezone. This stack does not migrate a pre-existing database.
+
+## Configuration
+
+Models are normally configured in the UI. To seed new domains, optionally set
+`LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL`, `EMBEDDING_BASE_URL`,
+`EMBEDDING_API_KEY`, `EMBEDDING_MODEL` and `EMBEDDING_DIMENSIONS` (default 2048)
+in `.env`. Unset means the product default; an explicit empty value stays empty.
+Existing domains keep their saved model settings.
+
+For an existing installation, rename the old `BACKEND_` keys for LLM, embedding,
+LDAP, company sync, SSO, service/node ID, card URL, data adapter and production
+connection by removing that prefix in `.env` **and** its `${...}` placeholders in
+`backend_data/conf/application.yml` (locally `apps/data-engine/.dev/conf/application.yml`).
+`POSTGRE_USER_NAME` / `POSTGRE_PASSWORD` become `POSTGRES_USER` / `POSTGRES_PASSWORD`;
+`POSTGRE_DRIVER_CLASS` becomes `DATA_ENGINE_JDBC_DRIVER`. In `application.yml`, replace
+`url: ${POSTGRE_JDBC_URL:}` with the template line
+`url: ${DATA_ENGINE_JDBC_URL:jdbc:postgresql://${POSTGRES_HOST:localhost}:${POSTGRES_PORT:5432}/datarag}`;
+renaming the placeholder alone leaves the URL empty, because Compose no longer injects one.
+Keep customized values and resolve duplicate keys before restarting.
+The JDBC override is only needed for a nonstandard database connection; otherwise both
+clients use `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_USER`, `POSTGRES_PASSWORD`.
+The workbench retains its own database, and Java retains `datarag`.
+
+To inspect the **running** build, including a deployment tracking `edge`:
+
+```bash
+docker inspect --format '{{.Name}} {{index .Config.Labels "org.opencontainers.image.version"}} {{index .Config.Labels "io.ontomato.build"}}' $(docker compose ps -q)
+```

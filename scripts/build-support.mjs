@@ -97,10 +97,11 @@ export function sourceIdentity(root) {
     ]) !== "";
   return { revision, dirty };
 }
-export function imageLabels(component, version) {
+export function imageLabels(component, version, build) {
   return Object.entries({
     "org.opencontainers.image.version": version,
     "io.ontomato.component": component,
+    "io.ontomato.build": build,
   }).flatMap(([key, value]) => ["--label", `${key}=${value}`]);
 }
 export function parseOptions(args, allowedFlags) {
@@ -142,7 +143,9 @@ export function buildStamp(version, appRoot, entries) {
   const app = entries.find((entry) => entry.root === appRoot);
   if (!app) throw new Error("this version's app repo is not a build source");
   const dirty = entries.some((entry) => entry.dirty);
-  const local = new Date(Date.now() + 8 * 3600 * 1000)
+  const local = process.env.CI_PIPELINE_ID ? `ci${process.env.CI_PIPELINE_ID}`
+    : process.env.GITHUB_RUN_ID ? `ci${process.env.GITHUB_RUN_ID}.${process.env.GITHUB_RUN_ATTEMPT}`
+    : new Date(Date.now() + 8 * 3600 * 1000)
     .toISOString()
     .replace(/[-:]/g, "")
     .replace("T", "-")

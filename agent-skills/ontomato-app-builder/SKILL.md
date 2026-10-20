@@ -14,7 +14,7 @@ Ontomato deployments come in two shapes. Decide which one you are in before doin
 - **Two-environment (two-env)**: a dedicated test deployment plus a production deployment. Import the production schema and sample its data, build and test interfaces in the test deployment, then sync the interfaces the application uses back to production.
 - **Single-environment (single-env)**: one deployment used for both building and serving. There is no production address, no `import-schema`, no `prod-*` commands and no sync step; build and test directly in that deployment. Users who choose this shape accept that they work on the live data.
 
-Run `env-mode` first. It asks the deployment whether `BACKEND_PRODUCTION_ENV_URL` is set:
+Run `env-mode` first. It asks the deployment whether `PRODUCTION_ENV_URL` is set:
 
 | `env-mode` output | Shape | What to do |
 | --- | --- | --- |
@@ -26,14 +26,14 @@ Do not infer the shape from a failed `import-schema`. The backend also fails it 
 ### Two-environment details
 
 - **Test environment**: the Ontomato deployment at `envUrl`. This skill imports definitions and test data there, generates and debugs MetricViews and Actions there, and pages call its interfaces.
-- **Production environment**: another Ontomato deployment, read only until the final sync. The test environment's backend reaches it through the environment variable `BACKEND_PRODUCTION_ENV_URL` (the production **backend** URL, such as `http://prod-host:18087`). An open-source production deployment needs no login, so leave `BACKEND_PRODUCTION_ENV_USER` and `BACKEND_PRODUCTION_ENV_PASSWORD` empty. `import-schema`, the `prod-*` commands and `sync-production` go through the test backend to production; the script never calls production directly. Production must run the same Ontomato version as the test environment.
+- **Production environment**: another Ontomato deployment, read only until the final sync. The test environment's backend reaches it through the environment variable `PRODUCTION_ENV_URL` (the production **backend** URL, such as `http://prod-host:18087`). An open-source production deployment needs no login, so leave `PRODUCTION_ENV_USER` and `PRODUCTION_ENV_PASSWORD` empty. `import-schema`, the `prod-*` commands and `sync-production` go through the test backend to production; the script never calls production directly. Production must run the same Ontomato version as the test environment.
 
 **`import-schema` wipes data in the current test domain.** It drops and recreates the current domain's namespace and all its classes and replaces the domain's whole ontomap with the production class and relationship definitions. Run it only against a dedicated test deployment, never against a deployment with business data.
 
 ## Prerequisites
 
 - The deployment is running and you have its frontend base URL, such as `http://host:3000`.
-- `env-mode` returns `two-env` or `single-env`. For `two-env`, the test backend has `BACKEND_PRODUCTION_ENV_URL` set and has been restarted.
+- `env-mode` returns `two-env` or `single-env`. For `two-env`, the test backend has `PRODUCTION_ENV_URL` set and has been restarted.
 - Node.js 18 or newer. The script uses only Node built-ins.
 
 Every script call goes through the test environment's frontend: `<envUrl>/api/data-query/<backend path>`.
