@@ -87,6 +87,23 @@ Version-managed drivers already in the root pom:
 MySQL uses the MySQL connector declared in the module/root; keep its version there if it is not in
 the table.
 
+### Build assembly
+
+Both poms are necessary but not sufficient for the container image. The image build stages only the
+paths listed in `apps/data-engine/build.mjs`, not the whole repository:
+`scripts/data-engine/build-images.mjs` `stageContext()` copies `contextTrees` one path at a time. Add
+the engine in all four places:
+
+- `PUBLIC_ADAPTERS` — the list that feeds the staged adapter paths;
+- `appLibModules` — the modules Maven installs into the image;
+- `excludeArtifactIds` — must stay consistent with `appLibModules`;
+- `contextTrees` — `packages/data-adapters/<engine>/pom.xml` and `.../src/main` (`adapterTrees(...)`
+  expands this from `PUBLIC_ADAPTERS`; verify the new entry appears).
+
+If the root pom references a module whose directory is not in the staged context, the reactor fails
+with "Child module ... does not exist" before any adapter code compiles. The application pom only
+decides what is installed, not what is staged.
+
 ## 3. Provider: metadata + factory
 
 The provider is a Spring `@Component`. `DataAdapterRegistry` injects every provider and keys it by
@@ -835,9 +852,15 @@ Fixture contract:
 - `namespace()` must be unique per test instance (`"it_" + System.nanoTime() + "_"`), not a fixed
   literal. The suite creates and drops its own tables.
 - `classDef()` uses `className` + `attrs`; one primary key (`varchar`) and one attribute of every
-  scalar the adapter supports. `attr(name, type, primaryKey)` is a suite helper.
+  scalar the adapter supports. The suite has **no** `attr(...)` helper: `PostgreAdapterTest`
+  defines its own `private static JSONObject attr(String name, String type, boolean primaryKey)`
+  that sets `name`, `type`, `primaryKey` and `enable: true`. Copy that helper into your test.
 - `testObjects()` must include a null string, a quoted string, every scalar type, a date and a
-  timestamp.
+  timestamp. Do not invent the rows: the suite hard-codes expectations. Copy
+  `PostgreAdapterTest.testObjects()` and `graphSeed()` and adapt only the engine hooks. In
+  particular, the suite asserts on a unique `Alice` and on `Bob` with `age = 30`; the graph fixture
+  is four persons in the first class (`Alice`/`Bob` in the first org, two more in the second), so
+  the group-by assertion still sees `o1=1, o2=2` after `Alice` is filtered.
 - `graphClassDefs()` is three classes in `person → org → project` order. `graphSeed()` carries
   populated join fields for key-field adapters. Relationship-edge adapters return
   `relationshipRule()` without `fromField`/`toField` and override `seedEdges()`.
@@ -858,6 +881,21 @@ Capability sets:
 Add adapter-specific tests outside the shared suite for protocol behavior, dialect differences,
 scale bounds and capability probing. The suite proves semantics; it does not prove your protocol.
 
+### Test infrastructure hooks
+
+`READ_ONLY` does not make the suite read-only. Every `READ_QUERY` test calls `seedGraph()` before
+it queries, and `seedGraph()`/`dropGraph()` use `createClass`, `insertObjects`, `createEdge` and
+`dropNamespace`. A write-refusing adapter therefore fails before the first read assertion.
+
+- **Read-only relational.** Provision the graph tables and rows outside the adapter, override
+  `seedGraph()` to return the adapter without writing, and override `dropGraph()` to clean up only
+  what the test owns. Do not declare `READ_QUERY` and rely on the default seeding.
+- **Non-JDBC.** `selectAll()` and `countRows()` read through `openConnection()`. Override both with
+  the engine's native read API. `M3AdapterTest`, `Neo4jAdapterTest` and `EsAdapterTest` are the
+  reference implementations.
+- Enable a capability only after the group that exercises it is green; a present-but-unexercised
+  capability is worse than an absent one.
+
 ### Test environment matrix
 
 | Engine | External URL override | Container image |
@@ -877,17 +915,24 @@ The JDBC URL for SQL Server testing needs
 Commands:
 
 ```bash
-# one adapter with its dependencies
+# one adapter with its dependencies (default)
 ./mvnw -pl packages/data-adapters/foo -am test -Dtest=FooAdapterTest \
   -Dsurefire.failIfNoSpecifiedTests=false
 
-# whole module
-./mvnw -pl packages/data-adapters/foo -am test
+# all tests of this adapter module only: install dependencies first, then run without -am
+./mvnw -pl packages/data-adapters/foo -am install -DskipTests
+./mvnw -pl packages/data-adapters/foo test
 
 # external engine
 ONTOMATO_TEST_FOO_URL=... ONTOMATO_TEST_FOO_USER=... ONTOMATO_TEST_FOO_PASSWORD=... \
-./mvnw -pl packages/data-adapters/foo -am test -Dtest=FooAdapterTest
+./mvnw -pl packages/data-adapters/foo -am test -Dtest=FooAdapterTest \
+  -Dsurefire.failIfNoSpecifiedTests=false
 ```
+
+Never run a bare `./mvnw -pl packages/data-adapters/foo -am test`: `-am` builds the dependencies
+**and runs their tests**, which can touch databases, models and external services. The filtered
+form still builds upstream modules but runs zero tests there; `failIfNoSpecifiedTests=false` keeps
+those modules from failing with "No tests were executed".
 
 The enterprise repository has no Maven wrapper; run the public wrapper with `-f` pointing at the
 enterprise pom. Read `target/surefire-reports/TEST-*.xml` for counts. Report
@@ -910,17 +955,34 @@ What the page does with your provider metadata:
   `requiresJoinFields` controlling the relationship-field guidance.
 - `adapterDisplay` (`labelWidth`, `urlSpan`, `credentialSpan`) is an edition-level layout prop; do
   not add per-adapter layout code.
-- `testConnection()` drives the "Test connection" result panel. Return a useful report:
-  `kind`, `databaseProduct`, `databaseVersion`, `driverName`, `driverVersion`, `catalog`,
-  `schema`, `tables:[{name,type}]`, `elapsedMs` for catalog-style sources; the JDBC tester already
-  does this for JDBC adapters.
+- `testConnection()` drives the "Test connection" result panel. The response is validated by
+  `dataAdapterTestResultSchema` in `packages/contracts/src/data-adapters.ts`, a discriminated union
+  on `kind`; `BusinessConfig.vue` turns any other shape into `dataAdapterInvalidReport`. Return one
+  of these two shapes exactly.
+
+  Catalog sources (JDBC, graph):
+  ```json
+  {"kind":"catalog","elapsedMs":12,"databaseProduct":"PostgreSQL","databaseVersion":"16.3",
+   "driverName":"PostgreSQL JDBC Driver","driverVersion":"42.7.3","catalog":"app","schema":"public",
+   "tables":[{"name":"person","type":"TABLE"}]}
+  ```
+
+  Search sources (Elasticsearch/OpenSearch):
+  ```json
+  {"kind":"search","elapsedMs":9,"databaseProduct":"Elasticsearch","databaseVersion":"9.0.1",
+   "clusterName":"docker-cluster","indices":["person","org"]}
+  ```
+
+  The search shape has **no** `driverName`, `catalog`, `schema` or `tables`; `databaseVersion` and
+  `clusterName` may be `null`. The JDBC tester already produces the catalog shape.
 
 Checklist for the UI:
 
 - `type` is stable and lowercase; `label` is human-readable and distinct.
 - `connectionFields` covers exactly what the input must collect; no hidden fields.
 - `connectionExamples` are realistic and contain no credentials.
-- For a search engine, the test report lists indices as `tables` so the user can see the catalog.
+- For a search engine, return `kind:"search"` with `indices` (not `tables`); the panel has a
+  separate search branch.
 - For a graph engine, `CALL db.labels()` supplies the table list.
 - No adapter-specific branch is added to `BusinessConfig.vue` or `DataAdapterConfigCard.vue`.
 
@@ -963,7 +1025,9 @@ Checklist for the UI:
 
 ## 11. Review gate
 
-- [ ] Module in root pom **and** application pom.
+- [ ] Module in root pom, application pom, and `apps/data-engine/build.mjs`
+      (`PUBLIC_ADAPTERS`/`appLibModules`/`excludeArtifactIds`/`contextTrees`; the enterprise
+      build has its own `ENTERPRISE_ADAPTERS` list and context tree).
 - [ ] `type()` stable; provider test asserts type/label/join-fields/fields/examples.
 - [ ] Provider `create` forwards the real `jsonRule`.
 - [ ] Every `DataAdapter` method implemented or throws a typed unsupported error.
