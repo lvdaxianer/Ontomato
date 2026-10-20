@@ -638,6 +638,129 @@ Implementation rules:
   `true`.
 - The row cap must still be applied and reported.
 
+## 7b. Test as you write: the real loop
+
+Compiling proves signatures. It does not prove that the engine stores, filters, joins and returns
+what the DSL means. Adapter work is therefore **test-as-you-write**, not write-then-test. The shared
+contract suite is the executable specification; the adapter is the variable under test.
+
+### The loop: one vertical slice at a time
+
+**0. Prove the engine outside Java first.** Start the container or connect to the external instance,
+then use the native client (`psql`, `mysql`, `sqlcmd`, `cypher-shell`, `curl`) to create a table or
+index, insert one row and read it back. If this fails, stop: it is infrastructure, credentials,
+network or driver, not adapter code. Record the exact image and version.
+
+**1. Make the suite runnable.** Implement the provider, constructor, `openConnection`/
+`testConnection`, `namespace()` and `classDef()`. Run only the connection probe (or skip it for a
+non-JDBC engine). A green probe is the first evidence, not a formality.
+
+**2. Build the first read slice.** Implement `createNamespace`, `createClass`, `insertObjects` and a
+simple single-class DSL read. Run only that method:
+
+```bash
+./mvnw -pl packages/data-adapters/foo -am test \
+  -Dtest=FooAdapterTest#readSimpleSelect -Dsurefire.failIfNoSpecifiedTests=false
+```
+
+Do not implement the whole DSL before the first real row comes back. One narrow path that returns
+real data is worth more than ten stubs.
+
+**3. Grow the read path by test group.** Add one group, run it, then run the whole class to catch
+regressions:
+
+1. conditions: `=`, `!=`, comparisons, `in`, `between`, `like`, `is null` -> `and`/`or`/`not`
+   nesting -> `text` -> `timeseries` rejection;
+2. output: fields -> `group_by`/`having` -> `sort` -> `limit` -> `distinct` -> two-step;
+3. joins: two classes -> three classes -> a star sharing a center.
+
+**4. Then the write path.** Namespace lifecycle -> object CRUD -> edges. Assert rows through
+`selectAll`/`countRows`/`countMatching`, not merely "no exception". A write that reports success and
+writes nothing is the classic adapter bug.
+
+**5. Turn capabilities on only when their tests pass.** Start from `READ_ONLY` or the smallest honest
+set. Add `OBJECT_CRUD` after the CRUD group is green, `EDGE_CRUD` after edges, `GRAPH_QUERY` after
+joins, `VECTOR_ATTR` after vectors. Declaring `FULL` to "see what happens" produces a suite full of
+red tests that tells you nothing about what actually works.
+
+**6. Add engine-specific tests last.** Protocol, dialect, scale bounds and capability probing come
+after the shared semantics are green. The shared suite does not prove your HTTP/Bolt/JDBC protocol.
+
+**7. Clean up.** Drop the namespace, remove containers and images. A later run must not inherit
+state from this one.
+
+### Run cadence
+
+- One method -> one class -> the module -> the reactor. Never jump straight to the reactor while a
+  single method is red.
+- After changing a shared helper (conditions, literals, type map), rerun the whole class, not just
+  the method you were fixing.
+- Slow engines: run targeted methods with `-Dtest=FooAdapterTest#method`, in the background, and
+  poll. M3's full suite is roughly 11 minutes; a missing report immediately after a poll is not a
+  dead process.
+- Read `target/surefire-reports/TEST-*.xml` for the truth. Report run/failures/errors/skips.
+
+### Debug ladder: what a failure usually means
+
+| Symptom | First hypothesis | Check |
+| --- | --- | --- |
+| Every test fails at setup | Infrastructure, not adapter | Native client, URL, credentials, driver, image |
+| Only the connection probe fails | Probe/URL/version | `testConnection()` report, engine root response |
+| `namespaceLifecycle` fails | Prefix or DDL | `current_schema()`/`DATABASE()`/`SCHEMA_NAME()`, table name prefix |
+| `insertAllScalarTypesRoundTrip` fails | Type map or literal | Generated DDL/DML, dialect type table |
+| `insertEscapesSingleQuotes` fails | Quoting | The exact literal sent to the engine |
+| `updateWhere*`/`deleteWhere*` fail | Condition builder drift | Read and write builders produce different SQL |
+| Single-class reads pass, joins fail | Join direction/alias prefix | `fromField`/`toField`, class-name prefix, alias |
+| Edge tests fail | Edge representation/capability | Key field vs relationship, `RELATIONSHIP_EDGES` |
+| Time tests fail | Literal format or zone | `yyyy-MM-dd[ HH:mm:ss]`, read-back form, epoch flag |
+| `omittedLimitIsCapped...` fails | `DslRowLimit` not wired | `cap + 1`, probe-row removal, answer keys |
+| Contract-rejection tests see a generic exception | `catch` flattening | Rethrow `DslContractViolationException` first |
+| Results depend on test order | Shared namespace/state | Unique namespace, cleanup, no fixed table names |
+| Suite passes but the real call fails | Envelope or `query()` pipeline | JSON array, `answer`, class normalization, sandbox rewrite |
+
+### Do not cheat the test
+
+- Do not weaken an assertion or edit the shared suite so the adapter passes. If the suite is wrong,
+  fix the shared contract deliberately, with evidence, and rerun every adapter.
+- Do not return an empty result for an unsupported construct. Throw the located violation.
+- Do not declare a capability because the method exists. Declare it because the tests pass.
+- If a test looks wrong, reproduce the behavior with the native client before changing either side.
+  Then decide: adapter bug, fixture bug, or contract gap.
+- A test that passes with zero rows is not passing. Assert the row count and at least one value.
+
+### Evidence to keep
+
+For every engine, record: image and version; the Surefire counts; the generated native query for the
+hard cases (join, two-step, time, `like`, row limit); and the raw engine response for any failure you
+had to debug. This is what makes the next adapter faster and what makes a "done" claim reviewable.
+
+### Field notes from doing this
+
+- **The 20/80 rule is real.** Connection, one table, one insert and one select take the first ~20% of
+  the time. Time types, `like` escaping, row limits, two-step aggregation, edge direction and typed
+  contract errors take the other ~80%.
+- **Silent failures are the norm.** A 200 status with zero rows, a metadata label that changes case,
+  a class-name prefix applied in only one path, a join written on the wrong side. Assert values, not
+  just status.
+- **Debug the native query, not the stack.** Log or collect the generated SQL/Cypher/JSON and run it
+  with the native client. Most adapter bugs are visible there in seconds; Java stack traces usually
+  point at the wrapper.
+- **Real engine from day one.** Mocks and compilation cannot tell you that `TABLE_NAME` is uppercase
+  in MySQL, that `_shard_doc` is missing on ES 7.10, or that M3 returns a success payload without
+  writing the edge.
+- **One vertical slice beats broad stubs.** A half-implemented method that returns empty is worse
+  than an explicit throw: the first looks like a working feature, the second tells the truth.
+- **Slow engines need a different rhythm.** For M3, run one method at a time, keep the run in the
+  background, and poll the report. Do not interpret silence as death, and do not start five suites
+  in parallel against one slow instance.
+- **Timebox a single failure.** After two failed hypotheses, stop editing Java and reproduce with
+  the native client. The third guess is usually wrong.
+- **Engine quirks recur.** Write each one down the moment you learn it (the trap list below exists
+  for this reason); they will come back in the next adapter, the next upgrade and the next customer
+  environment.
+- **The last 10% is contract hygiene.** Typed errors, the row cap, time read-back and "unsupported
+  means throw" are not polish; they are what prevents a confident wrong answer in production.
+
 ## 8. Unit tests: the shared contract suite
 
 Every adapter test extends `AbstractDataAdapterTest`. Supply the environment and the fixture; the
@@ -849,5 +972,9 @@ Checklist for the UI:
       `fromField`/`toField` and override `seedEdges()`.
 - [ ] Write path writes only declared attributes and rejects primary-key/unknown-field updates.
 - [ ] Contract suite run against a real engine; counts recorded; skips explained.
+- [ ] Capabilities were enabled one group at a time, each only after its tests passed; every red
+      test is closed or documented.
+- [ ] The generated native query and the raw engine response were inspected for the hard cases
+      (join, two-step, time, `like`, row limit).
 - [ ] Provider metadata is sufficient for the configuration page; no Vue change.
 - [ ] Adapter-specific tests cover the protocol, dialect and bounds.
