@@ -1,10 +1,9 @@
 <script setup lang="ts">
-import type { SessionHistoryMessage as AgentChatMessage } from "@ontomato/contracts/diagnosis";
+import type { AgentChatMessage } from "@ontomato/contracts/agent-chat";
 import { computed, ref } from "vue";
 import { ChevronDown, ChevronUp, Wrench, Brain } from "lucide-vue-next";
 
-import { formatToolArgs, formatToolResult } from "../../composables/useAgentChat";
-import { renderAgentMarkdown } from "../../../../utils/agent-markdown";
+import { renderAgentMarkdown } from "../../utils/agent-markdown";
 import { useI18n } from "vue-i18n";
 
 const { t } = useI18n();
@@ -40,6 +39,25 @@ function toggleThinking(segIndex: number) {
 
 function isThinkingExpanded(segIndex: number): boolean {
   return expandedThinking.value.has(props.messageIndex * 1000 + segIndex);
+}
+
+function formatToolResult(result: unknown): string {
+  if (result == null) return t("diagnosis.noResult");
+  if (typeof result === "string") return result;
+  try {
+    return JSON.stringify(result, null, 2);
+  } catch {
+    return String(result);
+  }
+}
+
+function formatToolArgs(args: string): string {
+  if (!args) return "";
+  try {
+    return JSON.stringify(JSON.parse(args), null, 2);
+  } catch {
+    return args;
+  }
 }
 
 function renderText(content: string): string {
@@ -78,7 +96,14 @@ const fallbackMarkdown = computed(() => {
 
         <!-- Thinking -->
         <div v-else-if="seg.type === 'thinking'" class="agent-thinking">
-          <div class="agent-thinking__header" @click="toggleThinking(si)">
+          <div
+            class="agent-thinking__header"
+            role="button"
+            tabindex="0"
+            :aria-expanded="isThinkingExpanded(si)"
+            @click="toggleThinking(si)"
+            @keydown.enter.space.prevent="toggleThinking(si)"
+          >
             <Brain :size="14" class="agent-thinking__icon" />
             <span class="agent-thinking__label">{{ t("thinking.thinkingProcess") }}</span>
             <component
@@ -95,7 +120,14 @@ const fallbackMarkdown = computed(() => {
           v-else-if="seg.type === 'tool_call'"
           :class="['agent-tool', { 'agent-tool--error': seg.isError }]"
         >
-          <div class="agent-tool__header" @click="toggleTool(seg.toolCallId)">
+          <div
+            class="agent-tool__header"
+            role="button"
+            tabindex="0"
+            :aria-expanded="expandedTools.has(seg.toolCallId)"
+            @click="toggleTool(seg.toolCallId)"
+            @keydown.enter.space.prevent="toggleTool(seg.toolCallId)"
+          >
             <Wrench :size="14" class="agent-tool__icon" />
             <span class="agent-tool__name">{{ seg.tool }}</span>
             <span
@@ -279,6 +311,12 @@ html.dark .agent-msg__bubble {
   cursor: pointer;
   user-select: none;
   transition: background var(--transition-fast);
+}
+
+.agent-thinking__header:focus-visible,
+.agent-tool__header:focus-visible {
+  outline: 2px solid var(--el-color-primary);
+  outline-offset: -2px;
 }
 
 .agent-tool__header:hover {

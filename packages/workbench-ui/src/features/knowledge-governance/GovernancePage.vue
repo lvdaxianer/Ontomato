@@ -2,8 +2,9 @@
 import { computed, nextTick, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
-import { ArrowLeft, BookOpen, FileText, Send, Square } from "lucide-vue-next";
-import { renderAgentMarkdown } from "../../utils/agent-markdown";
+import { ArrowLeft, BookOpen, FileText } from "lucide-vue-next";
+import AgentChatInput from "../../components/agent-chat/AgentChatInput.vue";
+import AgentMessage from "../../components/agent-chat/AgentMessage.vue";
 import { useGovernance } from "./useGovernance";
 import { governanceReturnPath } from "./return-path";
 
@@ -12,15 +13,18 @@ const router = useRouter(),
   route = useRoute();
 const {
   session,
+  messages,
+  running,
   rounds,
   loading,
   sending,
   stopping,
   error,
+  streamLost,
   source,
   select,
-  start,
-  respond,
+  reload,
+  send,
   stop,
   readSource,
 } = useGovernance();
@@ -28,57 +32,59 @@ const input = ref(""),
   panel = ref<"report" | "sources" | null>(null);
 const conversation = ref<HTMLElement | null>(null);
 const panelElement = ref<HTMLElement | null>(null);
-const running = computed(() => session.value?.status === "running");
+// Review counts appear only once the Agent has recorded an actual review scope.
 const progress = computed(() => {
   const work = session.value?.work;
-  return work?.knowledgeTotal === null || !work
-    ? t("governance.preparing")
-    : t("governance.progress", {
-        done: work.reviewedKnowledgeIds.length,
-        total: work.knowledgeTotal,
-      });
+  return work && work.knowledgeTotal !== null
+    ? t("governance.progress", { done: work.reviewedKnowledgeIds.length, total: work.knowledgeTotal })
+    : "";
+});
+const statusText = computed(() => {
+  // A lost stream outranks a pending Stop: nothing is being followed any more.
+  if (streamLost.value) return t("governance.disconnected");
+  if (stopping.value) return t("governance.stopping");
+  if (running.value) return t("governance.running");
+  return t(`governance.${session.value!.status}`);
 });
 watch(
   () => route.params.sessionId,
   (id) => {
-    input.value = "";
-    panel.value = null;
-    void select(typeof id === "string" && id ? id : undefined);
+    const next = typeof id === "string" && id ? id : undefined;
+    // The route catching up to the round just created keeps the draft and panel.
+    if (next !== session.value?.id) {
+      input.value = "";
+      panel.value = null;
+    }
+    void select(next);
   },
   { immediate: true }
 );
-watch(
-  () => [session.value?.messages.length, session.value?.draft],
-  async () => {
-    const element = conversation.value;
-    const nearEnd =
-      !element || element.scrollHeight - element.scrollTop - element.clientHeight < 160;
-    await nextTick();
-    if (nearEnd && conversation.value)
-      conversation.value.scrollTop = conversation.value.scrollHeight;
-  }
-);
+watch(messages, async () => {
+  const element = conversation.value;
+  const nearEnd = !element || element.scrollHeight - element.scrollTop - element.clientHeight < 160;
+  await nextTick();
+  if (nearEnd && conversation.value) conversation.value.scrollTop = conversation.value.scrollHeight;
+});
 watch(panel, async (value) => {
   if (!value || !window.matchMedia("(max-width: 800px)").matches) return;
   await nextTick();
   panelElement.value?.scrollIntoView({ block: "start" });
 });
 // Switching sessions keeps the from query so Back still returns to the entry page.
-function sessionLocation(sessionId: string) {
-  return { name: "KnowledgeGovernance", params: { sessionId }, query: { from: route.query.from } };
+function sessionLocation(sessionId?: string) {
+  return {
+    name: "KnowledgeGovernance",
+    params: sessionId ? { sessionId } : {},
+    query: { from: route.query.from },
+  };
 }
-async function begin() {
-  const id = await start();
-  if (id) await router.push(sessionLocation(id));
-}
-async function send(text = input.value) {
-  if (await respond(text)) input.value = "";
-}
-function onKey(event: KeyboardEvent) {
-  if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
-    event.preventDefault();
-    void send();
-  }
+// Typed text and suggestions are the same user message; the first one creates the round.
+async function submit(text: string, fromInput: boolean) {
+  const id = await send(text);
+  if (!id) return;
+  // Clear only what was sent; text typed while the request was pending stays as the draft.
+  if (fromInput && input.value.startsWith(text)) input.value = input.value.slice(text.length);
+  if (route.params.sessionId !== id) await router.push(sessionLocation(id));
 }
 function showSource(id: string) {
   panel.value = "sources";
@@ -104,7 +110,11 @@ function closeHistory(event: MouseEvent) {
       </div>
       <div class="kg-toolbar">
         <template v-if="session">
-          <button class="kg-button" :disabled="sending || running" @click="begin">
+          <button
+            class="kg-button"
+            :disabled="sending || running"
+            @click="router.push(sessionLocation())"
+          >
             {{ t("governance.start") }}
           </button>
           <button
@@ -141,63 +151,61 @@ function closeHistory(event: MouseEvent) {
     </header>
     <p v-if="error" role="alert" class="kg-error">{{ error }}</p>
     <p v-if="loading" role="status">{{ t("governance.loading") }}</p>
-    <div v-else-if="!session" class="kg-welcome">
-      <BookOpen :size="36" />
-      <h2>{{ t("governance.title") }}</h2>
-      <p>{{ t("governance.subtitle") }}</p>
-      <p>{{ t("governance.welcome") }}</p>
-      <button class="kg-button kg-primary" :disabled="sending" @click="begin">
-        {{ t("governance.start") }}
-      </button>
-    </div>
-    <template v-else>
-      <div class="kg-body">
-        <main class="kg-chat">
-          <div class="kg-thread">
-            <div
-              ref="conversation"
-              class="kg-messages"
-              role="log"
-              :aria-label="t('governance.discussion')"
-            >
-              <article
-                v-for="message in session.messages"
-                :key="message.id"
-                :class="['kg-message', message.role]"
-              >
-                <span class="kg-speaker">
-                  {{ message.role === "user" ? t("governance.you") : t("governance.title") }}
-                </span>
-                <div class="kg-markdown" v-html="renderAgentMarkdown(message.text)" />
-              </article>
-              <article v-if="session.draft" class="kg-message assistant">
-                <div class="kg-markdown" v-html="renderAgentMarkdown(session.draft)" />
-              </article>
-              <p v-if="running" class="kg-working" role="status">{{ t("governance.working") }}</p>
+    <div v-else class="kg-body">
+      <main class="kg-chat">
+        <div class="kg-thread">
+          <div
+            ref="conversation"
+            class="kg-messages"
+            role="log"
+            :aria-label="t('governance.discussion')"
+          >
+            <p v-if="!messages.length && !running" class="kg-notice">
+              {{ t("governance.subtitle") }}
+            </p>
+            <div v-for="(message, index) in messages" :key="index" class="kg-message">
+              <AgentMessage :message="message" :message-index="index" />
+            </div>
+            <p v-if="running" class="kg-working" role="status">{{ t("governance.working") }}</p>
+            <template v-if="session && !running">
               <p v-if="session.status === 'stopped'" class="kg-notice">
                 {{ t("governance.stoppedHint") }}
               </p>
               <p v-if="session.error" role="alert" class="kg-error">
                 {{ t("governance.failedHint") }}
               </p>
-            </div>
-            <p class="kg-status" aria-live="polite">
-              <span :class="{ 'kg-pulse': running }">{{ t(`governance.${session.status}`) }}</span>
-              <span>{{ progress }}</span>
-            </p>
-            <form class="kg-composer" @submit.prevent="send()">
-              <div class="kg-quick">
+            </template>
+          </div>
+          <p v-if="session" class="kg-status" aria-live="polite">
+            <span :class="{ 'kg-pulse': running }">{{ statusText }}</span>
+            <span v-if="progress">{{ progress }}</span>
+            <button v-if="streamLost" type="button" class="kg-button" @click="reload">
+              {{ t("common.retry") }}
+            </button>
+          </p>
+          <div class="kg-composer">
+            <div class="kg-quick">
+              <template v-if="!session">
                 <button
                   type="button"
                   :disabled="running || sending"
-                  @click="send(t('governance.explain'))"
+                  @click="submit(t('governance.startCheck'), false)"
+                >
+                  {{ t("governance.startCheck") }}
+                </button>
+              </template>
+              <template v-else>
+                <button
+                  type="button"
+                  :disabled="running || sending"
+                  @click="submit(t('governance.explain'), false)"
                 >
                   {{ t("governance.explain") }}
                 </button>
                 <button
                   type="button"
                   :disabled="running || sending"
-                  @click="send(t('governance.defer'))"
+                  @click="submit(t('governance.defer'), false)"
                 >
                   {{ t("governance.defer") }}
                 </button>
@@ -205,120 +213,97 @@ function closeHistory(event: MouseEvent) {
                   v-if="session.status === 'stopped' || session.status === 'failed'"
                   type="button"
                   :disabled="running || sending"
-                  @click="send(t('governance.continue'))"
+                  @click="submit(t('governance.continue'), false)"
                 >
                   {{ t("governance.continue") }}
                 </button>
-              </div>
-              <label class="kg-sr" for="kg-answer">{{ t("governance.answer") }}</label>
-              <textarea
-                id="kg-answer"
-                v-model="input"
-                :placeholder="t('governance.placeholder')"
-                :disabled="running || sending"
-                rows="3"
-                maxlength="20000"
-                @keydown="onKey"
-              />
-              <div class="kg-compose-bottom">
-                <small>{{ t("governance.saved") }}</small>
-                <button
-                  v-if="running"
-                  class="kg-button"
-                  type="button"
-                  :disabled="stopping"
-                  @click="stop"
-                >
-                  <Square :size="15" />
-                  {{ t(stopping ? "governance.stopping" : "governance.stop") }}
-                </button>
-                <button
-                  v-else
-                  class="kg-button kg-primary"
-                  type="submit"
-                  :disabled="sending || !input.trim()"
-                >
-                  <Send :size="15" />
-                  {{ t("governance.send") }}
-                </button>
-              </div>
-            </form>
-          </div>
-        </main>
-        <aside
-          v-if="panel"
-          ref="panelElement"
-          class="kg-panel"
-          :aria-label="t(`governance.${panel}`)"
-        >
-          <header>
-            <h2>{{ t(`governance.${panel}`) }}</h2>
-            <button class="kg-button" @click="panel = null">{{ t("governance.close") }}</button>
-          </header>
-          <template v-if="panel === 'report'">
-            <p class="kg-notice">{{ t("governance.reportHint") }}</p>
-            <p v-if="session.work.summary" class="kg-summary">{{ session.work.summary }}</p>
-            <p v-if="!session.work.issues.length">{{ t("governance.noIssues") }}</p>
-            <article v-for="issue in session.work.issues" :key="issue.id" class="kg-issue">
-              <div class="kg-tags">
-                <span>{{ t(`governance.${issue.category}`) }}</span>
-                <span>{{ t(`governance.${issue.status}`) }}</span>
-              </div>
-              <h3>{{ issue.title }}</h3>
-              <dl>
-                <dt>{{ t("governance.problem") }}</dt>
-                <dd>{{ issue.problem }}</dd>
-                <dt>{{ t("governance.before") }}</dt>
-                <dd>{{ issue.before }}</dd>
-                <dt>{{ t("governance.after") }}</dt>
-                <dd>{{ issue.after }}</dd>
-                <dt>{{ t("governance.basis") }}</dt>
-                <dd>{{ issue.basis }}</dd>
-              </dl>
-              <button
-                v-for="id in issue.sourceIds"
-                :key="id"
-                class="kg-source-link"
-                @click="showSource(id)"
-              >
-                {{
-                  session.work.sources.find((item) => item.id === id)?.title ||
-                  t("governance.sources")
-                }}
-              </button>
-            </article>
-          </template>
-          <template v-else>
-            <p v-if="!session.work.sources.length">{{ t("governance.noSources") }}</p>
-            <button
-              v-for="item in session.work.sources"
-              :key="item.id"
-              class="kg-source-link"
-              @click="readSource(item.id)"
-            >
-              {{ item.title }}
-            </button>
-            <section v-if="source" class="kg-original">
-              <h3>{{ source.source.title }}</h3>
-              <p v-if="!source.page">{{ t("governance.evidenceHint") }}</p>
-              <p v-else-if="!source.page.items.length">{{ t("governance.sourceMissing") }}</p>
-              <template v-else>
-                <p v-for="item in source.page.items" :key="item.id" class="kg-original-text">
-                  {{ item.text }}
-                </p>
-                <button
-                  v-if="source.page.next"
-                  class="kg-button"
-                  @click="readSource(source.source.id, source.page.next.offset)"
-                >
-                  {{ t("governance.more") }}
-                </button>
               </template>
-            </section>
-          </template>
-        </aside>
-      </div>
-    </template>
+            </div>
+            <AgentChatInput
+              v-model="input"
+              :is-sending="running || sending"
+              :placeholder="t('governance.placeholder')"
+              :maxlength="20000"
+              @send="submit(input, true)"
+              @stop="stop"
+            />
+            <small>{{ t("governance.saved") }}</small>
+          </div>
+        </div>
+      </main>
+      <aside
+        v-if="session && panel"
+        ref="panelElement"
+        class="kg-panel"
+        :aria-label="t(`governance.${panel}`)"
+      >
+      <header>
+          <h2>{{ t(`governance.${panel}`) }}</h2>
+          <button class="kg-button" @click="panel = null">{{ t("governance.close") }}</button>
+        </header>
+        <template v-if="panel === 'report'">
+          <p class="kg-notice">{{ t("governance.reportHint") }}</p>
+          <p v-if="session.work.summary" class="kg-summary">{{ session.work.summary }}</p>
+          <p v-if="!session.work.issues.length">{{ t("governance.noIssues") }}</p>
+          <article v-for="issue in session.work.issues" :key="issue.id" class="kg-issue">
+            <div class="kg-tags">
+              <span>{{ t(`governance.${issue.category}`) }}</span>
+              <span>{{ t(`governance.${issue.status}`) }}</span>
+            </div>
+            <h3>{{ issue.title }}</h3>
+            <dl>
+              <dt>{{ t("governance.problem") }}</dt>
+              <dd>{{ issue.problem }}</dd>
+              <dt>{{ t("governance.before") }}</dt>
+              <dd>{{ issue.before }}</dd>
+              <dt>{{ t("governance.after") }}</dt>
+              <dd>{{ issue.after }}</dd>
+              <dt>{{ t("governance.basis") }}</dt>
+              <dd>{{ issue.basis }}</dd>
+            </dl>
+            <button
+              v-for="id in issue.sourceIds"
+              :key="id"
+              class="kg-source-link"
+              @click="showSource(id)"
+            >
+              {{
+                session.work.sources.find((item) => item.id === id)?.title ||
+                t("governance.sources")
+              }}
+            </button>
+          </article>
+        </template>
+        <template v-else>
+          <p v-if="!session.work.sources.length">{{ t("governance.noSources") }}</p>
+          <button
+            v-for="item in session.work.sources"
+            :key="item.id"
+            class="kg-source-link"
+            @click="readSource(item.id)"
+          >
+            {{ item.title }}
+          </button>
+          <section v-if="source" class="kg-original">
+            <h3>{{ source.source.title }}</h3>
+            <p v-if="!source.page">{{ t("governance.evidenceHint") }}</p>
+            <p v-else-if="!source.page.items.length">{{ t("governance.sourceMissing") }}</p>
+            <template v-else>
+              <p v-for="item in source.page.items" :key="item.id" class="kg-original-text">
+                {{ item.text }}
+              </p>
+              <button
+                v-if="source.page.next"
+                class="kg-button"
+                @click="readSource(source.source.id, source.page.next.offset)"
+              >
+                {{ t("governance.more") }}
+              </button>
+            </template>
+          </section>
+        </template>
+      </aside>
+    </div>
   </section>
 </template>
 
@@ -338,21 +323,18 @@ function closeHistory(event: MouseEvent) {
 .kg-heading,
 .kg-toolbar,
 .kg-status,
-.kg-compose-bottom,
 .kg-panel > header {
   display: flex;
   align-items: center;
   gap: 8px;
 }
 .kg-header,
-.kg-compose-bottom,
 .kg-panel > header {
   justify-content: space-between;
 }
 .kg-header,
 .kg-toolbar,
 .kg-status,
-.kg-compose-bottom,
 .kg-tags {
   flex-wrap: wrap;
 }
@@ -413,11 +395,6 @@ a:focus-visible {
 .kg-icon {
   padding: 8px;
 }
-.kg-primary {
-  background: var(--el-color-primary);
-  color: var(--el-color-white);
-  border-color: var(--el-color-primary);
-}
 .kg-button[aria-pressed="true"] {
   border-color: var(--el-color-primary);
   color: var(--el-color-primary);
@@ -449,13 +426,6 @@ a:focus-visible {
   color: var(--el-color-primary);
   overflow-wrap: anywhere;
   padding: 6px 4px;
-}
-.kg-welcome {
-  margin: auto;
-  max-width: 480px;
-  padding: 36px;
-  text-align: center;
-  line-height: 1.8;
 }
 .kg-status {
   margin: 0;
@@ -501,41 +471,12 @@ a:focus-visible {
   padding: 8px 0;
 }
 .kg-message {
-  padding: 16px 0;
+  padding: 8px 0;
   overflow-wrap: anywhere;
-}
-.kg-message.user {
-  background: var(--el-fill-color-light);
-  padding: 14px 18px;
-  border-radius: 12px;
-  margin: 12px 0;
-}
-.kg-speaker {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--el-text-color-secondary);
-}
-.kg-markdown {
-  line-height: 1.75;
-  font-size: 14px;
-}
-.kg-markdown :deep(pre) {
-  max-width: 100%;
-  overflow: auto;
-}
-.kg-markdown :deep(table) {
-  display: block;
-  overflow: auto;
-}
-.kg-markdown :deep(a) {
-  color: var(--el-color-primary);
-}
-.kg-markdown :deep(img) {
-  max-width: 100%;
 }
 .kg-working,
 .kg-notice,
-.kg-compose-bottom small {
+.kg-composer small {
   font-size: 12px;
   color: var(--el-text-color-secondary);
   line-height: 1.6;
@@ -546,19 +487,14 @@ a:focus-visible {
   overflow-wrap: anywhere;
 }
 .kg-composer {
-  position: relative;
   display: flex;
   flex-direction: column;
   gap: 8px;
   margin-top: 8px;
-  padding: 10px 12px;
-  border: 1px solid var(--el-border-color);
-  border-radius: 12px;
-  background: var(--el-bg-color);
 }
-.kg-composer:has(textarea:focus-visible) {
-  outline: 2px solid var(--el-color-primary-light-5);
-  outline-offset: 1px;
+.kg-composer :deep(.chat-input-wrapper) {
+  padding: 0;
+  border-top: 0;
 }
 .kg-quick {
   display: flex;
@@ -573,34 +509,6 @@ a:focus-visible {
   background: var(--el-bg-color);
   border-radius: 16px;
   padding: 5px 10px;
-}
-.kg-sr {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip-path: inset(50%);
-  white-space: nowrap;
-  border: 0;
-}
-textarea {
-  width: 100%;
-  box-sizing: border-box;
-  resize: vertical;
-  min-height: 72px;
-  max-height: 200px;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  color: inherit;
-  padding: 0;
-  margin: 0;
-  font: inherit;
-}
-textarea:focus {
-  outline: none;
 }
 .kg-panel {
   width: 390px;
@@ -683,9 +591,6 @@ dd {
   }
   .kg-panel > header {
     position: static;
-  }
-  .kg-compose-bottom small {
-    max-width: 65%;
   }
 }
 @media (prefers-reduced-motion: reduce) {

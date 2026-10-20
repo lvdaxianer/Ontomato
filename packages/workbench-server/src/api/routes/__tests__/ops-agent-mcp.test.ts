@@ -28,7 +28,7 @@ import { installWorkbenchProduct } from "../../../product/installed";
 import { configureI18n } from "../../../i18n";
 import { appTextEn } from "../../../i18n/app-text-en";
 import { en, enLocaleMeta } from "../../../i18n/locales/en";
-import { SessionResponseStream } from "../../../platform/diagnosis/observe/agent/session-stream";
+import { SessionResponseStream } from "../../../utils/response-stream";
 import { createOpsAgentMcpRouter, getOpsAgentMcpToolCatalog } from "../ops-agent-mcp";
 import os from "node:os";
 import { installContentLayout } from "../../../content/layout";
