@@ -38,11 +38,23 @@ public final class OntologyRevisionMerge {
             Map<String, Object> base,
             Map<String, Object> current,
             Map<String, Object> incoming) {
+        return merge(base, current, incoming, Map.of());
+    }
+
+    /** Merges two edits and applies explicit current, incoming, or manual field choices. */
+    public static MergeResult merge(
+            Map<String, Object> base,
+            Map<String, Object> current,
+            Map<String, Object> incoming,
+            Map<String, Object> resolutions) {
         if (base == null || current == null || incoming == null) {
             throw new IllegalArgumentException("base, current and incoming rules are required");
         }
+        if (resolutions == null) {
+            throw new IllegalArgumentException("resolutions is required");
+        }
         List<Conflict> conflicts = new ArrayList<>();
-        Object merged = mergeValue(base, current, incoming, "$", conflicts);
+        Object merged = mergeValue(base, current, incoming, "$", conflicts, resolutions);
         if (!(merged instanceof Map<?, ?> mergedMap)) {
             throw new IllegalStateException("Merged ontology rule must be an object");
         }
@@ -55,7 +67,8 @@ public final class OntologyRevisionMerge {
             Object current,
             Object incoming,
             String path,
-            List<Conflict> conflicts) {
+            List<Conflict> conflicts,
+            Map<String, Object> resolutions) {
         if (same(current, incoming)) {
             return copyValue(current);
         }
@@ -68,20 +81,30 @@ public final class OntologyRevisionMerge {
         if (current instanceof Map<?, ?> currentMap
                 && incoming instanceof Map<?, ?> incomingMap
                 && (base == MISSING || base instanceof Map<?, ?>)) {
-            return mergeMaps(base, currentMap, incomingMap, path, conflicts);
+            return mergeMaps(base, currentMap, incomingMap, path, conflicts, resolutions);
         }
         if (current instanceof Collection<?> currentCollection
                 && incoming instanceof Collection<?> incomingCollection
                 && (base == MISSING || base instanceof Collection<?>)) {
             if (isSemanticArray(path)) {
-                return mergeSemanticCollections(base, currentCollection, incomingCollection, path, conflicts);
+                return mergeSemanticCollections(base, currentCollection, incomingCollection, path, conflicts, resolutions);
             }
+        }
+        if (resolutions.containsKey(path)) {
+            Object resolution = resolutions.get(path);
+            if ("current".equals(resolution)) {
+                return copyValue(current);
+            }
+            if ("incoming".equals(resolution)) {
+                return copyValue(incoming);
+            }
+            return copyValue(resolution);
         }
         conflicts.add(new Conflict(
                 path,
-                copyValue(base),
-                copyValue(current),
-                copyValue(incoming)));
+                publicValue(base),
+                publicValue(current),
+                publicValue(incoming)));
         return copyValue(current);
     }
 
@@ -91,7 +114,8 @@ public final class OntologyRevisionMerge {
             Map<?, ?> current,
             Map<?, ?> incoming,
             String path,
-            List<Conflict> conflicts) {
+            List<Conflict> conflicts,
+            Map<String, Object> resolutions) {
         Map<?, ?> baseMap = base instanceof Map<?, ?> map ? map : Collections.emptyMap();
         Set<String> keys = new LinkedHashSet<>();
         addKeys(keys, baseMap);
@@ -104,7 +128,8 @@ public final class OntologyRevisionMerge {
                     valueOrMissing(current, key),
                     valueOrMissing(incoming, key),
                     path + "." + key,
-                    conflicts);
+                    conflicts,
+                    resolutions);
             if (mergedValue != MISSING) {
                 merged.put(key, mergedValue);
             }
@@ -118,7 +143,8 @@ public final class OntologyRevisionMerge {
             Collection<?> current,
             Collection<?> incoming,
             String path,
-            List<Conflict> conflicts) {
+            List<Conflict> conflicts,
+            Map<String, Object> resolutions) {
         Collection<?> baseCollection = base instanceof Collection<?> collection ? collection : List.of();
         Map<String, Object> baseItems = indexBySemanticKey(baseCollection, path);
         Map<String, Object> currentItems = indexBySemanticKey(current, path);
@@ -134,7 +160,8 @@ public final class OntologyRevisionMerge {
                     valueOrMissing(currentItems, key),
                     valueOrMissing(incomingItems, key),
                     path + semanticPathSuffix(path, key),
-                    conflicts);
+                    conflicts,
+                    resolutions);
             if (mergedValue != MISSING) {
                 merged.add(mergedValue);
             }
@@ -216,6 +243,11 @@ public final class OntologyRevisionMerge {
             return copy;
         }
         return value;
+    }
+
+    /** Converts the internal deletion sentinel to a JSON-safe null in conflict details. */
+    private static Object publicValue(Object value) {
+        return value == MISSING ? null : copyValue(value);
     }
 
     /** Copies a JSON object into a mutable string-keyed map. */

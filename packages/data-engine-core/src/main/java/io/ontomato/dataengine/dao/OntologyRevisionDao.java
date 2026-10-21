@@ -63,6 +63,24 @@ public class OntologyRevisionDao {
                 revision.actorId());
     }
 
+    /** Appends a migration row when absent and treats a concurrent identical bootstrap as success. */
+    public boolean saveIfAbsent(OntologyRevisionRecord revision) {
+        if (revision == null) {
+            throw new IllegalArgumentException("revision is required");
+        }
+        int inserted = jdbcTemplate.update(
+                "INSERT INTO " + TABLE_NAME
+                        + " (domain_id, revision, content, content_hash, source, actor_id) VALUES (?, ?, ?, ?, ?, ?) "
+                        + "ON CONFLICT (domain_id, revision) DO NOTHING",
+                revision.domainId(),
+                revision.revision(),
+                revision.content(),
+                revision.contentHash(),
+                revision.source(),
+                revision.actorId());
+        return inserted == 1;
+    }
+
     /** Reads one revision for a domain without leaking JDBC exceptions to callers. */
     public Optional<OntologyRevisionRecord> find(String domainId, long revision) {
         requireDomainId(domainId);

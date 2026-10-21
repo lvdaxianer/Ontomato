@@ -35,6 +35,8 @@ import io.ontomato.dataengine.dataAdapter.DataAdapter;
 import io.ontomato.dataengine.dataAdapter.DataAdapterRegistry;
 import io.ontomato.dataengine.service.AdminService;
 import io.ontomato.dataengine.service.BusinessConfigService;
+import io.ontomato.dataengine.service.ontology.OntologyRevisionService;
+import io.ontomato.dataengine.service.ontology.OntologyRevisionSnapshot;
 import io.ontomato.dataengine.util.FileUtil;
 import io.ontomato.dataengine.dataAdapter.DslExecutionMode;
 import io.ontomato.dataengine.util.HttpRequestUtil;
@@ -78,6 +80,9 @@ public class AdminServiceImpl implements AdminService {
 
 	@Autowired
 	private QueryExampleConfigDao queryExampleConfigDao;
+
+	@Autowired(required = false)
+	private OntologyRevisionService ontologyRevisionService;
 
 	@Override
 	public void setDataSetDesc(String dataSetDesc, User user) {
@@ -1083,7 +1088,17 @@ public class AdminServiceImpl implements AdminService {
 	
 	private void writeJSONRule(Map<String, Object> jsonRule, String domainId) {
 		validatePrimaryKey(jsonRule);
-		jsonRuleDao.save(jsonRule, domainId);
+		if (ontologyRevisionService == null) {
+			jsonRuleDao.save(jsonRule, domainId);
+			return;
+		}
+		OntologyRevisionSnapshot current = ontologyRevisionService.current(domainId);
+		ontologyRevisionService.save(new OntologyRevisionService.RevisionSaveRequest(
+				jsonRule,
+				current.revision(),
+				current.contentHash(),
+				"manual",
+				null), domainId);
 	}
 
 	/**
