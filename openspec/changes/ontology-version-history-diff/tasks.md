@@ -25,8 +25,8 @@
 
 ## 5. Integration verification and documentation
 
-- [ ] 5.1 Update the manager API documentation and user-facing Chinese labels for revision history, Diff, import preview, conflict choices, and restore behavior; verify all new endpoints and UI actions are represented.
-- [ ] 5.2 Run OpenSpec validation, focused Java and Vue tests, type checks, and the applicable broader build checks; verify that existing live Doris query tests and current Ontology Manager tests remain green.
+- [x] 5.1 Update the manager API documentation and user-facing Chinese labels for revision history, Diff, import preview, conflict choices, and restore behavior; verify all new endpoints and UI actions are represented.
+- [x] 5.2 Run OpenSpec validation, focused Java and Vue tests, type checks, and the applicable broader build checks; verify that existing live Doris query tests and current Ontology Manager tests remain green.
 
 ## Workflow follow-up
 

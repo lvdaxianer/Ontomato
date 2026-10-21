@@ -164,14 +164,15 @@ public class OntologyRevisionServiceImpl implements OntologyRevisionService {
         String content = OntologyRevisionCanonicalizer.canonicalize(rule);
         String hash = OntologyRevisionCanonicalizer.sha256(rule);
         if (state.revision() == 0 || !Objects.equals(state.contentHash(), hash)) {
+            long nextRevision = state.revision() == 0 ? 1L : state.revision() + 1L;
             boolean promoted = jsonRuleDao.promote(
-                    domainId, state.revision(), state.contentHash(), 1L, content, hash);
+                    domainId, state.revision(), state.contentHash(), nextRevision, content, hash);
             if (!promoted) {
                 JSONRuleState refreshed = jsonRuleDao.queryState(domainId).orElseThrow(() -> new OntologyRevisionException(
                         OntologyRevisionException.STALE_REVISION, "Ontology revision changed during migration"));
                 return ensureRevisionHistory(domainId, refreshed);
             }
-            state = new JSONRuleState(content, 1L, hash);
+            state = new JSONRuleState(content, nextRevision, hash);
         }
 
         OntologyRevisionRecord record = new OntologyRevisionRecord(

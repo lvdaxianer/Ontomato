@@ -59,6 +59,21 @@ class OntologyRevisionServiceImplTest {
         verify(revisionDao).saveIfAbsent(any(OntologyRevisionRecord.class));
     }
 
+    /** Verifies a changed active row cannot silently move an established revision back to revision one. */
+    @Test
+    void keepsMonotonicRevisionWhenActiveContentHashIsMissingOrStale() {
+        String content = OntologyRevisionCanonicalizer.canonicalize(rule);
+        when(jsonRuleDao.queryState(DOMAIN_ID)).thenReturn(Optional.of(new JSONRuleState(content, 4L, "old-hash")));
+        when(jsonRuleDao.promote(eq(DOMAIN_ID), eq(4L), eq("old-hash"), eq(5L), eq(content), any(String.class)))
+                .thenReturn(true);
+        when(revisionDao.saveIfAbsent(any(OntologyRevisionRecord.class))).thenReturn(true);
+
+        OntologyRevisionSnapshot snapshot = service.current(DOMAIN_ID);
+
+        assertEquals(5L, snapshot.revision());
+        verify(jsonRuleDao).promote(eq(DOMAIN_ID), eq(4L), eq("old-hash"), eq(5L), eq(content), eq(snapshot.contentHash()));
+    }
+
     /** Verifies saving equivalent content does not create a new revision. */
     @Test
     void doesNotCreateARevisionForAnEquivalentRule() {
