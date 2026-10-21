@@ -4,7 +4,8 @@ export type Workspace =
   | "assets"
   | "playground"
   | "visual-modeling"
-  | "knowledge";
+  | "knowledge"
+  | "versions";
 export type AssetTab = "metrics" | "actions" | "tasks" | "functions";
 export type ModelResource = "objects" | "attributes" | "relations";
 

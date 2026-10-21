@@ -8,8 +8,8 @@
 ## 2. Revision-aware Data Engine APIs
 
 - [x] 2.1 Add authenticated domain-scoped endpoints for revision listing, revision export, import preview, resolved import apply, and historical restore; verify request validation and stable error codes with controller/service tests.
-- [ ] 2.2 Route logical ontology saves and legacy schema writes through one transactional revision service with optimistic `baseRevision`/hash checks; verify one revision per logical change, no-op saves, stale-write rejection, and rollback behavior.
-- [ ] 2.3 Add backend audit-safe diagnostics for revision operations without logging ontology secrets or full business data; verify authorization and cross-domain rejection tests.
+- [x] 2.2 Route logical ontology saves and legacy schema writes through one transactional revision service with optimistic `baseRevision`/hash checks; verify one revision per logical change, no-op saves, stale-write rejection, and rollback behavior.
+- [x] 2.3 Add backend audit-safe diagnostics for revision operations without logging ontology secrets or full business data; verify authorization and cross-domain rejection tests.
 
 ## 3. Manager contracts and structured Diff model
 
@@ -18,10 +18,10 @@
 
 ## 4. Ontology Manager version UI
 
-- [ ] 4.1 Add the version-history surface using existing Element Plus components, showing active revision, source, actor, timestamp, export action, and compare/restore actions; verify loading, empty, permission-error, and retry states with component tests.
-- [ ] 4.2 Add the two-version structured Diff view with revision selectors, summary counts, change filters, grouped navigation, and field-level old/new highlighting; verify object, attribute, relation, and deletion rendering with component tests.
-- [ ] 4.3 Add the import dialog with file validation, preview summary, conflict resolution controls, repeated-submit protection, and successful import refresh; verify no-conflict import, unresolved-conflict blocking, stale-revision recovery, and keyboard-accessible actions.
-- [ ] 4.4 Add safe historical restore confirmation that creates a new revision and refreshes the current ontology without changing graph layout; verify confirmation, failure recovery, and current-version refresh behavior.
+- [x] 4.1 Add the version-history surface using existing Element Plus components, showing active revision, source, actor, timestamp, export action, and compare/restore actions; verify loading, empty, permission-error, and retry states with component tests.
+- [x] 4.2 Add the two-version structured Diff view with revision selectors, summary counts, change filters, grouped navigation, and field-level old/new highlighting; verify object, attribute, relation, and deletion rendering with component tests.
+- [x] 4.3 Add the import dialog with file validation, preview summary, conflict resolution controls, repeated-submit protection, and successful import refresh; verify no-conflict import, unresolved-conflict blocking, stale-revision recovery, and keyboard-accessible actions.
+- [x] 4.4 Add safe historical restore confirmation that creates a new revision and refreshes the current ontology without changing graph layout; verify confirmation, failure recovery, and current-version refresh behavior.
 
 ## 5. Integration verification and documentation
 
