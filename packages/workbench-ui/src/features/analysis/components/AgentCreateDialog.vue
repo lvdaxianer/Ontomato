@@ -14,9 +14,11 @@ import { renderAgentMarkdown } from "../../../utils/agent-markdown";
 import { analysisAgentApi, analysisReportApi } from "../api";
 import type { AnalysisReportHotCardSummary } from "@ontomato/contracts/analysis-report";
 import type { AnalysisSkill } from "../../skills/api";
+import type { SkillInfo } from "@ontomato/contracts/skills";
 import { listMcpServiceNames } from "../../mcp/api";
 import { queryViewApi } from "../../query-view";
 import SkillSelector from "../../admin/components/SkillSelector.vue";
+import AgentConfigurationHeader from "../../admin/components/AgentConfigurationHeader.vue";
 import {
   AgentBasicInfoFields,
   darkAvatarColorOptions,
@@ -111,6 +113,13 @@ onBeforeUnmount(() => window.removeEventListener("beforeunload", beforeUnload));
 
 const saving = ref(false);
 const visualizationSkills = ref<AnalysisSkill[] | null>(null);
+const analysisSkillSelector = ref<InstanceType<typeof SkillSelector>>();
+const visualizationSkillSelector = ref<InstanceType<typeof SkillSelector>>();
+function handleImportedSkill(skill: SkillInfo, source: "analysis" | "visualization") {
+  if (skill.category === source) return;
+  const selector = skill.category === "visualization" ? visualizationSkillSelector : analysisSkillSelector;
+  void selector.value?.handleSkillCreated(skill);
+}
 const objectClasses = ref<ObjectClassOption[]>([]);
 const classesLoading = ref(false);
 const externalMcpServiceNames = ref<string[]>([]);
@@ -483,7 +492,7 @@ watch(isDark, () => {
     </header>
     <div class="agent-editor-workspace">
       <nav class="agent-editor-nav" :aria-label="t('admin.agentEditorNavigation')">
-        <button v-for="section in sections" :key="section.id" type="button" :class="{ active: activeSection === section.id }" :aria-current="activeSection === section.id ? 'page' : undefined" @click="activeSection = section.id"><component :is="section.icon" :size="18" /><span>{{ section.label }}</span></button>
+        <button v-for="section in sections" :key="section.id" type="button" :class="{ active: activeSection === section.id }" :aria-current="activeSection === section.id ? 'page' : undefined" @click="activeSection = section.id"><component :is="section.icon" :size="16" /><span>{{ section.label }}</span></button>
       </nav>
     <div
       :class="[
@@ -660,37 +669,29 @@ watch(isDark, () => {
       <div v-show="activeSection === 'tools' || activeSection === 'reports'" class="form-right">
 
         <!-- Analysis skill configuration -->
-        <div v-show="activeSection === 'tools'" class="skills-group">
-          <div class="skills-group-header">
-            <el-icon><Cog /></el-icon>
-            <span>{{ t("admin.analysisSkills") }}</span>
-            <el-tag size="small" effect="plain">{{ form.enabledSkillIds.length }}</el-tag>
-          </div>
-          <p class="skill-hint">{{ t("admin.selectSkillsForAnalysis") }}</p>
-          <SkillSelector v-model="form.enabledSkillIds" />
+         <div v-show="activeSection === 'tools'" class="skills-group tools-panel">
+          <SkillSelector ref="analysisSkillSelector" v-model="form.enabledSkillIds" :title="t('admin.analysisSkills')" :hint="t('admin.selectSkillsForAnalysis')" @imported="handleImportedSkill($event, 'analysis')">
+            <template #icon><Cog :size="16" /></template>
+          </SkillSelector>
         </div>
 
         <!-- Visualization skill configuration -->
-        <div v-show="activeSection === 'tools'" class="skills-group">
-          <div class="skills-group-header">
-            <el-icon><BarChart3 /></el-icon>
-            <span>{{ t("admin.visualizationSkills") }}</span>
-            <el-tag size="small" effect="plain">{{ form.enabledVisualizationSkillIds?.length ?? 0 }}</el-tag>
-          </div>
-          <p class="skill-hint">{{ t("admin.selectVisualSkills") }}</p>
+         <div v-show="activeSection === 'tools'" class="skills-group tools-panel">
           <SkillSelector
+            ref="visualizationSkillSelector"
             v-model="form.enabledVisualizationSkillIds"
+            :title="t('admin.visualizationSkills')"
+            :hint="t('admin.selectVisualSkills')"
             mode="visualization"
             @loaded="handleVisualizationSkillsLoaded"
-          />
+            @imported="handleImportedSkill($event, 'visualization')"
+          ><template #icon><BarChart3 :size="16" /></template></SkillSelector>
         </div>
 
-        <div v-show="activeSection === 'reports'" class="skills-group">
-          <div class="skills-group-header">
-            <el-icon><Settings /></el-icon>
-            <span>{{ t("admin.reportDeliverable") }}</span>
-          </div>
+        <div v-show="activeSection === 'reports'" class="skills-group configuration-panel">
+          <AgentConfigurationHeader :title="t('admin.reportDeliverable')"><template #icon><Settings :size="16" /></template></AgentConfigurationHeader>
           <div class="setting-row"><div><strong>{{ t('admin.reportDeliverableEnabled') }}</strong><p>{{ t('admin.reportDeliverableHint') }}</p></div><el-switch v-model="form.reportDeliverableEnabled" :aria-label="t('admin.reportDeliverableEnabled')" /></div>
+          <el-form label-position="top">
           <el-form-item
             v-if="form.reportDeliverableEnabled && !isLoopMode"
             :label="t('admin.summaryPosition')"
@@ -707,13 +708,11 @@ watch(isDark, () => {
             </el-select>
             <p class="form-tip">{{ t("admin.summaryPositionHint") }}</p>
           </el-form-item>
+          </el-form>
         </div>
 
-        <div v-show="activeSection === 'reports'" class="skills-group">
-          <div class="skills-group-header">
-            <el-icon><Flame /></el-icon>
-            <span>{{ t("admin.hotReport") }}</span>
-          </div>
+        <div v-show="activeSection === 'reports'" class="skills-group configuration-panel">
+          <AgentConfigurationHeader :title="t('admin.hotReport')"><template #icon><Flame :size="16" /></template></AgentConfigurationHeader>
           <div class="setting-row">
             <div><strong>{{ t('admin.hotReportEnabled') }}</strong><p>{{ t('admin.hotReportEnabledHint') }}</p></div>
             <el-switch
@@ -750,12 +749,14 @@ watch(isDark, () => {
           </div>
         </div>
 
-        <div v-show="activeSection === 'tools'" class="skills-group">
-          <div class="skills-group-header">
-            <el-icon><Cog /></el-icon>
-            <span>{{ t("admin.externalMcpServices") }}</span>
-            <el-tag size="small" effect="plain">{{ form.enabledMcpServiceNames.length }}</el-tag>
-          </div>
+         <div v-show="activeSection === 'tools'" class="skills-group tools-panel">
+          <AgentConfigurationHeader :title="t('admin.externalMcpServices')" :hint="t('admin.externalMcpServicesHint')" :count="form.enabledMcpServiceNames.length">
+            <template #icon><Cog :size="16" /></template>
+            <template #actions>
+              <el-button size="small" tag="a" href="#/admin/mcp-service" target="_blank" rel="noopener">{{ t('mcp.manageServices') }}</el-button>
+              <el-button size="small" :loading="mcpServicesLoading" @click="loadExternalMcpServices">{{ t('common.refresh') }}</el-button>
+            </template>
+          </AgentConfigurationHeader>
           <el-select
             popper-class="agent-editor-select-dropdown"
             v-model="form.enabledMcpServiceNames"
@@ -786,11 +787,6 @@ watch(isDark, () => {
             :closable="false"
             :title="t('admin.externalMcpServicesLoadFailed')"
           />
-          <p class="skill-hint">{{ t("admin.externalMcpServicesHint") }}</p>
-          <div class="mcp-actions">
-          <a href="#/admin/mcp-service" target="_blank" rel="noopener" class="mcp-manage-link">{{ t('mcp.manageServices') }}</a>
-          <el-button text :loading="mcpServicesLoading" @click="loadExternalMcpServices">{{ t('common.refresh') }}</el-button>
-          </div>
         </div>
       </div>
     </div>
@@ -813,50 +809,48 @@ watch(isDark, () => {
 </template>
 
 <style scoped>
-:global(.agent-editor-drawer.el-drawer) { border-radius: 0 !important; overflow: hidden; }
+:global(.agent-editor-drawer.el-drawer) { border-radius: 0 !important; overflow: hidden; font-family: var(--font-sans); font-size: var(--text-sm); }
+:global(.agent-editor-drawer) .el-button { font-family: inherit; }
 :global(.el-popper.agent-editor-select-dropdown) { max-width: none !important; box-sizing: border-box; }
 :global(.agent-editor-select-dropdown .el-select-dropdown) { width: 100%; min-width: 0 !important; }
 :global(.agent-editor-select-dropdown .el-select-dropdown__item) { width: 100%; box-sizing: border-box; }
 :global(.agent-editor-drawer > .el-drawer__body) { display: flex; flex: 1; flex-direction: column; min-height: 0; padding: 0; overflow: hidden; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
-.agent-editor-header { display: flex; align-items: center; gap: 20px; padding: 16px 24px; border-bottom: 1px solid var(--el-border-color-light); flex-shrink: 0; }
+.agent-editor-header { display: flex; align-items: center; gap: var(--spacing-md); padding: var(--spacing-md) var(--spacing-lg); border-bottom: 1px solid var(--el-border-color-light); flex-shrink: 0; }
 .agent-editor-heading { flex: 1; min-width: 0; display: grid; gap: 4px; }
-.agent-editor-heading strong { font-size: 18px; color: var(--el-text-color-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-editor-heading strong { font-size: 16px; font-weight: 600; color: var(--el-text-color-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .agent-editor-heading small { font-size: 12px; color: var(--el-text-color-secondary); }
-.agent-editor-workspace { flex: 1; display: grid; grid-template-columns: 184px minmax(0, 1fr); min-height: 0; }
-.agent-editor-nav { padding: 24px 12px; display: flex; flex-direction: column; gap: 6px; border-right: 1px solid var(--el-border-color-light); background: var(--el-fill-color-extra-light); overflow: auto; }
-.agent-editor-nav button { display: flex; gap: 12px; align-items: center; padding: 12px 16px; border: 0; border-radius: 8px; background: transparent; color: var(--el-text-color-regular); cursor: pointer; text-align: left; font: inherit; }
+.agent-editor-workspace { flex: 1; display: grid; grid-template-columns: 160px minmax(0, 1fr); min-height: 0; }
+.agent-editor-nav { padding: var(--spacing-lg) var(--spacing-sm); display: flex; flex-direction: column; gap: var(--spacing-xs); border-right: 1px solid var(--el-border-color-light); background: var(--el-fill-color-extra-light); overflow: auto; }
+.agent-editor-nav button { display: flex; gap: var(--spacing-sm); align-items: center; padding: 9px 12px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--el-text-color-regular); cursor: pointer; text-align: left; font: inherit; line-height: 1.5; }
 .agent-editor-nav button.active { color: var(--el-color-primary); background: var(--el-color-primary-light-9); font-weight: 600; }
 .agent-editor-nav button:hover { background: var(--el-fill-color); }
-.prompt-workspace { display: flex; flex-direction: column; gap: 16px; min-height: calc(100dvh - 160px); }
-.prompt-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.prompt-workspace { display: flex; flex-direction: column; gap: var(--spacing-md); min-height: calc(100dvh - 160px); }
+.prompt-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--spacing-sm); }
 .prompt-toolbar .section-title { border: 0; padding: 0; }
 .prompt-workspace > .codemirror-editor { flex: 1; min-height: 400px; }
 .prompt-workspace :deep(.cm-editor) { min-height: 400px; height: calc(100dvh - 310px); }
-.prompt-preview { flex: 1; min-height: 400px; padding: 24px; border: 1px solid var(--el-border-color); border-radius: 8px; overflow-wrap: anywhere; line-height: 1.8; }
+.prompt-preview { flex: 1; min-height: 400px; padding: var(--spacing-lg); border: 1px solid var(--el-border-color); border-radius: var(--radius-sm); overflow-wrap: anywhere; line-height: 1.6; }
 .prompt-preview :deep(pre) { overflow: auto; padding: 16px; background: var(--el-fill-color-light); }
 .prompt-status { color: var(--el-text-color-secondary); text-align: right; }
-.mcp-manage-link {
-  display: inline-block;
-  color: var(--el-color-primary);
-}
 .agent-form-layout {
   display: block;
   min-width: 0;
   overflow-y: auto;
-  padding: 28px;
+  padding: var(--spacing-lg);
 }
-.editor-section-heading { max-width: 1100px; margin: 0 auto 28px; }
-.editor-section-heading h2 { margin: 0 0 8px; font-size: 22px; color: var(--el-text-color-primary); }
-.editor-section-heading p { margin: 0; color: var(--el-text-color-secondary); line-height: 1.7; font-size: 14px; }
-.configuration-card, .form-right > .skills-group { padding: 24px; border: 1px solid var(--el-border-color-light); border-radius: 12px; background: var(--el-bg-color); }
-.identity-card { max-width: 800px; }
-.identity-card :deep(.el-form-item) { margin-bottom: 24px; }
-.setting-row { display: flex; justify-content: space-between; align-items: center; gap: 24px; padding: 0; }
-.setting-row strong { font-size: 14px; font-weight: 500; color: var(--el-text-color-primary); }
-.setting-row p { font-size: 13px; line-height: 1.6; color: var(--el-text-color-secondary); margin: 6px 0 0; }
+.editor-section-heading { max-width: 1100px; margin: 0 auto var(--spacing-lg); }
+.editor-section-heading h2 { margin: 0 0 var(--spacing-xs); font-size: 15px; font-weight: 600; color: var(--el-text-color-primary); }
+.editor-section-heading p { margin: 0; color: var(--el-text-color-secondary); line-height: 1.5; font-size: var(--text-sm); }
+.configuration-card, .form-right > .skills-group { padding: var(--spacing-lg); border: 1px solid var(--el-border-color-light); border-radius: var(--radius-sm); background: var(--el-bg-color); }
+.identity-card { width: 100%; }
+.agent-form-layout :deep(.el-form-item) { margin-bottom: var(--spacing-lg); }
+.agent-form-layout :deep(.el-form-item__label) { font-size: var(--text-sm); font-weight: 500; line-height: 1.5; margin-bottom: var(--spacing-sm); }
+.setting-row { display: flex; justify-content: space-between; align-items: center; gap: var(--spacing-lg); padding: 0; }
+.setting-row strong { font-size: var(--text-sm); font-weight: 500; color: var(--el-text-color-primary); }
+.setting-row p { font-size: 12px; line-height: 1.5; color: var(--el-text-color-secondary); margin: var(--spacing-xs) 0 0; }
 .setting-row .el-switch { flex-shrink: 0; }
-.data-configuration { display: grid; gap: 24px; }
+.data-configuration { display: grid; gap: var(--spacing-lg); }
 .configuration-card :deep(.el-form-item:last-child) { margin-bottom: 0; }
 .subgraph-fields { border-top: 1px solid var(--el-border-color-light); padding-top: 20px; margin-top: 16px; }
 .scope-graph-card { display: grid; gap: 12px; padding: 16px; border: 1px solid var(--el-border-color-light); border-radius: 10px; background: var(--el-fill-color-extra-light); margin-bottom: 20px; }
@@ -882,30 +876,33 @@ watch(isDark, () => {
 .scope-graph-node.root circle { fill: var(--el-color-primary); stroke: var(--el-color-primary); stroke-width: 3; }
 .scope-graph-node.root text { fill: #fff; font-weight: 600; }
 .scope-graph-node:focus-visible circle { stroke: var(--el-color-primary); stroke-width: 4; }
-.form-right > .skills-group { display: flex; flex-direction: column; gap: 16px; margin-top: 0; }
+.form-right > .skills-group { display: flex; flex-direction: column; gap: var(--spacing-sm); margin-top: 0; }
+.tools-panel { overflow: hidden; }
+.configuration-panel { overflow: hidden; }
 .form-right > .skills-group > .el-form-item { margin-bottom: 0; }
-.published-reports-section { display: grid; gap: 12px; padding-top: 16px; border-top: 1px solid var(--el-border-color-light); }
+.published-reports-section { display: grid; gap: var(--spacing-sm); padding-top: var(--spacing-md); border-top: 1px solid var(--el-border-color-light); }
 .published-reports-section > .form-tip { margin: 0; }
-.mcp-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 16px; }
-.mcp-actions .el-button { margin: 0; padding: 0; }
-.skills-group-header .el-tag { margin-left: auto; }
+.tools-panel :deep(.configuration-header), .configuration-panel :deep(.configuration-header) { padding-bottom: var(--spacing-sm); border-bottom: 1px solid var(--el-border-color-lighter); }
+.configuration-panel > .el-form { min-width: 0; }
+.configuration-panel :deep(.el-form-item) { margin: 0; }
+.mcp-load-alert { width: 100%; }
 
 .form-left,
 .form-right {
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  gap: var(--spacing-lg);
   min-width: 0;
   max-width: 1100px;
   margin: 0 auto;
 }
 .editor-config-section { max-width: 100%; }
 .editor-config-section :deep(.el-radio-group) { display: flex; flex-wrap: wrap; gap: 12px; width: 100%; }
-.editor-config-section :deep(.el-radio) { margin: 0; flex: 1 1 240px; min-width: 0; height: auto; min-height: 64px; padding: 20px; border: 1px solid var(--el-border-color); border-radius: 10px; align-items: flex-start; }
+.editor-config-section :deep(.el-radio) { margin: 0; flex: 1 1 220px; min-width: 0; height: auto; min-height: 40px; padding: var(--spacing-md); border: 1px solid var(--el-border-color); border-radius: var(--radius-sm); align-items: flex-start; }
 .editor-config-section :deep(.el-radio__input) { margin-top: 3px; }
 .editor-config-section :deep(.el-radio__label) { white-space: normal; min-width: 0; line-height: 1.6; }
-.editor-config-section :deep(.mode-title) { display: block; font-weight: 600; font-size: 15px; }
-.editor-config-section :deep(.el-radio small) { display: block; margin-top: 6px; color: var(--el-text-color-secondary); line-height: 1.6; font-size: 13px; }
+.editor-config-section :deep(.mode-title) { display: block; font-weight: 600; font-size: var(--text-sm); }
+.editor-config-section :deep(.el-radio small) { display: block; margin-top: 4px; color: var(--el-text-color-secondary); line-height: 1.5; font-size: 12px; }
 .editor-config-section :deep(.el-radio.is-checked) { border-color: var(--el-color-primary); background: var(--el-color-primary-light-9); }
 .agent-form-layout :deep(.el-form-item__label) { white-space: normal !important; }
 
@@ -941,8 +938,8 @@ watch(isDark, () => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  padding: 16px;
+  gap: var(--spacing-md);
+  padding: var(--spacing-md);
   border-bottom: 1px solid var(--el-border-color-lighter);
 }
 .hot-report-item .el-switch { flex-shrink: 0; }
@@ -999,8 +996,8 @@ watch(isDark, () => {
 .skills-group-header {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: 14px;
+  gap: var(--spacing-sm);
+  font-size: var(--text-sm);
   font-weight: 600;
   color: var(--el-text-color-primary);
   margin-bottom: 0;
@@ -1015,6 +1012,9 @@ button:focus-visible {
   outline: 2px solid var(--el-color-primary);
   outline-offset: 3px;
 }
+@media (min-width: 701px) and (max-width: 1100px) {
+  :global(.agent-editor-drawer.el-drawer) { width: 85vw !important; }
+}
 @media (max-width: 700px) {
   :global(.agent-editor-drawer.el-drawer) { width: 100vw !important; }
   .agent-editor-workspace { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
@@ -1024,8 +1024,13 @@ button:focus-visible {
   .agent-editor-heading strong { font-size: 15px; }
   .agent-form-layout {
     grid-template-columns: minmax(0, 1fr);
-    padding: 20px 16px;
+    padding: var(--spacing-lg);
   }
+  .agent-editor-heading { gap: 2px; }
+  .agent-editor-header > .el-button { flex-shrink: 0; }
+  .form-right { width: 100%; }
+  .tools-panel :deep(.configuration-header), .configuration-panel :deep(.configuration-header) { align-items: flex-start; }
+  .tools-panel :deep(.configuration-actions) { width: 100%; margin-left: 24px; }
   .configuration-card, .form-right > .skills-group { padding: 16px; }
   :deep(.el-form-item) {
     display: block;

@@ -17,6 +17,7 @@ const props = defineProps<{
   editSkill?: SkillInfo | null;
   /** Category preselected when creating (the list's current filter); editing keeps the skill's own category. */
   initialCategory: SkillInfo["category"];
+  lockCategory?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -184,7 +185,7 @@ function resetForm() {
 </script>
 
 <template>
-  <el-dialog v-model="visible" :title="dialogTitle" width="600px" :close-on-click-modal="false">
+  <el-dialog v-model="visible" :title="dialogTitle" width="600px" append-to-body :close-on-click-modal="false">
     <el-form label-width="130px" label-position="right">
       <el-form-item :label="t('admin.skillId')" required>
         <el-input
@@ -198,7 +199,7 @@ function resetForm() {
       <el-form-item :label="t('common.category')" required>
         <el-select
           v-model="form.category"
-          :disabled="loading || isEditMode"
+          :disabled="loading || isEditMode || props.lockCategory"
           @change="form.type = typeForCategory(form.category)"
         >
           <el-option :label="t('admin.analysis')" value="analysis" />
