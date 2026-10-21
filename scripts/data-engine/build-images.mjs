@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import {
   buildStamp,
   docker,
+  dockerProxyBuildArgs,
   imageLabels,
   imageCacheArgs,
   inspectImage,
@@ -171,6 +172,7 @@ export async function buildJavaApp(app, { parsed }) {
   console.log(`[build] ${app.component} ${tag} (prompt=${lang})`);
   docker([
     ...baseBuild(arch),
+    ...dockerProxyBuildArgs(),
     ...imageCacheArgs(),
     ...editionArgs,
     "--target",

@@ -12,6 +12,9 @@
 ARG JDK_IMAGE=docker.io/library/eclipse-temurin:21-jdk-jammy@sha256:c7d5863b5dd8f26b90c64f1d80cc2b0e5a5e4642f8db9955a370d348edd8f438
 ARG PYTHON_RUNTIME_IMAGE=docker.io/library/python:3.10-slim-bookworm@sha256:2559be987fd64d61badbdafd303ea58a9ccab36d6c3c08bce219e762177d2eca
 ARG JRE_IMAGE=docker.io/library/eclipse-temurin:21-jre-jammy@sha256:61d6c7b34d36aee3f45d043101259f97f3c6d428dc2a6f75513789983c5e254f
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG NO_PROXY
 # Which export stage the final image copies from. The builder selects it: the
 # public component builds build-central, the enterprise component build-secret.
 ARG EXPORT_STAGE=build-central
@@ -30,6 +33,9 @@ WORKDIR /src
 COPY ontomato/ /src/ontomato/
 
 FROM ontomato-src AS recipe
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG NO_PROXY
 # license-maven-plugin builds each dependency's effective model with Maven's own project
 # builder (parent POM inheritance and interpolation included) over the same resolution as
 # copy-dependencies, so no POM is re-parsed here; this template only writes that model as JSON.
@@ -124,6 +130,9 @@ ARG APP_LIB_MODULES
 ARG EXCLUDE_ARTIFACT_IDS
 ARG KEEP_NATIVE=
 ARG LICENSE_PROFILE=
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG NO_PROXY
 RUN --mount=type=cache,target=/root/.m2 <<'EOF'
 set -eu
 cat > /tmp/maven-settings.xml <<'SETTINGS'
@@ -146,6 +155,9 @@ ARG LICENSE_PROFILE=
 ARG APP_CHECK_SCRIPT
 ARG APP_CHECK_JAR
 ARG APP_CHECK_ARG
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG NO_PROXY
 RUN --mount=type=secret,id=maven-settings,required=true \
     --mount=type=cache,target=/root/.m2 \
     test -n "${APP_CHECK_SCRIPT}" && test -n "${APP_CHECK_JAR}" && test -n "${APP_CHECK_ARG}" \
@@ -161,6 +173,9 @@ FROM ${JRE_IMAGE} AS jre
 
 FROM ${PYTHON_RUNTIME_IMAGE} AS runtime-base
 ARG PIP_INDEX_URL=https://pypi.org/simple
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG NO_PROXY
 ENV JAVA_HOME=/opt/java/openjdk
 ENV PATH=/opt/java/openjdk/bin:$PATH
 ENV LANG=C.UTF-8
