@@ -96,6 +96,27 @@ class OntologyRevisionCanonicalizerTest {
         assertEquals("$.classDef[className=Order].attrs[name=amount]", result.conflicts().get(0).path());
     }
 
+    /** Verifies an explicit incoming choice resolves a scalar conflict. */
+    @Test
+    void appliesAnIncomingConflictResolution() {
+        Map<String, Object> base = rule(
+                List.of(classDefinition("Order", List.of(attribute("id"), attribute("amount")))),
+                List.of("Order"));
+        Map<String, Object> current = rule(
+                List.of(classDefinition("Order", List.of(attribute("id"), attribute("amount", "订单金额")))),
+                List.of("Order"));
+        Map<String, Object> incoming = rule(
+                List.of(classDefinition("Order", List.of(attribute("id"), attribute("amount", "金额")))),
+                List.of("Order"));
+        String path = "$.classDef[className=Order].attrs[name=amount].showName";
+
+        OntologyRevisionMerge.MergeResult result = OntologyRevisionMerge.merge(
+                base, current, incoming, Map.of(path, "incoming"));
+
+        assertTrue(result.conflicts().isEmpty());
+        assertEquals("金额", findAttribute(findClass(result.merged(), "Order"), "amount").get("showName"));
+    }
+
     /** Creates a compact internal ontology rule for merge tests. */
     private static Map<String, Object> rule(List<Map<String, Object>> classDefinitions, List<String> classNames) {
         Map<String, Object> rule = new LinkedHashMap<>();

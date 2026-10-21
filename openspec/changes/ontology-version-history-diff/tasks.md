@@ -2,12 +2,12 @@
 
 ## 1. Revision storage and migration
 
-- [ ] 1.1 Add an idempotent PostgreSQL ontology revision schema and repository operations for listing, reading, hashing, and atomically promoting a domain revision; verify with focused DAO/migration tests that an existing `json_rule` domain is bootstrapped as revision 1 without content changes.
+- [x] 1.1 Add an idempotent PostgreSQL ontology revision schema and repository operations for listing, reading, hashing, and atomically promoting a domain revision; verify with focused DAO/migration tests that an existing `json_rule` domain is bootstrapped as revision 1 without content changes.
 - [x] 1.2 Add canonical ontology JSON normalization and semantic three-way diff/merge utilities; verify additions, removals, scalar edits, delete-versus-edit conflicts, no-op detection, and stable entity matching with unit tests.
 
 ## 2. Revision-aware Data Engine APIs
 
-- [ ] 2.1 Add authenticated domain-scoped endpoints for revision listing, revision export, import preview, resolved import apply, and historical restore; verify request validation and stable error codes with controller/service tests.
+- [x] 2.1 Add authenticated domain-scoped endpoints for revision listing, revision export, import preview, resolved import apply, and historical restore; verify request validation and stable error codes with controller/service tests.
 - [ ] 2.2 Route logical ontology saves and legacy schema writes through one transactional revision service with optimistic `baseRevision`/hash checks; verify one revision per logical change, no-op saves, stale-write rejection, and rollback behavior.
 - [ ] 2.3 Add backend audit-safe diagnostics for revision operations without logging ontology secrets or full business data; verify authorization and cross-domain rejection tests.
 
