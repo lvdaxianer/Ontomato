@@ -13,8 +13,8 @@
 
 ## 3. Manager contracts and structured Diff model
 
-- [ ] 3.1 Extend the typed manager client with revision, export, preview, apply, restore, and conflict contracts while preserving the existing metadata/query client; verify request paths, payloads, stale-response handling, and error mapping in API tests.
-- [ ] 3.2 Add a pure TypeScript ontology Diff model that groups object, attribute, and relation changes by semantic key and exposes summary counts; verify first-versus-current comparisons and unchanged filtering with unit tests.
+- [x] 3.1 Extend the typed manager client with revision, export, preview, apply, restore, and conflict contracts while preserving the existing metadata/query client; verify request paths, payloads, stale-response handling, and error mapping in API tests.
+- [x] 3.2 Add a pure TypeScript ontology Diff model that groups object, attribute, and relation changes by semantic key and exposes summary counts; verify first-versus-current comparisons and unchanged filtering with unit tests.
 
 ## 4. Ontology Manager version UI
 
