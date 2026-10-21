@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, defineComponent, h, onMounted, ref, watch, type PropType } from "vue";
-import { Check, Download, Eye, FileUp, History, RotateCcw, Upload } from "lucide-vue-next";
+import { computed, onMounted, ref, watch } from "vue";
+import { ArrowRight, Check, CircleCheck, Download, Equal, Eye, FileUp, GitCompare, History, Minus, PenLine, Plus, RotateCcw, Upload } from "lucide-vue-next";
 import {
   ElAlert,
   ElButton,
@@ -14,7 +14,6 @@ import {
   ElRadioButton,
   ElRadioGroup,
   ElSelect,
-  ElTag,
 } from "element-plus";
 import {
   type OntologyImportPreviewResponse,
@@ -30,6 +29,7 @@ import {
   type OntologyRevisionDocument,
   type OntologyRevisionSummary,
 } from "../ontology-versioning";
+import DiffSection from "./OntologyDiffSection.vue";
 
 type DiffFilter = "all" | "changed" | "added" | "removed" | "unchanged";
 
@@ -65,6 +65,15 @@ const fileInput = ref<HTMLInputElement>();
 const diff = computed<OntologyDiff | null>(() => {
   if (!baselineDocument.value || !comparisonDocument.value) return null;
   return diffOntologyRevision(baselineDocument.value.content, comparisonDocument.value.content);
+});
+
+const totalVisible = computed(() => {
+  if (!diff.value) return 0;
+  return (
+    visibleItems(diff.value.objects).length +
+    visibleItems(diff.value.attributes).length +
+    visibleItems(diff.value.relations).length
+  );
 });
 
 const hasUnresolvedConflicts = computed(() =>
@@ -290,49 +299,6 @@ async function restoreRevision(revision: OntologyRevisionSummary) {
   }
 }
 
-const DiffSection = defineComponent({
-  name: "DiffSection",
-  props: {
-    title: { type: String, required: true },
-    items: { type: Array as PropType<OntologyDiffItem[]>, required: true },
-    beforeLabel: { type: String, required: true },
-    afterLabel: { type: String, required: true },
-  },
-  setup(props) {
-    const value = (item: OntologyDiffItem, field: "before" | "after") => {
-      const source = item[field];
-      if (source === null) return "—";
-      const content = Object.entries(source)
-        .filter(([key]) => key !== "attrs" && key !== "className" && key !== "name" && key !== "relationship")
-        .map(([key, entry]) => `${key}: ${typeof entry === "string" ? entry : JSON.stringify(entry)}`)
-        .join("\n");
-      return content || "—";
-    };
-    return () =>
-      h("section", { class: "diff-section" }, [
-        h("div", { class: "section-heading" }, [h("h3", props.title), h("span", `${props.items.length}`)]),
-        props.items.length
-          ? props.items.map((item) =>
-              h("article", { key: item.key, class: ["diff-item", `diff-${item.kind}`] }, [
-                h("div", { class: "diff-item-heading" }, [
-                  h("strong", item.label),
-                  h(ElTag, { size: "small", type: item.kind === "added" ? "success" : item.kind === "removed" ? "danger" : item.kind === "changed" ? "warning" : "info" }, () => item.kind),
-                ]),
-                h("div", { class: "diff-values" }, [
-                  h("div", { class: "diff-value" }, [h("span", props.beforeLabel), h("pre", value(item, "before"))]),
-                  h("div", { class: "diff-arrow" }, "→"),
-                  h("div", { class: "diff-value" }, [h("span", props.afterLabel), h("pre", value(item, "after"))]),
-                ]),
-                item.fields.length
-                  ? h("ul", { class: "diff-fields" }, item.fields.map((field) => h("li", { key: field.field }, [h("strong", field.field), h("span", `${String(field.before ?? "—")} → ${String(field.after ?? "—")}`)])))
-                  : null,
-              ])
-            )
-          : h("p", { class: "section-empty" }, "—"),
-      ]);
-  },
-});
-
 function setResolution(path: string, value: "current" | "incoming") {
   resolutions.value = { ...resolutions.value, [path]: value };
 }
@@ -381,45 +347,72 @@ onMounted(() => void loadHistory());
           <strong>{{ ot("ontologyVersionHistory") }}</strong>
           <el-tag size="small" type="success">{{ ot("revision", { revision: activeRevision || 0 }) }}</el-tag>
         </div>
-        <button
-          v-for="revision in revisions"
-          :key="revision.revision"
-          :class="['revision-row', { active: revision.revision === activeRevision }]"
-          @click="comparisonRevision = revision.revision"
-        >
-          <span class="revision-row-main">
-            <strong>{{ revisionLabel(revision) }}</strong>
-            <small>{{ formatDate(revision.createdAt) }}</small>
-          </span>
-          <Check v-if="revision.revision === activeRevision" :size="16" />
-        </button>
+        <ol class="revision-timeline">
+          <li
+            v-for="revision in revisions"
+            :key="revision.revision"
+            :class="[
+              'revision-item',
+              { active: revision.revision === activeRevision, selected: revision.revision === comparisonRevision },
+            ]"
+          >
+            <button class="revision-row" @click="comparisonRevision = revision.revision">
+              <span class="revision-row-main">
+                <strong>{{ revisionLabel(revision) }}</strong>
+                <small>{{ formatDate(revision.createdAt) }}</small>
+              </span>
+              <span class="revision-row-marker">
+                <GitCompare v-if="revision.revision === comparisonRevision && revision.revision !== activeRevision" :size="16" />
+                <Check v-else-if="revision.revision === activeRevision" :size="16" />
+              </span>
+            </button>
+          </li>
+        </ol>
       </aside>
 
       <main class="revision-main">
         <section class="compare-toolbar">
-          <div>
+          <div class="compare-heading">
             <h2>{{ ot("revisionCompareTitle") }}</h2>
-            <p>{{ ot("revisionFirst") }} → {{ ot("revisionCurrent") }}</p>
           </div>
           <div class="compare-selects">
-            <el-select v-model="baselineRevision" :aria-label="ot('revisionFirst')" class="revision-select">
-              <el-option v-for="item in revisions" :key="`base-${item.revision}`" :label="revisionLabel(item)" :value="item.revision" />
-            </el-select>
-            <span aria-hidden="true">→</span>
-            <el-select v-model="comparisonRevision" :aria-label="ot('revisionCurrent')" class="revision-select">
-              <el-option v-for="item in revisions" :key="`compare-${item.revision}`" :label="revisionLabel(item)" :value="item.revision" />
-            </el-select>
+            <label class="compare-field">
+              <span>{{ ot("revisionBaseline") }}</span>
+              <el-select v-model="baselineRevision" :aria-label="ot('revisionBaseline')" class="revision-select">
+                <el-option v-for="item in revisions" :key="`base-${item.revision}`" :label="revisionLabel(item)" :value="item.revision" />
+              </el-select>
+            </label>
+            <span class="compare-arrow" aria-hidden="true"><ArrowRight :size="18" /></span>
+            <label class="compare-field">
+              <span>{{ ot("revisionCompareTarget") }}</span>
+              <el-select v-model="comparisonRevision" :aria-label="ot('revisionCompareTarget')" class="revision-select">
+                <el-option v-for="item in revisions" :key="`compare-${item.revision}`" :label="revisionLabel(item)" :value="item.revision" />
+              </el-select>
+            </label>
           </div>
         </section>
 
         <section v-if="diff" class="diff-panel">
           <div class="summary-grid">
-            <div class="summary-card"><strong>{{ diff.summary.added }}</strong><span>{{ ot("revisionDiffAdded") }}</span></div>
-            <div class="summary-card"><strong>{{ diff.summary.removed }}</strong><span>{{ ot("revisionDiffRemoved") }}</span></div>
-            <div class="summary-card"><strong>{{ diff.summary.changed }}</strong><span>{{ ot("revisionDiffChanged") }}</span></div>
-            <div class="summary-card summary-card-muted"><strong>{{ diff.summary.unchanged }}</strong><span>{{ ot("revisionDiffUnchanged") }}</span></div>
+            <div class="summary-card summary-added">
+              <span class="summary-icon"><Plus :size="18" /></span>
+              <div class="summary-text"><strong>{{ diff.summary.added }}</strong><span>{{ ot("revisionDiffAdded") }}</span></div>
+            </div>
+            <div class="summary-card summary-removed">
+              <span class="summary-icon"><Minus :size="18" /></span>
+              <div class="summary-text"><strong>{{ diff.summary.removed }}</strong><span>{{ ot("revisionDiffRemoved") }}</span></div>
+            </div>
+            <div class="summary-card summary-changed">
+              <span class="summary-icon"><PenLine :size="18" /></span>
+              <div class="summary-text"><strong>{{ diff.summary.changed }}</strong><span>{{ ot("revisionDiffModified") }}</span></div>
+            </div>
+            <div class="summary-card summary-unchanged">
+              <span class="summary-icon"><Equal :size="18" /></span>
+              <div class="summary-text"><strong>{{ diff.summary.unchanged }}</strong><span>{{ ot("revisionDiffUnchanged") }}</span></div>
+            </div>
           </div>
-          <div class="filter-row" role="group" :aria-label="ot('revisionCompareTitle')">
+          <div class="filter-row">
+            <span v-if="totalVisible" class="filter-count">{{ ot("revisionDiffCount", { count: totalVisible }) }}</span>
             <el-radio-group v-model="diffFilter" size="small">
               <el-radio-button value="all">{{ ot("revisionDiffAll") }}</el-radio-button>
               <el-radio-button value="changed">{{ ot("revisionDiffChanged") }}</el-radio-button>
@@ -429,15 +422,24 @@ onMounted(() => void loadHistory());
             </el-radio-group>
           </div>
 
-          <DiffSection :title="ot('revisionObjects')" :items="visibleItems(diff.objects)" :before-label="ot('revisionBefore')" :after-label="ot('revisionAfter')" />
-          <DiffSection :title="ot('revisionAttributes')" :items="visibleItems(diff.attributes)" :before-label="ot('revisionBefore')" :after-label="ot('revisionAfter')" />
-          <DiffSection :title="ot('revisionRelations')" :items="visibleItems(diff.relations)" :before-label="ot('revisionBefore')" :after-label="ot('revisionAfter')" />
+          <div v-if="totalVisible === 0" class="diff-empty">
+            <span class="diff-empty-icon"><CircleCheck :size="30" /></span>
+            <p>{{ baselineRevision === comparisonRevision ? ot("revisionDiffIdentical") : ot("revisionDiffEmpty") }}</p>
+          </div>
+          <template v-else>
+            <DiffSection :title="ot('revisionObjects')" :items="visibleItems(diff.objects)" :before-label="ot('revisionBefore')" :after-label="ot('revisionAfter')" />
+            <DiffSection :title="ot('revisionAttributes')" :items="visibleItems(diff.attributes)" :before-label="ot('revisionBefore')" :after-label="ot('revisionAfter')" />
+            <DiffSection :title="ot('revisionRelations')" :items="visibleItems(diff.relations)" :before-label="ot('revisionBefore')" :after-label="ot('revisionAfter')" />
+          </template>
         </section>
         <div v-else class="revision-state"><Eye :size="20" /> {{ ot("revisionLoading") }}</div>
 
-        <section class="active-revision-card" v-if="comparisonDocument">
-          <div>
-            <span class="card-label">{{ comparisonDocument.revision === activeRevision ? ot("activeRevision") : ot("revisionCompare") }}</span>
+        <section v-if="comparisonDocument" class="active-revision-card">
+          <div class="active-revision-meta">
+            <span class="active-revision-badge">
+              <History :size="14" />
+              {{ comparisonDocument.revision === activeRevision ? ot("activeRevision") : ot("revisionCompare") }}
+            </span>
             <strong>{{ ot("revision", { revision: comparisonDocument.revision }) }}</strong>
             <small>{{ sourceLabel(comparisonDocument.source) }} · {{ formatDate(comparisonDocument.createdAt) }}</small>
           </div>
@@ -495,56 +497,63 @@ onMounted(() => void loadHistory());
 
 <style scoped>
 .revision-surface { display: flex; min-height: 0; flex: 1; flex-direction: column; overflow: auto; padding: var(--spacing-2xl); background: var(--el-bg-color); }
-.revision-header, .compare-toolbar, .panel-heading, .active-revision-card, .diff-item-heading, .section-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--spacing-md); }
+.revision-header, .panel-heading, .active-revision-card { display: flex; align-items: center; justify-content: space-between; gap: var(--spacing-md); }
 .revision-header { margin-bottom: var(--spacing-xl); }
-.revision-header h1, .compare-toolbar h2 { margin: 4px 0; color: var(--el-text-color-primary); }
-.revision-header p, .compare-toolbar p { margin: 0; color: var(--el-text-color-secondary); }
+.revision-header h1 { margin: 4px 0; color: var(--el-text-color-primary); }
+.revision-header p { margin: 0; color: var(--el-text-color-secondary); }
 .revision-eyebrow, .import-hint { display: flex; align-items: center; gap: var(--spacing-xs); color: var(--el-color-primary); font-size: var(--text-sm); font-weight: var(--font-medium); }
 .revision-actions { display: flex; flex-wrap: wrap; gap: var(--spacing-sm); }
 .revision-alert { margin-bottom: var(--spacing-md); }
-.revision-layout { display: grid; min-height: 0; flex: 1; grid-template-columns: 280px minmax(0, 1fr); gap: var(--spacing-xl); }
-.revision-list, .revision-main, .diff-panel, .active-revision-card { border: 1px solid var(--el-border-color); border-radius: var(--radius-md); background: var(--el-bg-color); }
+.revision-layout { display: grid; min-height: 0; flex: 1; grid-template-columns: 300px minmax(0, 1fr); gap: var(--spacing-xl); }
+.revision-list, .revision-main, .diff-panel, .active-revision-card { border: 1px solid var(--el-border-color); border-radius: var(--radius-lg); background: var(--el-bg-color); }
 .revision-list { align-self: start; overflow: hidden; }
-.panel-heading { padding: var(--spacing-md); border-bottom: 1px solid var(--el-border-color-light); }
-.revision-row { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: var(--spacing-sm); padding: var(--spacing-md); border: 0; border-bottom: 1px solid var(--el-border-color-lighter); color: var(--el-text-color-regular); background: transparent; cursor: pointer; text-align: left; }
-.revision-row:hover, .revision-row.active { color: var(--el-color-primary); background: var(--el-color-primary-light-9); }
-.revision-row-main { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
-.revision-row-main strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.revision-row-main small { color: var(--el-text-color-secondary); }
-.revision-main { min-width: 0; padding: var(--spacing-xl); }
-.compare-toolbar { align-items: flex-end; margin-bottom: var(--spacing-xl); }
-.compare-selects { display: flex; align-items: center; gap: var(--spacing-sm); }
-.revision-select { min-width: 210px; }
-.diff-panel { padding: var(--spacing-lg); border: 0; }
-.summary-grid { display: grid; grid-template-columns: repeat(4, minmax(100px, 1fr)); gap: var(--spacing-sm); }
-.summary-card { display: flex; flex-direction: column; gap: 2px; padding: var(--spacing-md); border-radius: var(--radius-sm); color: var(--el-color-success); background: var(--el-color-success-light-9); }
-.summary-card:nth-child(2) { color: var(--el-color-danger); background: var(--el-color-danger-light-9); }
-.summary-card:nth-child(3) { color: var(--el-color-warning); background: var(--el-color-warning-light-9); }
-.summary-card-muted { color: var(--el-text-color-secondary); background: var(--el-fill-color-light); }
-.summary-card strong { font-size: 24px; }
-.summary-card span { font-size: var(--text-sm); }
-.filter-row { display: flex; justify-content: flex-end; margin: var(--spacing-lg) 0; }
-.diff-section + .diff-section { margin-top: var(--spacing-xl); }
-.section-heading { margin-bottom: var(--spacing-sm); color: var(--el-text-color-primary); }
-.section-heading h3 { margin: 0; font-size: var(--text-md); }
-.section-heading span { color: var(--el-text-color-secondary); font-size: var(--text-sm); }
-.diff-item { margin-top: var(--spacing-sm); padding: var(--spacing-md); border: 1px solid var(--el-border-color-light); border-left: 3px solid var(--el-border-color); border-radius: var(--radius-sm); }
-.diff-added { border-left-color: var(--el-color-success); }
-.diff-removed { border-left-color: var(--el-color-danger); }
-.diff-changed { border-left-color: var(--el-color-warning); }
-.diff-item-heading strong { color: var(--el-text-color-primary); }
-.diff-values { display: grid; grid-template-columns: minmax(0, 1fr) 28px minmax(0, 1fr); gap: var(--spacing-sm); margin-top: var(--spacing-sm); }
-.diff-value { min-width: 0; padding: var(--spacing-sm); border-radius: var(--radius-sm); background: var(--el-fill-color-lighter); }
-.diff-value span { display: block; margin-bottom: 4px; color: var(--el-text-color-secondary); font-size: var(--text-xs); font-weight: var(--font-medium); }
-.diff-value pre { min-height: 20px; margin: 0; overflow: auto; color: var(--el-text-color-regular); font: inherit; white-space: pre-wrap; word-break: break-word; }
-.diff-arrow { display: flex; align-items: center; justify-content: center; color: var(--el-text-color-secondary); }
-.diff-fields { display: flex; flex-wrap: wrap; gap: var(--spacing-xs) var(--spacing-md); margin: var(--spacing-sm) 0 0; padding: 0; list-style: none; color: var(--el-text-color-secondary); font-size: var(--text-xs); }
-.diff-fields li { display: flex; gap: 4px; }
+.panel-heading { padding: var(--spacing-md) var(--spacing-lg); border-bottom: 1px solid var(--el-border-color-light); }
+.panel-heading strong { color: var(--el-text-color-primary); font-size: var(--text-sm); }
+.revision-timeline { position: relative; margin: 0; padding: var(--spacing-sm) 0; list-style: none; }
+.revision-timeline::before { content: ""; position: absolute; top: var(--spacing-lg); bottom: var(--spacing-lg); left: 23px; width: 2px; border-radius: var(--radius-full); background: var(--el-border-color-light); }
+.revision-item { position: relative; }
+.revision-row { position: relative; display: flex; width: calc(100% - var(--spacing-md)); align-items: center; justify-content: space-between; gap: var(--spacing-sm); margin: 2px var(--spacing-sm); padding: var(--spacing-sm) var(--spacing-md) var(--spacing-sm) 42px; border: 0; border-radius: var(--radius-md); color: var(--el-text-color-regular); background: transparent; cursor: pointer; text-align: left; transition: background var(--transition-fast), color var(--transition-fast); }
+.revision-row::before { content: ""; position: absolute; top: 50%; left: 18px; width: 10px; height: 10px; border: 2px solid var(--el-border-color-dark); border-radius: var(--radius-full); background: var(--el-bg-color); transform: translateY(-50%); transition: border-color var(--transition-fast), box-shadow var(--transition-fast); }
+.revision-row:hover { color: var(--el-color-primary); background: var(--el-fill-color-light); }
+.revision-item.active .revision-row { color: var(--el-color-primary); background: var(--el-color-primary-light-9); }
+.revision-item.active .revision-row::before { border-color: var(--el-color-primary); background: var(--el-color-primary); box-shadow: 0 0 0 3px var(--el-color-primary-light-8); }
+.revision-item.selected:not(.active) .revision-row { color: var(--el-color-primary); }
+.revision-item.selected:not(.active) .revision-row::before { border-color: var(--el-color-primary); }
+.revision-row-main { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
+.revision-row-main strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-sm); }
+.revision-row-main small { color: var(--el-text-color-secondary); font-size: var(--text-xs); }
+.revision-item.active .revision-row-main small, .revision-item.selected .revision-row-main small { color: inherit; opacity: 0.75; }
+.revision-row-marker { display: flex; width: 20px; align-items: center; justify-content: center; color: var(--el-color-primary); flex-shrink: 0; }
+.revision-main { display: flex; min-width: 0; flex-direction: column; padding: var(--spacing-xl); }
+.compare-toolbar { display: flex; flex-direction: column; gap: var(--spacing-md); margin-bottom: var(--spacing-lg); padding-bottom: var(--spacing-lg); border-bottom: 1px solid var(--el-border-color-light); }
+.compare-heading h2 { margin: 0; color: var(--el-text-color-primary); }
+.compare-selects { display: flex; align-items: flex-end; gap: var(--spacing-md); }
+.compare-field { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: var(--spacing-xs); color: var(--el-text-color-secondary); font-size: var(--text-xs); font-weight: var(--font-medium); }
+.revision-select { width: 100%; }
+.compare-arrow { display: flex; width: 28px; height: 28px; margin-bottom: 5px; align-items: center; justify-content: center; border-radius: var(--radius-full); color: var(--el-color-primary); background: var(--el-color-primary-light-9); flex-shrink: 0; }
+.diff-panel { padding: 0; border: 0; }
+.summary-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--spacing-md); }
+.summary-card { display: flex; align-items: center; gap: var(--spacing-md); padding: var(--spacing-md) var(--spacing-lg); border: 1px solid; border-radius: var(--radius-md); transition: transform var(--transition-fast), box-shadow var(--transition-fast); }
+.summary-card:hover { transform: translateY(-1px); box-shadow: var(--el-box-shadow-lighter); }
+.summary-icon { display: flex; width: 34px; height: 34px; align-items: center; justify-content: center; border-radius: var(--radius-full); background: color-mix(in srgb, currentColor 14%, transparent); flex-shrink: 0; }
+.summary-text { display: flex; flex-direction: column; line-height: var(--leading-tight); }
+.summary-text strong { font-size: var(--text-xl); }
+.summary-text span { color: var(--el-text-color-secondary); font-size: var(--text-xs); }
+.summary-added { color: var(--el-color-success); border-color: color-mix(in srgb, var(--el-color-success) 28%, var(--el-bg-color)); background: color-mix(in srgb, var(--el-color-success) 8%, var(--el-bg-color)); }
+.summary-removed { color: var(--el-color-danger); border-color: color-mix(in srgb, var(--el-color-danger) 28%, var(--el-bg-color)); background: color-mix(in srgb, var(--el-color-danger) 8%, var(--el-bg-color)); }
+.summary-changed { color: var(--el-color-warning); border-color: color-mix(in srgb, var(--el-color-warning) 28%, var(--el-bg-color)); background: color-mix(in srgb, var(--el-color-warning) 8%, var(--el-bg-color)); }
+.summary-unchanged { color: var(--el-text-color-secondary); border-color: var(--el-border-color-light); background: var(--el-fill-color-light); }
+.filter-row { display: flex; align-items: center; justify-content: space-between; gap: var(--spacing-md); margin: var(--spacing-lg) 0; }
+.filter-count { color: var(--el-text-color-secondary); font-size: var(--text-sm); }
+.diff-empty { display: flex; flex-direction: column; align-items: center; gap: var(--spacing-md); padding: var(--spacing-3xl) var(--spacing-lg); color: var(--el-text-color-secondary); text-align: center; }
+.diff-empty-icon { display: flex; width: 56px; height: 56px; align-items: center; justify-content: center; border-radius: var(--radius-full); color: var(--el-color-success); background: var(--el-color-success-light-9); }
+.diff-empty p { margin: 0; }
 .section-empty, .empty-description { color: var(--el-text-color-secondary); }
-.active-revision-card { display: flex; align-items: center; justify-content: space-between; margin-top: var(--spacing-xl); padding: var(--spacing-md); }
-.active-revision-card > div { display: flex; flex-direction: column; gap: 4px; }
-.card-label { color: var(--el-text-color-secondary); font-size: var(--text-xs); }
-.active-revision-card small { color: var(--el-text-color-secondary); }
+.active-revision-card { margin-top: var(--spacing-lg); padding: var(--spacing-md) var(--spacing-lg); background: var(--el-fill-color-light); }
+.active-revision-meta { display: flex; min-width: 0; align-items: center; gap: var(--spacing-md); }
+.active-revision-badge { display: inline-flex; align-items: center; gap: 4px; padding: 2px var(--spacing-sm); border-radius: var(--radius-full); color: var(--el-color-primary); background: var(--el-color-primary-light-9); font-size: var(--text-xs); font-weight: var(--font-medium); flex-shrink: 0; }
+.active-revision-meta strong { color: var(--el-text-color-primary); font-size: var(--text-lg); }
+.active-revision-meta small { overflow: hidden; color: var(--el-text-color-secondary); text-overflow: ellipsis; white-space: nowrap; }
 .revision-state { display: flex; min-height: 180px; align-items: center; justify-content: center; gap: var(--spacing-sm); color: var(--el-text-color-secondary); }
 .import-flow { display: flex; flex-direction: column; gap: var(--spacing-md); }
 .file-input { width: 100%; padding: var(--spacing-md); border: 1px dashed var(--el-border-color); border-radius: var(--radius-sm); background: var(--el-fill-color-lighter); }
@@ -556,6 +565,6 @@ onMounted(() => void loadHistory());
 .conflict-values label { display: grid; gap: var(--spacing-xs); padding: var(--spacing-sm); border: 1px solid var(--el-border-color-light); border-radius: var(--radius-sm); background: var(--el-bg-color); }
 .conflict-values label > span { color: var(--el-text-color-secondary); font-size: var(--text-xs); }
 .conflict-values code { overflow: auto; white-space: pre-wrap; word-break: break-word; }
-@container ontology-manager (max-width: 1000px) { .revision-layout { grid-template-columns: 220px minmax(0, 1fr); } .revision-select { min-width: 160px; } }
-@container ontology-manager (max-width: 760px) { .revision-surface { padding: var(--spacing-md); } .revision-header, .compare-toolbar { align-items: stretch; flex-direction: column; } .revision-layout { display: flex; flex-direction: column; } .revision-list { max-height: 260px; overflow: auto; } .compare-selects { flex-wrap: wrap; } .revision-select { min-width: min(100%, 240px); flex: 1; } .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .diff-values, .conflict-values { grid-template-columns: 1fr; } .diff-arrow { display: none; } .active-revision-card { align-items: flex-start; flex-direction: column; } }
+@container ontology-manager (max-width: 1000px) { .revision-layout { grid-template-columns: 240px minmax(0, 1fr); } }
+@container ontology-manager (max-width: 760px) { .revision-surface { padding: var(--spacing-md); } .revision-header { align-items: stretch; flex-direction: column; } .revision-layout { display: flex; flex-direction: column; } .revision-list { max-height: 280px; overflow: auto; } .revision-main { padding: var(--spacing-lg); } .compare-selects { align-items: stretch; flex-direction: column; } .compare-arrow { align-self: center; margin-bottom: 0; transform: rotate(90deg); } .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .conflict-values { grid-template-columns: 1fr; } .active-revision-card { align-items: flex-start; flex-direction: column; } }
 </style>
