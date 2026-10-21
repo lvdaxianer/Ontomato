@@ -737,6 +737,7 @@ export default {
     "pptCoverSubtitle": "Cover subtitle",
     "pptAutoSubtitle": "Leave blank to generate automatically",
     "pptCoverImage": "Cover image (PNG, JPEG or WebP, up to 10 MB)",
+    "pptSelectCoverImage": "Select cover image",
     "pptCoverImageSide": "Right-side image",
     "pptCoverImageBackground": "Full-slide background",
     "pptImageInvalid": "Choose a valid PNG, JPEG or WebP image up to 10 MB.",
