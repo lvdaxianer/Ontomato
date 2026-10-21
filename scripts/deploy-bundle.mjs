@@ -25,7 +25,7 @@ const FLAGS = {
   "--arch": "value", "--version": "value", "--image-tag": "value",
   "--registry": "value", "--state": "value", "--cache-dir": "value", "--bootstrap": "boolean",
   "--network": "value", "--insecure-source": "boolean", "--postgres": "value",
-  "--tool-bundle": "value",
+  "--tool-bundle": "value", "--source-version": "value", "--application-only": "boolean",
 };
 
 // The pack is the only place that rewrites a template file, and only this line.
@@ -78,8 +78,10 @@ export function buildBundle(options, { name, deployDir, installDir, images, vali
   // The prepared tool kit is independent of the application export.
   for (const entry of TEMPLATE_ENTRIES)
     cpSync(realpathSync(join(deployDir, entry)), join(staging, entry), { recursive: true });
-  cpSync(tools, join(staging, "offline"), { recursive: true });
-  if (installDir) stageInstallEntry(installDir, staging);
+  if (!options["--application-only"]) {
+    cpSync(tools, join(staging, "offline"), { recursive: true });
+    if (installDir) stageInstallEntry(installDir, staging);
+  }
   writeFileSync(
     join(staging, ".env.example"),
     renderEnvExample(readFileSync(join(deployDir, ".env.example"), "utf8"), arch),
@@ -94,6 +96,12 @@ export function buildBundle(options, { name, deployDir, installDir, images, vali
     ...(process.env.REGISTRY_AUTH_FILE ? ["--authfile", resolve(process.env.REGISTRY_AUTH_FILE)] : []),
   ]);
 
+  if (options["--source-version"]) {
+    const path = join(staging, "package/delivery.json");
+    const delivery = JSON.parse(readFileSync(path, "utf8"));
+    writeFileSync(path, `${JSON.stringify({ ...delivery, source: options["--source-version"] }, null, 2)}\n`);
+  }
+  if (options["--application-only"]) return staging;
   // Not gzipped: package/mirror_*.tar already holds compressed layers, so gzip barely shrinks it but costs a lot of CPU.
   const archive = `${staging}.tar`;
   rmSync(archive, { force: true });

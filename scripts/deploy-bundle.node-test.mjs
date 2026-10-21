@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import {
   bundleName,
+  buildBundle,
   renderEnvExample,
   stageInstallEntry,
   TEMPLATE_ENTRIES,
@@ -60,4 +61,38 @@ test("a missing assembled install file fails loudly", () => {
   const installDir = mkdtempSync(join(tmpdir(), "install-entry-"));
   const staging = mkdtempSync(join(tmpdir(), "install-staging-"));
   assert.throws(() => stageInstallEntry(installDir, staging), /Install entry missing/);
+});
+
+test("an application export records its source without carrying the executor", () => {
+  const root = mkdtempSync(join(tmpdir(), "application-export-"));
+  const previous = process.cwd();
+  const path = process.env.PATH;
+  try {
+    for (const name of ["bin", "deploy", "tools"]) mkdirSync(join(root, name));
+    for (const name of TEMPLATE_ENTRIES) writeFileSync(join(root, "deploy", name), "application");
+    writeFileSync(join(root, "deploy/.env.example"), "ARCH=amd64\n");
+    writeFileSync(join(root, "tools/mirror.py"), "fixture");
+    const python = join(root, "bin/python3");
+    writeFileSync(python, `#!${process.execPath}\nconst fs=require('node:fs');const a=process.argv.slice(2);\n`
+      + `if(a.includes('resolve')) console.log(JSON.stringify(['a','b','c','d']));\n`
+      + `if(a.includes('export')) {const p=a[a.indexOf('--output')+1];fs.mkdirSync(p,{recursive:true});fs.writeFileSync(p+'/delivery.json',JSON.stringify({version:'4.1.4',files:{}}));}\n`);
+    chmodSync(python, 0o755);
+    process.chdir(root);
+    process.env.PATH = `${join(root, "bin")}:${path}`;
+    let checked = false;
+    const output = buildBundle({ "--arch": "amd64", "--version": "4.1.4", "--tool-bundle": join(root, "tools"),
+      "--state": join(root, "state"), "--application-only": true, "--source-version": "4.1.0" }, {
+      name: "test", deployDir: join(root, "deploy"), images: ["a", "b", "c", "d"],
+      validateImages(images) { assert.deepEqual(images, ["a", "b", "c", "d"]); checked = true; },
+    });
+    assert.equal(checked, true);
+    assert.equal(JSON.parse(readFileSync(join(output, "package/delivery.json"), "utf8")).source, "4.1.0");
+    assert.equal(existsSync(join(output, "offline")), false);
+    assert.equal(existsSync(`${output}.tar`), false);
+    assert.equal(readFileSync(join(output, "docker-compose.yml"), "utf8"), "application");
+  } finally {
+    process.chdir(previous);
+    process.env.PATH = path;
+    rmSync(root, { recursive: true, force: true });
+  }
 });
