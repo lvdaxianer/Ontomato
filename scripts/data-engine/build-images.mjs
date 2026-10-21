@@ -17,6 +17,7 @@ import {
   buildStamp,
   COMPAT_LABEL,
   docker,
+  dockerProxyBuildArgs,
   exportImage,
   fingerprint,
   imageLabels,
@@ -180,6 +181,7 @@ function exportJava(app, arch, version) {
   const secretArgs = app.secretExport ? secretExportArgs(app.secretExport, version) : [];
   docker([
     ...baseBuild(arch),
+    ...dockerProxyBuildArgs(),
     ...secretArgs,
     "--target",
     target,
@@ -225,6 +227,7 @@ function buildRuntime(app, arch, version, exported, contract, fp) {
     : [];
   docker([
     ...baseBuild(arch),
+    ...dockerProxyBuildArgs(),
     ...pipArgs,
     "--target",
     app.runtimeTarget,
@@ -286,6 +289,7 @@ function buildApp(app, arch, version, stamp, exported, fp, lang) {
   console.log(`[build] app ${tag} (prompt=${lang})`);
   docker([
     ...baseBuild(arch),
+    ...dockerProxyBuildArgs(),
     "--load",
     ...imageLabels(app.component, "app", version, fp, app.family),
     ...labelArgs(labels),

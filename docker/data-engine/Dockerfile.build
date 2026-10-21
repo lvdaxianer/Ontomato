@@ -6,6 +6,9 @@
 # Both exports also write maven-licenses.json: the Maven license record of every runtime
 # dependency of the app module, which the runtime image joins with the files under its lib/.
 ARG JDK_IMAGE=docker.io/library/eclipse-temurin:21-jdk-jammy@sha256:c7d5863b5dd8f26b90c64f1d80cc2b0e5a5e4642f8db9955a370d348edd8f438
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG NO_PROXY
 
 FROM ${JDK_IMAGE} AS ontomato-src
 WORKDIR /src
@@ -106,6 +109,9 @@ ARG APP_LIB_MODULES
 ARG EXCLUDE_ARTIFACT_IDS
 ARG KEEP_NATIVE=
 ARG LICENSE_PROFILE=
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG NO_PROXY
 RUN --mount=type=cache,target=/root/.m2 <<'EOF'
 set -eu
 cat > /tmp/maven-settings.xml <<'SETTINGS'
@@ -131,6 +137,9 @@ ARG LICENSE_PROFILE=
 ARG APP_CHECK_SCRIPT
 ARG APP_CHECK_JAR
 ARG APP_CHECK_ARG
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG NO_PROXY
 RUN --mount=type=secret,id=maven-settings,required=true \
     --mount=type=cache,target=/root/.m2 \
     test -n "${APP_CHECK_SCRIPT}" && test -n "${APP_CHECK_JAR}" && test -n "${APP_CHECK_ARG}" \
