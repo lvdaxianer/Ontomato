@@ -153,6 +153,9 @@ describe("agent product and execution modes", () => {
     await wrapper.findAll(".agent-editor-nav button").find(button => button.text() === "Skills & tools")!.trigger("click");
     expect(wrapper.findAllComponents(ElSelect).filter(select => select.props("ariaLabel") === "External MCP Services")).toHaveLength(1);
     expect(wrapper.findAllComponents(ElSelect).every(select => select.props("fitInputWidth") === true)).toBe(true);
+    const mcpSection = wrapper.findAll(".skills-group.tools-panel").find((panel) => panel.text().includes("External MCP Services"))!;
+    expect(mcpSection.find(".mcp-manage-link").find("svg").exists()).toBe(true);
+    expect(mcpSection.findAll("button").find((button) => button.text() === "Refresh")!.find("svg").exists()).toBe(true);
     await wrapper.findAll("button").find(button => button.text() === "Save")!.trigger("click");
     await flushPromises();
     expect(mocks.updateAgent).toHaveBeenCalledWith("dimension", expect.objectContaining({
@@ -340,6 +343,46 @@ describe("agent product and execution modes", () => {
     await choose(wrapper, "Subgraph");
     expect(roots().props("modelValue")).toEqual([]);
     expect(wrapper.findComponent(ElInputNumber).props("modelValue")).toBe(1);
+    wrapper.unmount();
+  });
+
+  it("lays the ontology graph out in directed layers and keeps labels below the nodes", async () => {
+    mocks.apiPost.mockResolvedValue({ data: {
+      classDef: [{ className: "Order", showName: "Orders" }, { className: "Invoice", showName: "Invoices" }, { className: "Customer", showName: "Customers" }],
+      relationship_rule: { orderInvoice: { fromclass: "Order", toclass: "Invoice" }, invoiceCustomer: { fromclass: "Invoice", toclass: "Customer" } },
+    } });
+    const wrapper = await dialog();
+    await choose(wrapper, "Subgraph");
+    const node = (label: string) => wrapper.find(`.scope-graph-node[aria-label='${label}']`);
+    const centerX = (label: string) => Number(node(label).find("circle").attributes("cx"));
+    expect(centerX("Orders (Order)")).toBeLessThan(centerX("Invoices (Invoice)"));
+    expect(centerX("Invoices (Invoice)")).toBeLessThan(centerX("Customers (Customer)"));
+    const circle = node("Orders (Order)").find("circle");
+    const text = node("Orders (Order)").find("text");
+    expect(Number(text.attributes("y"))).toBeGreaterThan(Number(circle.attributes("cy")) + 25);
+    wrapper.unmount();
+  });
+
+  it("chooses the orientation that uses the graph space and toggles it", async () => {
+    mocks.apiPost.mockResolvedValue({ data: {
+      classDef: ["Order", "Invoice", "Customer", "Item", "Address", "Payment"].map((name) => ({
+        className: name,
+        showName: `${name}s`,
+      })),
+      relationship_rule: Object.fromEntries(["Invoice", "Customer", "Item", "Address", "Payment"].map((name) => [
+        `order${name}`,
+        { fromclass: "Order", toclass: name },
+      ])),
+    } });
+    const wrapper = await dialog();
+    await choose(wrapper, "Subgraph");
+    const node = (label: string) => wrapper.find(`.scope-graph-node[aria-label='${label}']`);
+    const centerX = (label: string) => Number(node(label).find("circle").attributes("cx"));
+    expect(centerX("Orders (Order)")).toBeGreaterThan(centerX("Invoices (Invoice)"));
+    await wrapper.find(".scope-graph-layout-toggle").trigger("click");
+    expect(centerX("Orders (Order)")).toBeLessThan(centerX("Invoices (Invoice)"));
+    await wrapper.find(".scope-graph-layout-toggle").trigger("click");
+    expect(centerX("Orders (Order)")).toBeGreaterThan(centerX("Invoices (Invoice)"));
     wrapper.unmount();
   });
 });

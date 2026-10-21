@@ -9,7 +9,7 @@ import type {
 import { ref, computed, watch, onBeforeUnmount } from "vue";
 import { ElMessage } from "element-plus";
 import { WarningFilled } from "@element-plus/icons-vue";
-import { ArrowLeft, UserRound, Workflow, FileText, Blocks, Database, BarChart3, Cog, Flame, Settings, ZoomIn, ZoomOut, Maximize } from "lucide-vue-next";
+import { ArrowLeft, UserRound, Workflow, FileText, Blocks, Database, BarChart3, Cog, Flame, Settings, ZoomIn, ZoomOut, Maximize, LayoutPanelLeft, LayoutPanelTop, ExternalLink, RefreshCw } from "lucide-vue-next";
 import CodeMirrorEditor from "../../../components/CodeMirrorEditor.vue";
 import { renderAgentMarkdown } from "../../../utils/agent-markdown";
 import { analysisAgentApi, analysisReportApi } from "../api";
@@ -178,25 +178,75 @@ interface ObjectClassOption {
 }
 interface OntologyRelationOption { fromclass?: string; toclass?: string; }
 const ontologyRelations = ref<OntologyRelationOption[]>([]);
-const scopeGraphNodes = computed(() => {
-  const columns = Math.max(1, Math.ceil(Math.sqrt(objectClasses.value.length)));
-  return objectClasses.value.map((item, index) => ({
-    ...item, x: 96 + (index % columns) * 210, y: 54 + Math.floor(index / columns) * 86,
-  }));
-});
 const scopeGraphEdges = computed(() => {
   const names = new Set(objectClasses.value.map((item) => item.className));
   const seen = new Set<string>();
   return ontologyRelations.value.flatMap((relation) => {
     const from = String(relation.fromclass || "").trim();
     const to = String(relation.toclass || "").trim();
-    if (!names.has(from) || !names.has(to)) return [];
-    const key = [from, to].sort().join("|");
+    if (!names.has(from) || !names.has(to) || from === to) return [];
+    const key = `${from}->${to}`;
     if (seen.has(key)) return [];
     seen.add(key);
     return [{ from, to }];
   });
 });
+const scopeGraphLayers = computed(() => {
+  const remaining = new Set(objectClasses.value.map((item) => item.className));
+  const layers: string[][] = [];
+  while (remaining.size) {
+    const layer = [...remaining].filter((name) =>
+      !scopeGraphEdges.value.some((edge) => edge.to === name && remaining.has(edge.from))
+    );
+    if (!layer.length) layer.push([...remaining][0]);
+    layer.forEach((name) => remaining.delete(name));
+    layers.push(layer);
+  }
+  return layers;
+});
+type ScopeGraphOrientation = "horizontal" | "vertical";
+const scopeGraphOrientation = ref<ScopeGraphOrientation | null>(null);
+function buildScopeGraphLayout(orientation: ScopeGraphOrientation) {
+  const layers = scopeGraphLayers.value;
+  const maxCount = Math.max(1, ...layers.map((layer) => layer.length));
+  const classes = new Map(objectClasses.value.map((item) => [item.className, item]));
+  const layerGap = 220;
+  const rowGap = orientation === "horizontal" ? 76 : 100;
+  const left = 110;
+  const top = 54;
+  const nodes = layers.flatMap((layer, layerIndex) => {
+    const offset = ((maxCount - layer.length) * rowGap) / 2;
+    return layer.flatMap((name, index) => {
+      const item = classes.get(name);
+      if (!item) return [];
+      const along = offset + index * rowGap;
+      const across = layerIndex * layerGap;
+      return [{
+        ...item,
+        x: orientation === "horizontal" ? left + across : left + along,
+        y: orientation === "horizontal" ? top + along : top + across,
+      }];
+    });
+  });
+  const width = orientation === "horizontal"
+    ? left + (layers.length - 1) * layerGap + 105
+    : left + (maxCount - 1) * rowGap + 105;
+  const height = orientation === "horizontal"
+    ? top + (maxCount - 1) * rowGap + 60
+    : top + (layers.length - 1) * layerGap + 60;
+  return { nodes, width: Math.max(300, width), height: Math.max(160, height) };
+}
+const scopeGraphLayouts = computed(() => ({
+  horizontal: buildScopeGraphLayout("horizontal"),
+  vertical: buildScopeGraphLayout("vertical"),
+}));
+const scopeGraphAutoOrientation = computed<ScopeGraphOrientation>(() => {
+  const { horizontal, vertical } = scopeGraphLayouts.value;
+  return vertical.width / vertical.height > horizontal.width / horizontal.height ? "vertical" : "horizontal";
+});
+const scopeGraphEffectiveOrientation = computed<ScopeGraphOrientation>(() =>
+  scopeGraphOrientation.value ?? scopeGraphAutoOrientation.value
+);
 const scopeReachableClasses = computed(() => {
   if (form.value.graphScopeMode !== "subgraph") return new Set(objectClasses.value.map(item => item.className));
   const adjacency = new Map<string, Set<string>>();
@@ -217,8 +267,10 @@ const scopeReachableClasses = computed(() => {
   }
   return result;
 });
-const scopeGraphWidth = computed(() => Math.max(300, ...scopeGraphNodes.value.map(node => node.x + 105)));
-const scopeGraphHeight = computed(() => Math.max(160, ...scopeGraphNodes.value.map(node => node.y + 60)));
+const scopeGraphNodes = computed(() => scopeGraphLayouts.value[scopeGraphEffectiveOrientation.value].nodes);
+const scopeGraphWidth = computed(() => scopeGraphLayouts.value[scopeGraphEffectiveOrientation.value].width);
+const scopeGraphHeight = computed(() => scopeGraphLayouts.value[scopeGraphEffectiveOrientation.value].height);
+const scopeGraphSvgHeight = computed(() => Math.min(560, Math.max(320, scopeGraphHeight.value)));
 const scopeGraphZoom = ref(1);
 const scopeGraphViewBox = computed(() => {
   const width = scopeGraphWidth.value;
@@ -229,6 +281,9 @@ const scopeGraphViewBox = computed(() => {
 });
 function zoomScopeGraph(delta: number) { scopeGraphZoom.value = Math.min(2.5, Math.max(0.75, Number((scopeGraphZoom.value + delta).toFixed(2)))); }
 function resetScopeGraphZoom() { scopeGraphZoom.value = 1; }
+function toggleScopeGraphOrientation() {
+  scopeGraphOrientation.value = scopeGraphEffectiveOrientation.value === "horizontal" ? "vertical" : "horizontal";
+}
 function toggleScopeRoot(className: string) {
   if (form.value.graphScopeMode !== "subgraph") return;
   const roots = new Set(form.value.graphScopeRootClassNames);
@@ -440,6 +495,7 @@ watch(
     if (val) {
       activeSection.value = props.editingAgent ? "prompts" : "basic";
       resetScopeGraphZoom();
+      scopeGraphOrientation.value = null;
       promptPreview.value = false;
       promptTab.value = "analysisDimensionPrompt";
       hotReports.value = [];
@@ -592,17 +648,22 @@ watch(isDark, () => {
                  <div class="scope-graph-toolbar">
                      <div><strong>{{ t(form.graphScopeMode === 'subgraph' ? 'admin.graphScopeVisualSelector' : 'admin.graphScopePanorama') }}</strong><span>{{ t(form.graphScopeMode === 'subgraph' ? 'admin.graphScopeVisualSummary' : 'admin.graphScopePanoramaSummary', { roots: form.graphScopeRootClassNames.length, classes: scopeReachableClasses.size }) }}</span></div>
                    <div class="scope-graph-actions">
+                     <button type="button" class="scope-graph-layout-toggle" :title="t('admin.graphScopeToggleLayout')" :aria-label="t('admin.graphScopeToggleLayout')" @click="toggleScopeGraphOrientation">
+                       <LayoutPanelLeft v-if="scopeGraphEffectiveOrientation === 'horizontal'" :size="15" />
+                       <LayoutPanelTop v-else :size="15" />
+                       <span>{{ t(scopeGraphEffectiveOrientation === 'horizontal' ? 'admin.graphScopeHorizontal' : 'admin.graphScopeVertical') }}</span>
+                     </button>
                      <button type="button" :title="t('admin.graphScopeZoomIn')" :aria-label="t('admin.graphScopeZoomIn')" @click="zoomScopeGraph(0.25)"><ZoomIn :size="15" /></button>
                      <button type="button" :title="t('admin.graphScopeZoomOut')" :aria-label="t('admin.graphScopeZoomOut')" @click="zoomScopeGraph(-0.25)"><ZoomOut :size="15" /></button>
                      <button type="button" :title="t('admin.graphScopeResetView')" :aria-label="t('admin.graphScopeResetView')" @click="resetScopeGraphZoom"><Maximize :size="15" /></button>
                    </div>
                  </div>
                  <div v-if="scopeGraphNodes.length" class="scope-graph-scroll">
-                   <svg :viewBox="scopeGraphViewBox" preserveAspectRatio="xMidYMid meet" role="group" :aria-label="t('admin.graphScopeVisualSelector')">
+                   <svg :viewBox="scopeGraphViewBox" :style="{ height: `${scopeGraphSvgHeight}px` }" preserveAspectRatio="xMidYMid meet" role="group" :aria-label="t('admin.graphScopeVisualSelector')">
                      <line v-for="edge in scopeGraphEdges" :key="`${edge.from}-${edge.to}`" class="scope-graph-edge" :class="{ active: scopeReachableClasses.has(edge.from) && scopeReachableClasses.has(edge.to) }" :x1="scopeGraphNodes.find(node => node.className === edge.from)?.x" :y1="scopeGraphNodes.find(node => node.className === edge.from)?.y" :x2="scopeGraphNodes.find(node => node.className === edge.to)?.x" :y2="scopeGraphNodes.find(node => node.className === edge.to)?.y" />
                       <g v-for="node in scopeGraphNodes" :key="node.className" class="scope-graph-node" :class="{ root: form.graphScopeMode === 'subgraph' && form.graphScopeRootClassNames.includes(node.className), reachable: scopeReachableClasses.has(node.className), readonly: form.graphScopeMode === 'panorama' }" :role="form.graphScopeMode === 'subgraph' ? 'button' : 'img'" :aria-label="getClassLabel(node)" :aria-pressed="form.graphScopeMode === 'subgraph' ? form.graphScopeRootClassNames.includes(node.className) : undefined" :tabindex="form.graphScopeMode === 'subgraph' ? 0 : undefined" @click="toggleScopeRoot(node.className)" @keydown.enter="toggleScopeRoot(node.className)" @keydown.space.prevent="toggleScopeRoot(node.className)">
                         <title>{{ getClassLabel(node) }}</title>
-                        <circle :cx="node.x" :cy="node.y" r="25" /><text :x="node.x" :y="node.y + 4" text-anchor="middle">{{ (node.showName || node.className).length > 16 ? `${(node.showName || node.className).slice(0, 15)}…` : node.showName || node.className }}</text>
+                        <circle :cx="node.x" :cy="node.y" r="25" /><text :x="node.x" :y="node.y + 42" text-anchor="middle">{{ (node.showName || node.className).length > 16 ? `${(node.showName || node.className).slice(0, 15)}…` : node.showName || node.className }}</text>
                      </g>
                    </svg>
                  </div>
@@ -754,8 +815,8 @@ watch(isDark, () => {
           <AgentConfigurationHeader :title="t('admin.externalMcpServices')" :hint="t('admin.externalMcpServicesHint')" :count="form.enabledMcpServiceNames.length">
             <template #icon><Cog :size="16" /></template>
             <template #actions>
-              <el-button size="small" tag="a" href="#/admin/mcp-service" target="_blank" rel="noopener">{{ t('mcp.manageServices') }}</el-button>
-              <el-button size="small" :loading="mcpServicesLoading" @click="loadExternalMcpServices">{{ t('common.refresh') }}</el-button>
+              <el-button class="mcp-manage-link" size="small" tag="a" href="#/admin/mcp-service" target="_blank" rel="noopener" :icon="ExternalLink">{{ t('mcp.manageServices') }}</el-button>
+              <el-button size="small" :loading="mcpServicesLoading" :icon="RefreshCw" @click="loadExternalMcpServices">{{ t('common.refresh') }}</el-button>
             </template>
           </AgentConfigurationHeader>
           <el-select
@@ -876,6 +937,8 @@ watch(isDark, () => {
 .scope-graph-legend i.reachable { background: var(--el-color-primary-light-9); border-color: var(--el-color-primary-light-5); }
 .scope-graph-node.readonly { cursor: default; }
 .scope-graph-actions button { display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 1px solid var(--el-border-color-light); border-radius: 5px; background: var(--el-bg-color); color: var(--el-text-color-regular); cursor: pointer; }
+.scope-graph-actions button.scope-graph-layout-toggle { display: inline-flex; align-items: center; justify-content: center; width: auto; padding: 0 8px; gap: 4px; white-space: nowrap; }
+.scope-graph-actions button.scope-graph-layout-toggle span { font-size: 12px; line-height: 1; }
 .scope-graph-toolbar strong { color: var(--el-text-color-primary); font-size: 13px; }
 .scope-graph-scroll { width: 100%; overflow: hidden; padding: 8px 0; }
 .scope-graph-scroll svg { display: block; width: 100%; height: 320px; max-width: 100%; margin: 0 auto; }
@@ -883,10 +946,10 @@ watch(isDark, () => {
 .scope-graph-edge.active { stroke: var(--el-color-primary-light-5); opacity: 1; }
 .scope-graph-node { cursor: pointer; outline: none; }
 .scope-graph-node circle { fill: var(--el-bg-color); stroke: var(--el-border-color); stroke-width: 2; transition: fill .15s, stroke .15s, stroke-width .15s; }
-.scope-graph-node text { fill: var(--el-text-color-regular); font-size: 11px; pointer-events: none; }
+.scope-graph-node text { fill: var(--el-text-color-regular); font-size: 11px; pointer-events: none; paint-order: stroke; stroke: var(--el-fill-color-extra-light); stroke-width: 3px; stroke-linejoin: round; }
 .scope-graph-node.reachable circle { fill: var(--el-color-primary-light-9); stroke: var(--el-color-primary-light-5); }
 .scope-graph-node.root circle { fill: var(--el-color-primary); stroke: var(--el-color-primary); stroke-width: 3; }
-.scope-graph-node.root text { fill: #fff; font-weight: 600; }
+.scope-graph-node.root text { fill: var(--el-color-primary); font-weight: 600; }
 .scope-graph-node:focus-visible circle { stroke: var(--el-color-primary); stroke-width: 4; }
 .form-right > .skills-group { display: flex; flex-direction: column; gap: var(--spacing-sm); margin-top: 0; }
 .tools-panel { overflow: hidden; }
@@ -897,6 +960,8 @@ watch(isDark, () => {
 .tools-panel :deep(.configuration-header), .configuration-panel :deep(.configuration-header) { padding-bottom: var(--spacing-sm); border-bottom: 1px solid var(--el-border-color-lighter); }
 .configuration-panel > .el-form { min-width: 0; }
 .configuration-panel :deep(.el-form-item) { margin: 0; }
+.mcp-manage-link { text-decoration: none; }
+.mcp-manage-link:hover, .mcp-manage-link:focus { text-decoration: none; }
 .mcp-load-alert { width: 100%; }
 
 .form-left,
