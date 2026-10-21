@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref } from "vue";
-import { ElMessage } from "element-plus";
+import { ElMessage, type UploadFile } from "element-plus";
+import { ImagePlus, RotateCcw, Trash2 } from "lucide-vue-next";
 import { analysisReportApi } from "../api";
 import { useAnalysisStore } from "../stores/analysis";
 import { useLocale } from "../../../composables/useLocale";
@@ -39,10 +40,8 @@ async function open() {
   }
 }
 
-async function selectImage(event: Event) {
-  const input = event.target as HTMLInputElement;
-  const file = input.files?.[0];
-  input.value = "";
+async function selectImage(upload: UploadFile) {
+  const file = upload.raw;
   if (!file) return;
   if (
     !["image/png", "image/jpeg", "image/webp"].includes(file.type) ||
@@ -69,6 +68,11 @@ async function selectImage(event: Event) {
   } finally {
     if (version === imageVersion) imageLoading.value = false;
   }
+}
+
+function removeImage() {
+  image.value = "";
+  imageVersion++;
 }
 
 async function generate() {
@@ -104,9 +108,19 @@ defineExpose({ open });
             maxlength="10000"
             show-word-limit
           />
-          <el-button link @click="instructions = defaults">{{
-            t("analysis.pptReset")
-          }}</el-button>
+          <div class="field-actions">
+            <el-button
+              class="ppt-reset-button"
+              link
+              type="primary"
+              size="small"
+              :icon="RotateCcw"
+              :disabled="loading || store.isCreatingPpt || instructions === defaults"
+              @click="instructions = defaults"
+            >
+              {{ t("analysis.pptReset") }}
+            </el-button>
+          </div>
         </el-form-item>
         <el-form-item :label="t('analysis.pptCoverTitle')">
           <el-input
@@ -125,36 +139,42 @@ defineExpose({ open });
           />
         </el-form-item>
         <el-form-item :label="t('analysis.pptCoverImage')">
-          <input
-            type="file"
-            accept="image/png,image/jpeg,image/webp"
-            :disabled="store.isCreatingPpt || imageLoading"
-            @change="selectImage"
-          />
-          <div v-if="image" class="cover-image">
-            <img :src="image" :alt="t('analysis.pptCoverImage')" />
-            <button
-              type="button"
-              class="remove-image"
-              :aria-label="t('common.delete')"
-              :title="t('common.delete')"
-              @click="
-                image = '';
-                imageVersion++;
-              "
-            >
-              <span aria-hidden="true">×</span>
-              {{ t("common.delete") }}
-            </button>
+          <div class="cover-field">
+            <div class="cover-actions">
+              <el-upload
+                accept="image/png,image/jpeg,image/webp"
+                :auto-upload="false"
+                :show-file-list="false"
+                :disabled="loading || store.isCreatingPpt || imageLoading"
+                :on-change="selectImage"
+              >
+                <el-button :icon="ImagePlus" :loading="imageLoading">
+                  {{ t("analysis.pptSelectCoverImage") }}
+                </el-button>
+              </el-upload>
+              <el-button
+                v-if="image"
+                type="danger"
+                plain
+                :icon="Trash2"
+                :disabled="loading || store.isCreatingPpt || imageLoading"
+                @click="removeImage"
+              >
+                {{ t("common.delete") }}
+              </el-button>
+            </div>
+            <div v-if="image" class="cover-image">
+              <img :src="image" :alt="t('analysis.pptCoverImage')" />
+            </div>
+            <el-radio-group v-if="image" v-model="imageMode">
+              <el-radio value="side">{{
+                t("analysis.pptCoverImageSide")
+              }}</el-radio>
+              <el-radio value="background">{{
+                t("analysis.pptCoverImageBackground")
+              }}</el-radio>
+            </el-radio-group>
           </div>
-          <el-radio-group v-if="image" v-model="imageMode" class="image-mode">
-            <el-radio value="side">{{
-              t("analysis.pptCoverImageSide")
-            }}</el-radio>
-            <el-radio value="background">{{
-              t("analysis.pptCoverImageBackground")
-            }}</el-radio>
-          </el-radio-group>
         </el-form-item>
       </el-form>
     </div>
@@ -177,12 +197,31 @@ defineExpose({ open });
 </template>
 
 <style scoped>
-.cover-image {
+.field-actions {
+  display: flex;
+  justify-content: flex-end;
+  width: 100%;
+  margin-top: 8px;
+}
+.ppt-reset-button,
+.ppt-reset-button:hover,
+.ppt-reset-button:focus,
+.ppt-reset-button:active {
+  box-shadow: none;
+}
+.cover-field {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+}
+.cover-actions {
   display: flex;
   align-items: center;
-  gap: 14px;
-  width: 100%;
-  margin-top: 12px;
+  gap: 8px;
+}
+.cover-actions .el-button {
+  margin: 0;
 }
 .cover-image img {
   max-width: 260px;
@@ -190,27 +229,5 @@ defineExpose({ open });
   object-fit: contain;
   border: 1px solid var(--el-border-color);
   border-radius: 8px;
-}
-.remove-image {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  border: 1px solid var(--el-color-danger-light-5);
-  border-radius: 6px;
-  padding: 6px 10px;
-  background: var(--el-color-danger-light-9);
-  color: var(--el-color-danger);
-  cursor: pointer;
-  font-size: 13px;
-}
-.remove-image:hover {
-  border-color: var(--el-color-danger);
-  background: var(--el-color-danger-light-8);
-}
-.remove-image span {
-  transform: translateY(-1px);
-}
-.image-mode {
-  margin-top: 12px;
 }
 </style>
