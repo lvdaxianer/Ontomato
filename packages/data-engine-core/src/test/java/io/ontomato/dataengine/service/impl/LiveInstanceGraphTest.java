@@ -78,6 +78,14 @@ class LiveInstanceGraphTest {
         JSONObject search = service.query("search", JSONObject.of("class", "/univ_demo/org"), "test");
         assertTrue(search.getBooleanValue("success"), search.toJSONString());
         assertEquals("/univ_demo/org:1", search.getJSONObject("data").getJSONArray("nodes").getJSONObject(0).getString("id"));
+        service.query("search", JSONObject.of("term", "Entity"), "test");
+        JSONObject searchStep = JSON.parseArray(dsls.get(dsls.size() - 1)).getJSONObject(0)
+                .getJSONObject("answer").getJSONArray("steps").getJSONObject(0);
+        JSONObject searchConditions = searchStep.getJSONObject("graph").getJSONArray("patterns").getJSONObject(0)
+                .getJSONArray("objects").getJSONObject(0).getJSONObject("conditions").getJSONObject("properties");
+        // M3 needs the logic marker; without it the engine reads a leaf with no field and emits "n". null.
+        assertEquals("logic", searchConditions.getString("operator"));
+        assertFalse(searchConditions.getJSONArray("or").isEmpty());
         JSONObject neighborhood = service.query("neighborhood", JSONObject.of("id", "/univ_demo/org:1"), "test");
         assertTrue(neighborhood.getBooleanValue("success"), neighborhood.toJSONString());
         assertFalse(neighborhood.getJSONObject("data").getJSONArray("edges").isEmpty());
