@@ -120,12 +120,12 @@ public class Neo4jAdapter implements DataAdapter {
 
 	@Override
 	public String executeDsl(String queryJson, String sessionId, DslExecutionMode mode, List<String> generatedMqls) throws Exception {
-		log.info("[" + sessionId + "] Neo4j DSL to query: " + queryJson);
+		log.debug("[{}] Neo4j DSL to query: {}", sessionId, queryJson);
 		JSONArray dsls = JSONArray.parseArray(queryJson);
 		DslRowLimit.Tracker rowLimit = new DslRowLimit.Tracker();
 		CypherQuery cypher = toCypher(dsls.getJSONObject(0), jsonRule, rowLimit);
 		generatedMqls.add(cypher.text);
-		log.info("[" + sessionId + "] Converted Neo4j cypher: " + cypher.text);
+		log.debug("[{}] Converted Neo4j cypher: {}", sessionId, cypher.text);
 		JSONArray data = queryCypher(cypher);
 		boolean truncated = rowLimit.defaulted() && data.size() > rowLimit.effectiveLimit();
 		if (truncated) {
@@ -587,7 +587,7 @@ public class Neo4jAdapter implements DataAdapter {
 
 
 	private JSONArray queryCypher(CypherQuery cypher) throws Exception {
-		log.info(cypher.text);
+		log.debug(cypher.text);
 		long maxMaterialize = Long.getLong("ontomato.neo4j.maxMaterialize", DEFAULT_MAX_MATERIALIZE);
 		return withSession(session -> {
 			Result result = session.run(cypher.text, cypher.params);
@@ -1008,7 +1008,7 @@ public class Neo4jAdapter implements DataAdapter {
 
 	private void executeWrite(CypherQuery cypher) throws Exception {
 		withSession(session -> {
-			log.info(cypher.text);
+			log.debug(cypher.text);
 			session.run(cypher.text, cypher.params).consume();
 			return null;
 		});

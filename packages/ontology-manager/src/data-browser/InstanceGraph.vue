@@ -41,13 +41,12 @@ const props = defineProps<{ summaryTarget?: HTMLElement | null }>();
 const { message } = useManagerFeedback();
 const { ot } = useOntologyText();
 const { t } = useSharedText();
-const { loadInstanceGraphSummary, loadInstanceGraphStatistics, searchInstanceGraph, loadInstanceNeighborhood, queryInstanceInfo, loadOntology } =
+const { loadInstanceGraphSummary, searchInstanceGraph, loadInstanceNeighborhood, queryInstanceInfo, loadOntology } =
   useManagerClient();
 
 const graphRef = ref<HTMLDivElement | null>(null);
 const loading = ref(false);
 const error = ref("");
-const statisticsError = ref("");
 const status = ref<InstanceGraphResult["status"]>("READY");
 const nodes = shallowRef<InstanceGraphNode[]>([]);
 const edges = shallowRef<InstanceGraphEdge[]>([]);
@@ -705,7 +704,6 @@ function downloadGraph() {
 async function refresh() {
   clearTimeout(generationTimer);
   versionChanged.value = false;
-  statisticsError.value = "";
   const request = ++graphRequest;
   clearTimeout(searchTimer);
   searchRequest++;
@@ -734,12 +732,6 @@ async function refresh() {
     if (result.status === "READY") {
       summary.value = result.summary;
       await showOverview(request);
-      const statisticsSummary = summary.value;
-      void loadInstanceGraphStatistics().then((statistics) => {
-        if (summary.value !== statisticsSummary) return;
-        summary.value = { ...summary.value, nodeCount: statistics.nodeCount,
-          classes: summary.value.classes.map((item) => ({ ...item, instanceCount: statistics.classes.find((entry) => entry.class === item.class)?.instanceCount ?? item.instanceCount })) };
-      }).catch(() => { if (summary.value === statisticsSummary) statisticsError.value = ot('instanceGraphStatisticsUnavailable'); });
     } else if (result.status === "GENERATING") {
       generationTimer = setTimeout(() => { void refresh(); }, 2000);
     }
@@ -859,7 +851,6 @@ onBeforeUnmount(() => {
             <strong>{{ ot('instanceGraphStatistics') }}</strong>
             <span>{{ ot('instanceGraphLiveDescription') }}</span>
             <span v-if="overview && aggregateRelations">{{ ot('instanceGraphAggregateHint') }}</span>
-            <span v-if="statisticsError">{{ statisticsError }}</span>
             <span v-if="overview">{{ ot('instanceGraphSample', { shown: nodes.length, total: summary.nodeCount == null ? '…' : summary.nodeCount, edges: edges.length }) }}</span>
             <span v-if="overview && summary.overviewEdgesTruncated" class="graph-warning">{{ ot('instanceGraphSampleEdgesLimited') }}</span>
           </div>
