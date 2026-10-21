@@ -563,3 +563,69 @@ describe("requests used by data browsing and visual modeling", () => {
     expect(assets.map((asset) => asset.name)).toEqual(["", "Unnamed asset", "Unnamed asset"]);
   });
 });
+
+describe("ontology revision requests", () => {
+  it("lists and exports revisions with domain-scoped GET requests", async () => {
+    respond = async (url) =>
+      url.endsWith("/admin/ontology/revisions/3")
+        ? json({
+            success: true,
+            data: { formatVersion: 1, revision: 3, contentHash: "hash-3", content: { classDef: [] } },
+          })
+        : json({ success: true, data: { items: [{ revision: 3 }], total: 1 } });
+    const { client } = setup({ type: "token", token: "t" });
+
+    await expect(client.listOntologyRevisions(10, 20)).resolves.toEqual({
+      items: [{ revision: 3 }],
+      total: 1,
+    });
+    await expect(client.exportOntologyRevision(3)).resolves.toMatchObject({ revision: 3 });
+
+    expect(requests.map(({ url, method, body }) => ({ url, method, body }))).toEqual([
+      {
+        url: "/custom/manager-api/data-query/admin/ontology/revisions?limit=10&offset=20",
+        method: "GET",
+        body: undefined,
+      },
+      {
+        url: "/custom/manager-api/data-query/admin/ontology/revisions/3",
+        method: "GET",
+        body: undefined,
+      },
+    ]);
+  });
+
+  it("posts import preview, apply and restore payloads without mutating them", async () => {
+    const { client } = setup({ type: "token", token: "t" });
+    const rule = { classDef: [], relationship_rule: {} };
+    await client.previewOntologyImport({ content: rule, baseRevision: 2, baseHash: "base-hash" });
+    await client.applyOntologyImport({
+      content: rule,
+      baseRevision: 2,
+      baseHash: "base-hash",
+      resolutions: { "$.classDef": "incoming" },
+    });
+    await client.restoreOntologyRevision({ targetRevision: 1, expectedCurrentRevision: 3, expectedCurrentHash: "hash-3" });
+
+    expect(requests.map((request) => request.body)).toEqual([
+      { content: rule, baseRevision: 2, baseHash: "base-hash" },
+      { content: rule, baseRevision: 2, baseHash: "base-hash", resolutions: { "$.classDef": "incoming" } },
+      { targetRevision: 1, expectedCurrentRevision: 3, expectedCurrentHash: "hash-3" },
+    ]);
+    expect(requests.map((request) => request.url.replace("/custom/manager-api/data-query", ""))).toEqual([
+      "/admin/ontology/revisions/preview",
+      "/admin/ontology/revisions/apply",
+      "/admin/ontology/revisions/restore",
+    ]);
+  });
+
+  it("preserves backend stable error codes for revision conflicts", async () => {
+    respond = async () => json({ success: false, code: "ONTOLOGY_IMPORT_CONFLICT", message: "resolve conflicts first" });
+    const { client } = setup({ type: "token", token: "t" });
+
+    await expect(client.applyOntologyImport({ content: {}, baseRevision: 1, baseHash: "hash" })).rejects.toMatchObject({
+      code: "ONTOLOGY_IMPORT_CONFLICT",
+      message: "resolve conflicts first",
+    });
+  });
+});

@@ -1,5 +1,12 @@
 import type { DataAdaptersData } from "@ontomato/contracts/data-adapters";
 import { ontologyText, type ManagerMessages } from "./i18n";
+import type {
+  OntologyImportConflict,
+  OntologyImportRequest,
+  OntologyRevisionContent,
+  OntologyRevisionDocument,
+  OntologyRevisionSummary,
+} from "./ontology-versioning";
 
 export type ManagerCredential =
   | { type: "token"; token: string }
@@ -98,6 +105,29 @@ export interface OntologyRelation {
   desc: string;
   fromField?: string;
   toField?: string;
+}
+
+export interface OntologyRevisionList {
+  items: OntologyRevisionSummary[];
+  total?: number;
+  activeRevision?: number;
+}
+
+export interface OntologyImportPreviewResponse {
+  currentRevision: number;
+  currentHash: string;
+  baseRevision: number;
+  baseHash: string;
+  incomingHash: string;
+  merged: OntologyRevisionContent;
+  conflicts: OntologyImportConflict[];
+  canApply: boolean;
+}
+
+export interface RestoreOntologyRevisionInput {
+  targetRevision: number;
+  expectedCurrentRevision: number;
+  expectedCurrentHash: string;
 }
 
 /** A data instance node in the star-chart instance graph. */
@@ -338,6 +368,31 @@ export function createManagerClient(
       toField: item.toField,
     })) as OntologyRelation[];
     return { objects, relations };
+  }
+
+  async function listOntologyRevisions(limit = 20, offset = 0): Promise<OntologyRevisionList> {
+    const response = await send(`/admin/ontology/revisions?limit=${limit}&offset=${offset}`, { method: "GET" });
+    return response.data as OntologyRevisionList;
+  }
+
+  async function exportOntologyRevision(revision: number): Promise<OntologyRevisionDocument> {
+    const response = await send(`/admin/ontology/revisions/${revision}`, { method: "GET" });
+    return response.data as OntologyRevisionDocument;
+  }
+
+  async function previewOntologyImport(input: OntologyImportRequest): Promise<OntologyImportPreviewResponse> {
+    const response = await post("/admin/ontology/revisions/preview", input as unknown as Record<string, unknown>);
+    return response.data as OntologyImportPreviewResponse;
+  }
+
+  async function applyOntologyImport(input: OntologyImportRequest): Promise<OntologyRevisionDocument> {
+    const response = await post("/admin/ontology/revisions/apply", input as unknown as Record<string, unknown>);
+    return response.data as OntologyRevisionDocument;
+  }
+
+  async function restoreOntologyRevision(input: RestoreOntologyRevisionInput): Promise<OntologyRevisionDocument> {
+    const response = await post("/admin/ontology/revisions/restore", input as unknown as Record<string, unknown>);
+    return response.data as OntologyRevisionDocument;
   }
 
   function createOntologyObject(input: CreateOntologyObjectInput) {
@@ -600,6 +655,11 @@ export function createManagerClient(
     requestSmartAsset,
     getMetas,
     loadOntology,
+    listOntologyRevisions,
+    exportOntologyRevision,
+    previewOntologyImport,
+    applyOntologyImport,
+    restoreOntologyRevision,
     createOntologyObject,
     updateOntologyObject,
     deleteOntologyObject,
