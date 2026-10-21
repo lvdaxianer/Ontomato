@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, watch } from "vue";
 import { ElButton, ElTag, vLoading } from "element-plus";
+import { D3ForceLayout } from "@antv/g6";
+import { graphLayout, initialNodePosition } from "../ontology-graph-layout";
 import { useManagerFeedback } from "../feedback";
-import { ArrowLeft, Box, Link2, Maximize2, Minus, Pencil, Plus, Trash2 } from "lucide-vue-next";
+import { ArrowLeft, Box, Link2, Maximize, Minus, Network, Pencil, Plus, Trash2 } from "lucide-vue-next";
 import { Graph, Node, Edge } from "@antv/x6";
 import { useManagerClient, useManagerContext, useOntologyText, useSharedText } from "../context";
 import VisualModelingDialogs from "./VisualModelingDialogs.vue";
@@ -161,6 +163,8 @@ async function loadAdapterConfig() {
   }
 }
 const loading = ref(false);
+const layouting = ref(false);
+let activeLayout: D3ForceLayout | null = null;
 
 const originalAttrShowNameMap = ref<Record<string, string>>({});
 const originalClassShowName = ref("");
@@ -1119,7 +1123,74 @@ function onZoomOut() {
 function onZoomFit() {
   if (!graph) return;
   graph.centerContent();
-  graph.zoomToFit({ padding: 50, maxScale: 1 });
+  graph.zoomToFit({ padding: 48, maxScale: Math.min(1, context.presentation.maxFitZoom ?? 1) });
+}
+
+async function fitRelayoutToContainer(target: Graph) {
+  const container = graphRef.value;
+  if (!container) return;
+  const { width, height } = container.getBoundingClientRect();
+  if (!width || !height) return;
+  target.resize(Math.round(width), Math.round(height));
+  target.zoomToFit({ padding: 48, maxScale: Math.min(1, context.presentation.maxFitZoom ?? 1) });
+  target.centerContent();
+}
+
+async function onRelayout() {
+  if (!graph || loading.value || layouting.value || !graph.getNodes().length) return;
+
+  const target = graph;
+  const nodes = target.getNodes().map((node, index, all) => ({
+    id: node.id,
+    ...initialNodePosition(index, all.length),
+  }));
+  const edges = target.getEdges().flatMap((edge) => {
+    const source = edge.getSourceCellId();
+    const targetId = edge.getTargetCellId();
+    return source && targetId ? [{ id: edge.id, source, target: targetId }] : [];
+  });
+  const { width = 0, height = 0 } = graphRef.value?.getBoundingClientRect() ?? {};
+  const layout = new D3ForceLayout({
+    ...graphLayout(),
+    nodeSize: 62,
+    center: { x: width / 2, y: height / 2 },
+  });
+  activeLayout = layout;
+  layouting.value = true;
+  try {
+    // Match G6's non-animated layout runner: initialize, stop its timer, then
+    // calculate the final positions immediately with the same 300 iterations.
+    const layoutExecution = layout.execute({ nodes, edges });
+    layout.stop();
+    layout.tick(300);
+    // Stopping the timer leaves execute's end-event promise pending; only handle
+    // initialization failures here, rather than waiting for a timer that is stopped.
+    void layoutExecution.catch((error) => {
+      if (graph === target) message.error(error instanceof Error ? error.message : String(error));
+    });
+    if (graph !== target || activeLayout !== layout) return;
+    target.batchUpdate(() => {
+      layout.forEachNode(({ id, x, y }) => {
+        const node = target.getCellById(String(id));
+        if (node?.isNode() && Number.isFinite(x) && Number.isFinite(y)) {
+          // Layout positions are node centers; X6 positions are top-left corners.
+          node.position(x! - NODE_CENTER, y! - NODE_CENTER);
+        }
+      });
+      updateEdgeAnchors();
+    });
+    await fitRelayoutToContainer(target);
+    saveLayout();
+  } catch (error) {
+    if (graph === target) message.error(error instanceof Error ? error.message : String(error));
+  } finally {
+    layout.stop();
+    layout.destroy();
+    if (activeLayout === layout) {
+      activeLayout = null;
+      layouting.value = false;
+    }
+  }
 }
 
 onMounted(() => {
@@ -1128,6 +1199,9 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
+  activeLayout?.stop();
+  activeLayout?.destroy();
+  activeLayout = null;
   if (graph) {
     graph.dispose();
     graph = null;
@@ -1358,10 +1432,11 @@ async function saveClassDesc(cls: ClassDef) {
         </el-button>
       </div>
 
-      <div class="zoom-controls">
-        <el-button :icon="Minus" :title="ot('zoomOut')" @click="onZoomOut" />
-        <el-button :icon="Plus" :title="ot('zoomIn')" @click="onZoomIn" />
-        <el-button :icon="Maximize2" :title="ot('fitCanvas')" @click="onZoomFit" />
+      <div class="zoom-controls" role="toolbar" :aria-label="ot('fitCanvas')">
+        <el-button :title="ot('zoomIn')" :aria-label="ot('zoomIn')" @click="onZoomIn"><Plus :size="18" /></el-button>
+        <el-button :title="ot('zoomOut')" :aria-label="ot('zoomOut')" @click="onZoomOut"><Minus :size="18" /></el-button>
+        <el-button :title="ot('fitCanvas')" :aria-label="ot('fitCanvas')" @click="onZoomFit"><Maximize :size="18" /></el-button>
+        <el-button :title="ot('relayout')" :aria-label="ot('relayout')" :disabled="loading || layouting || !classList.length" @click="onRelayout"><Network :size="18" /></el-button>
       </div>
 
       <div class="selection-cluster">
