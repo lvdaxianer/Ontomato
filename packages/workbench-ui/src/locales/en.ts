@@ -124,6 +124,7 @@ export default {
     "searchSkill": "Search skills (ID, description, tags)",
     "noMatchingSkills": "No matching skills found",
     "noSkillsHint": "No skills yet, click \"Add Skill\" to create",
+    "publicSkill": "Public skill",
     "editSkill": "Edit Skill",
     "debugSkill": "Debug Skill",
     "skillId": "Skill ID",

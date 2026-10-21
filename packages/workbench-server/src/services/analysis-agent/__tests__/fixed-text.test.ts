@@ -41,6 +41,7 @@ const PLAN_ERROR = "Analysis dimension is missing a stable dimensionId";
 
 function skill(): SkillMeta {
   return {
+    isPublic: false,
     id: "demo",
     path: path.join(root, "demo"),
     manifest: {
@@ -68,7 +69,7 @@ describe("analysis fixed English text", () => {
     installContentLayout({
       runtimeRoot: root,
       prompts: [],
-      skillTemplate: [],
+      publicSkillsRoot: path.join(os.tmpdir(), "no-public-skills"),
       runtimeResources: [],
     });
     configureI18n({

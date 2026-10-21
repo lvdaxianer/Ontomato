@@ -3,7 +3,7 @@ import type { SkillInfo } from "@ontomato/contracts/skills";
 
 import { ref, watch, computed } from "vue";
 import { ElMessage } from "element-plus";
-import { Pencil } from "lucide-vue-next";
+import { Eye, Pencil } from "lucide-vue-next";
 import { skillsApi } from "../api";
 import CodeEditorDialog from "./CodeEditorDialog.vue";
 import MarkdownEditorDialog from "./MarkdownEditorDialog.vue";
@@ -26,8 +26,9 @@ const emit = defineEmits<{
 }>();
 
 const isEditMode = computed(() => !!props.editSkill);
+const isReadOnly = computed(() => !!props.editSkill?.isPublic);
 
-const dialogTitle = computed(() => (isEditMode.value ? t("admin.editSkill") : t("admin.addSkill")));
+const dialogTitle = computed(() => isReadOnly.value ? t("admin.publicSkill") : isEditMode.value ? t("admin.editSkill") : t("admin.addSkill"));
 
 const submitButtonText = computed(() => (isEditMode.value ? t("common.save") : t("common.create")));
 
@@ -222,7 +223,7 @@ function resetForm() {
       </el-form-item>
 
       <el-form-item :label="t('common.title')" required>
-        <el-input v-model="form.title" :placeholder="t('admin.skillTitle')" :disabled="loading" />
+        <el-input v-model="form.title" :placeholder="t('admin.skillTitle')" :disabled="loading || isReadOnly" />
       </el-form-item>
 
       <el-form-item :label="t('common.description')">
@@ -231,7 +232,7 @@ function resetForm() {
           type="textarea"
           :rows="2"
           :placeholder="t('admin.skillDesc')"
-          :disabled="loading"
+          :disabled="loading || isReadOnly"
         />
       </el-form-item>
 
@@ -239,16 +240,16 @@ function resetForm() {
         <el-input
           v-model="form.tags"
           :placeholder="t('hotData.commaSeparatedExample')"
-          :disabled="loading"
+          :disabled="loading || isReadOnly"
         />
       </el-form-item>
 
       <el-form-item :label="t('common.version')">
-        <el-input v-model="form.version" placeholder="1.0.0" :disabled="loading" />
+        <el-input v-model="form.version" placeholder="1.0.0" :disabled="loading || isReadOnly" />
       </el-form-item>
 
       <el-form-item v-if="form.type === 'executable'" :label="t('admin.outputType')">
-        <el-select v-model="form.outputType" :disabled="loading">
+        <el-select v-model="form.outputType" :disabled="loading || isReadOnly">
           <el-option label="HTML" value="html" />
           <el-option label="JSON" value="json" />
           <el-option label="Text" value="text" />
@@ -262,11 +263,11 @@ function resetForm() {
             type="textarea"
             :rows="3"
             :placeholder="t('admin.skillDetail')"
-            :disabled="loading"
+            :disabled="loading || isReadOnly"
           />
           <el-button
             type="primary"
-            :icon="Pencil"
+            :icon="isReadOnly ? Eye : Pencil"
             circle
             size="small"
             class="edit-btn"
@@ -283,11 +284,11 @@ function resetForm() {
             type="textarea"
             :rows="3"
             placeholder="export async function execute(input) { ... }"
-            :disabled="loading"
+            :disabled="loading || isReadOnly"
           />
           <el-button
             type="primary"
-            :icon="Pencil"
+            :icon="isReadOnly ? Eye : Pencil"
             circle
             size="small"
             class="edit-btn"
@@ -299,8 +300,8 @@ function resetForm() {
     </el-form>
 
     <template #footer>
-      <el-button @click="visible = false">{{ t("common.cancel") }}</el-button>
-      <el-button type="primary" :loading="loading" @click="handleSubmit">
+      <el-button @click="visible = false">{{ isReadOnly ? t("common.close") : t("common.cancel") }}</el-button>
+      <el-button v-if="!isReadOnly" type="primary" :loading="loading" @click="handleSubmit">
         {{ submitButtonText }}
       </el-button>
     </template>
@@ -309,14 +310,16 @@ function resetForm() {
   <CodeEditorDialog
     v-model:visible="showCodeEditor"
     v-model:code="form.scriptCode"
-    :title="t('admin.editScript')"
+    :title="isReadOnly ? t('admin.scriptCode') : t('admin.editScript')"
+    :readonly="isReadOnly"
     language="javascript"
   />
 
   <MarkdownEditorDialog
     v-model:visible="showMarkdownEditor"
     v-model:content="form.skillContent"
-    :title="t('admin.editDetail')"
+    :title="isReadOnly ? t('admin.detailedContent') : t('admin.editDetail')"
+    :readonly="isReadOnly"
   />
 </template>
 

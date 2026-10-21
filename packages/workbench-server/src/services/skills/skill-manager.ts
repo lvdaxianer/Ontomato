@@ -23,6 +23,7 @@ import type { SkillCategoryValue, SkillTypeValue } from "../../core/skills/const
 import { SkillType } from "../../core/skills/constants";
 import { createLogger } from "../../logging/logger";
 import { tApp } from "../../i18n";
+import { HttpError } from "../../utils/errors";
 import { executeSkill } from "../../core/skills/execution/executor";
 import {
   listAnalysisAgentSkillReferences,
@@ -40,6 +41,12 @@ class SkillAlreadyExistsError extends Error {
   constructor(readonly skillId: string) {
     super(tApp("skills.mgr.existsAsk", { id: skillId }));
     this.name = "SkillAlreadyExistsError";
+  }
+}
+
+function requireWritableSkill(skill: SkillMeta): void {
+  if (skill.isPublic) {
+    throw new HttpError(403, tApp("skills.mgr.publicReadOnly"), "PUBLIC_SKILL_READ_ONLY");
   }
 }
 
@@ -61,6 +68,7 @@ class SkillManager {
       description: skill.manifest.description,
       tags: skill.manifest.tags,
       enabled: registry.isSkillEnabled(skill.id),
+      isPublic: skill.isPublic,
       path: skill.path,
       version: skill.manifest.version,
       outputType: skill.manifest.outputType,
@@ -104,6 +112,7 @@ class SkillManager {
       throw new Error(tApp("skills.mgr.skillNotFound", { id: skillId }));
     }
 
+    requireWritableSkill(skill);
     const affectedAgents = await listAnalysisAgentSkillReferences(domainId, skillId);
     const wasEnabled = registry.isSkillEnabled(skillId);
     const trashRoot = path.join(skillRegistryManager.getDomainSkillsRoot(domainId), ".trash");
@@ -175,6 +184,7 @@ class SkillManager {
 
     const existing = registry.getSkillById(skillId);
     if (existing) {
+      requireWritableSkill(existing);
       throw new Error(tApp("skills.mgr.alreadyExists", { id: skillId }));
     }
 
@@ -271,6 +281,7 @@ class SkillManager {
       throw new Error(tApp("skills.mgr.skillNotFound", { id: skillId }));
     }
 
+    requireWritableSkill(skill);
     const skillDir = skill.path;
 
     try {
@@ -447,6 +458,7 @@ class SkillManager {
       const existing = registry.getSkillById(manifest.name);
       const skillDir = path.join(domainSkillsRoot, manifest.type, manifest.category, manifest.name);
 
+      if (existing) requireWritableSkill(existing);
       if (existing && !overwrite) {
         throw new SkillAlreadyExistsError(manifest.name);
       }

@@ -20,7 +20,7 @@ describe("system-model configuration", () => {
     installContentLayout({
       runtimeRoot: tmpDir,
       prompts: [],
-      skillTemplate: [],
+      publicSkillsRoot: path.join(os.tmpdir(), "no-public-skills"),
       runtimeResources: [],
     });
   });

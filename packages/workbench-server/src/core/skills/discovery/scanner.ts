@@ -15,7 +15,7 @@ const logger = createLogger("scanner");
 export class SkillScanner {
   private cache: SkillMeta[] | null = null;
 
-  constructor(private readonly config: RuntimeConfig) {}
+  constructor(private readonly config: RuntimeConfig, private readonly isPublic = false) {}
 
   async scan(): Promise<SkillMeta[]> {
     if (this.config.enableCache && this.cache) {
@@ -72,7 +72,7 @@ export class SkillScanner {
     const skillMdPath = path.join(skillPath, "SKILL.md");
 
     try {
-      migrateLegacySkillManifest(skillPath);
+      if (!this.isPublic) migrateLegacySkillManifest(skillPath);
       if (!fs.existsSync(skillMdPath)) {
         logger.warn(`[Scanner] Ignoring ${skillName}: SKILL.md frontmatter is required`);
         return null;
@@ -108,6 +108,7 @@ export class SkillScanner {
 
       return {
         id: manifest.name,
+        isPublic: this.isPublic,
         path: skillPath,
         manifest,
         skillMdPath,

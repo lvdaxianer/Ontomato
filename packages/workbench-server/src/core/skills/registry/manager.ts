@@ -1,4 +1,5 @@
-import { runtimeDataDir, skillTemplateSources, type ResourceCopy } from "../../../content/layout";
+import { runtimeDataDir, publicSkillsRoot } from "../../../content/layout";
+import { randomUUID } from "node:crypto";
 import { SkillScanner } from "../discovery/scanner";
 import { loadSkillContent } from "../discovery/loader";
 import type { SkillMeta, RuntimeConfig, SkillMatch, SkillQuery } from "../types";
@@ -45,12 +46,11 @@ export class SkillResolutionError extends Error {
 export class SkillRegistryManager {
   private scanner: SkillScanner;
   private skills: SkillMeta[] | null = null;
-  private initialized: boolean = false;
   private disabledSkillIds: Set<string> = new Set();
   private statesWatcherCleanup: (() => void) | null = null;
   private readonly skillStatesPath: string;
 
-  constructor(config: RuntimeConfig) {
+  constructor(config: RuntimeConfig, private readonly publicScanner?: SkillScanner) {
     this.scanner = new SkillScanner(config);
     this.skillStatesPath = path.join(config.skillsRoot, SkillStatesFile);
     this.loadDisabledSkills();
@@ -99,8 +99,6 @@ export class SkillRegistryManager {
   private initPromise: Promise<void> | null = null;
 
   async initialize(): Promise<void> {
-    if (this.initialized) return;
-
     if (this.initializing && this.initPromise) {
       await this.initPromise;
       return;
@@ -119,8 +117,18 @@ export class SkillRegistryManager {
 
   private async doInitialize(): Promise<void> {
     this.loadDisabledSkills();
-    this.skills = await this.scanner.scan();
-    this.initialized = true;
+    const publicSkills = this.publicScanner ? await this.publicScanner.scan() : [];
+    const publicIds = new Set(publicSkills.map((skill) => skill.id));
+    const domainSkills = await this.scanner.scan();
+    for (const skill of domainSkills) {
+      if (!publicIds.has(skill.id)) continue;
+      // Retire legacy copies once; the public package owns this ID from now on.
+      const trashRoot = path.join(path.dirname(this.skillStatesPath), ".trash");
+      await fs.promises.mkdir(trashRoot, { recursive: true });
+      await fs.promises.rename(skill.path, path.join(trashRoot, `${skill.id}-public-${randomUUID()}`));
+      this.scanner.clearCache();
+    }
+    this.skills = [...publicSkills, ...domainSkills.filter((skill) => !publicIds.has(skill.id))];
   }
 
   getSkills(query: SkillQuery = {}): SkillMeta[] {
@@ -361,7 +369,6 @@ export class SkillRegistryManager {
 
   clearCache(): void {
     this.scanner.clearCache();
-    this.initialized = false;
     this.skills = null;
     this.initializing = false;
     this.initPromise = null;
@@ -374,12 +381,14 @@ export class SkillRegistryManager {
 
 export class DomainSkillRegistryManager {
   private readonly registries = new Map<string, SkillRegistryManager>();
-  private readonly initializationFlights = new Map<string, Promise<string>>();
+  private readonly publicScanner: SkillScanner;
 
   constructor(
-    private readonly templateSources: readonly ResourceCopy[] = skillTemplateSources(),
+    skillsRoot = publicSkillsRoot(),
     private readonly domainsRoot = runtimeDataDir("domain-skills")
-  ) {}
+  ) {
+    this.publicScanner = new SkillScanner({ ...defaultConfig, skillsRoot, enableCache: false }, true);
+  }
 
   getDomainSkillsRoot(domainId: string): string {
     const normalizedDomainId = domainId.trim();
@@ -390,26 +399,12 @@ export class DomainSkillRegistryManager {
     return path.join(this.domainsRoot, directoryName);
   }
 
-  async ensureDomainSkills(domainId: string): Promise<string> {
-    const existingFlight = this.initializationFlights.get(domainId);
-    if (existingFlight) return existingFlight;
-
-    const initialization = this.copyTemplateIfMissing(domainId);
-    this.initializationFlights.set(domainId, initialization);
-    try {
-      return await initialization;
-    } finally {
-      if (this.initializationFlights.get(domainId) === initialization) {
-        this.initializationFlights.delete(domainId);
-      }
-    }
-  }
-
   async forDomain(domainId: string): Promise<SkillRegistryManager> {
-    const skillsRoot = await this.ensureDomainSkills(domainId);
+    const skillsRoot = this.getDomainSkillsRoot(domainId);
+    await fs.promises.mkdir(skillsRoot, { recursive: true });
     let registry = this.registries.get(domainId);
     if (!registry) {
-      registry = new SkillRegistryManager({ ...defaultConfig, skillsRoot });
+      registry = new SkillRegistryManager({ ...defaultConfig, skillsRoot }, this.publicScanner);
       this.registries.set(domainId, registry);
     }
     await registry.initialize();
@@ -421,58 +416,6 @@ export class DomainSkillRegistryManager {
       registry.dispose();
     }
     this.registries.clear();
-  }
-
-  private async copyTemplateIfMissing(domainId: string): Promise<string> {
-    const skillsRoot = this.getDomainSkillsRoot(domainId);
-    if (fs.existsSync(skillsRoot)) {
-      for (const skillId of ["leaflet", "quality-trace-graph"]) {
-        const installedMarker = path.join(skillsRoot, `.${skillId}-v1`);
-        if (fs.existsSync(installedMarker)) continue;
-        for (const { from, to } of this.templateSources) {
-          const relative = path.join("executable", "visualization", skillId);
-          const source = path.join(from, relative);
-          const target = path.join(skillsRoot, to, relative);
-          if (!fs.existsSync(source)) continue;
-          if (!fs.existsSync(target)) {
-            await fs.promises.cp(source, target, { recursive: true, force: false });
-          }
-          await fs.promises.writeFile(installedMarker, "1");
-          break;
-        }
-      }
-      const marker = path.join(skillsRoot, ".generate-ppt-v1");
-      if (!fs.existsSync(marker)) {
-        for (const {from, to} of this.templateSources) {
-          const relative = path.join("executable", "analysis", "generate-ppt");
-          const source = path.join(from, relative);
-          const target = path.join(skillsRoot, to, relative);
-          if (fs.existsSync(source)) {
-            if (!fs.existsSync(target)) await fs.promises.cp(source, target, {recursive: true, force: false});
-            await fs.promises.writeFile(marker, "1");
-            break;
-          }
-        }
-      }
-      return skillsRoot;
-    }
-
-    try {
-      await fs.promises.mkdir(this.domainsRoot, { recursive: true });
-      for (const { from, to } of this.templateSources) {
-        await fs.promises.cp(from, path.join(skillsRoot, to), {
-          recursive: true,
-          errorOnExist: true,
-          force: false,
-        });
-      }
-      await fs.promises.writeFile(path.join(skillsRoot, ".generate-ppt-v1"), "1");
-      logger.info("Initialized domain skills from template", { domainId, skillsRoot });
-      return skillsRoot;
-    } catch (error) {
-      await fs.promises.rm(skillsRoot, { recursive: true, force: true });
-      throw error;
-    }
   }
 }
 

@@ -1,3 +1,4 @@
+import path from "node:path";
 import express from "express";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
@@ -46,7 +47,7 @@ configureI18n({
 installContentLayout({
   runtimeRoot: os.tmpdir(),
   prompts: [],
-  skillTemplate: [],
+  publicSkillsRoot: path.join(os.tmpdir(), "no-public-skills"),
   runtimeResources: [],
 });
 

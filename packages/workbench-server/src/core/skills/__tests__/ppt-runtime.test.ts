@@ -11,9 +11,9 @@ vi.mock("../../../logging/logger", () => ({createLogger: () => ({debug() {}, inf
 vi.mock("../../../config/model-factory", () => ({createModel: vi.fn()}));
 const root = await fs.mkdtemp(path.join(os.tmpdir(), "ppt-runtime-"));
 const templates = path.resolve("skills");
-installContentLayout({runtimeRoot: root, prompts: [], runtimeResources: [], skillTemplate: [{from: templates, to: "."}]});
+installContentLayout({runtimeRoot: root, prompts: [], runtimeResources: [], publicSkillsRoot: templates});
 configureI18n({defaultLocale: "en", languageSwitchEnabled: false, appTextLocale: "en", packs: {en: {messages: {...en, ...appTextEn}, ...enLocaleMeta}}});
-const {skillRegistryManager, DomainSkillRegistryManager} = await import("../registry/manager");
+const {skillRegistryManager} = await import("../registry/manager");
 const {createLoopSkillTools, assembleLoopSkillCapability} = await import("../../../services/analysis-agent/loop/skills");
 afterAll(async () => {skillRegistryManager.dispose(); await fs.rm(root, {recursive: true, force: true});});
 
@@ -44,24 +44,5 @@ describe("PPT Skill runtime", () => {
     expect(generatePpt).toHaveBeenCalledTimes(2);
     await run.execute("invalid-entry", {skill_id: "generate-ppt", entry: "../other.mjs"});
     expect(generatePpt).toHaveBeenCalledTimes(2);
-  });
-
-  it("adds the new built-in to existing domains once and preserves other files and disabled state", async () => {
-    const domains = path.join(root, "existing-domains");
-    const manager = new DomainSkillRegistryManager([{from: templates, to: "."}], domains);
-    const domainRoot = manager.getDomainSkillsRoot("existing");
-    const states = JSON.stringify({disabledSkills: ["generate-ppt"], lastUpdated: "old"});
-    await fs.mkdir(domainRoot, {recursive: true});
-    await fs.writeFile(path.join(domainRoot, "skill-states.json"), states);
-    await fs.writeFile(path.join(domainRoot, "custom.txt"), "unchanged");
-    await manager.ensureDomainSkills("existing");
-    const skillRoot = path.join(domainRoot, "executable", "analysis", "generate-ppt");
-    expect(await fs.readFile(path.join(skillRoot, "SKILL.md"), "utf8")).toContain("generate-ppt");
-    expect(await fs.readFile(path.join(domainRoot, "skill-states.json"), "utf8")).toBe(states);
-    expect(await fs.readFile(path.join(domainRoot, "custom.txt"), "utf8")).toBe("unchanged");
-    await fs.rm(skillRoot, {recursive: true});
-    await manager.ensureDomainSkills("existing");
-    await expect(fs.stat(skillRoot)).rejects.toMatchObject({code: "ENOENT"});
-    manager.dispose();
   });
 });

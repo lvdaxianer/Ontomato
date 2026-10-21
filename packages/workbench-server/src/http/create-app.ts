@@ -2,6 +2,7 @@ import express, { Express, Request, Response, NextFunction, Router } from "expre
 import cors from "cors";
 import path from "path";
 import { skillRegistryManager } from "../core/skills/index";
+import { resolveSkillPackageFile } from "../core/skills/discovery/loader";
 import { config } from "../config/application";
 import { datasetSchemaService } from "../services/data-query/dataset-schema";
 import analysisAgentsRouter from "../api/routes/analysis-agents";
@@ -141,15 +142,24 @@ export function createWorkbenchApp(mounts: WorkbenchMounts = {}): Express {
       await runWithLogContext(
         { domainId, token: verification.token, apiKey: verification.apiKey },
         async () => {
-        await skillRegistryManager.forDomain(domainId);
-        express.static(skillRegistryManager.getDomainSkillsRoot(domainId), { fallthrough: false })(
-          req,
-          res,
-          next
-        );
-      });
+          const registry = await skillRegistryManager.forDomain(domainId);
+          const [, type, category, id, ...segments] = decodeURIComponent(req.path).split("/");
+          const skill = registry.getSkillById(id);
+          if (
+            !skill || skill.manifest.type !== type ||
+            skill.manifest.category !== category || !segments.length
+          ) {
+            res.sendStatus(404);
+            return;
+          }
+          const file = await resolveSkillPackageFile(skill, segments.join("/"));
+          res.sendFile(file, (error) => { if (error) next(error); });
+        }
+      );
     } catch (error) {
-      next(error);
+      const code = (error as { code?: string }).code;
+      if (code === "ENOENT" || code === "ENOTDIR") res.sendStatus(404);
+      else next(error);
     }
   });
 

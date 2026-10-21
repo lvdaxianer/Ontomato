@@ -45,6 +45,7 @@ export const appTextSkillsEn = {
   "skills.prompt.useCases": "  Use cases: {cases}",
   "skills.mgr.mdTemplate": "## Applicable scenarios\n\n- To be added\n\n## Input parameters\n\n- To be added\n\n## Output format\n\n- To be added\n",
   "skills.mgr.existsAsk": "Skill {id} already exists. Overwrite?",
+  "skills.mgr.publicReadOnly": "Public skills are read-only. Each domain can enable or disable them.",
   "skills.mgr.alreadyExists": "Skill {id} already exists",
   "skills.mgr.dirExists": "Directory {dir} already exists",
   "skills.mgr.createdInfo": "Skill {id} created successfully: {dir}",
