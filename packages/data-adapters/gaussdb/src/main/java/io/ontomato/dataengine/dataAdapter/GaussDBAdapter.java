@@ -50,12 +50,12 @@ public class GaussDBAdapter implements DataAdapter {
 
 	@Override
 	public String executeDsl(String queryJson, String sessionId, DslExecutionMode mode, List<String> generatedMqls) throws Exception {
-		log.info("[" + sessionId + "] DSL to query GaussDB: " + queryJson);
+		log.debug("[{}] DSL to query GaussDB: {}", sessionId, queryJson);
 		JSONArray dsls = JSONArray.parseArray(queryJson);
 		DslRowLimit.Tracker rowLimit = new DslRowLimit.Tracker();
 		String sql = toSql(dsls.getJSONObject(0), jsonRule, rowLimit);
 		generatedMqls.add(sql);
-		log.info("[" + sessionId + "] Converted GaussDB sql: " + sql);
+		log.debug("[{}] Converted GaussDB sql: {}", sessionId, sql);
 		JSONArray data = executeSql(sql);
 		boolean truncated = rowLimit.defaulted() && data.size() > rowLimit.effectiveLimit();
 		if (truncated) {
@@ -567,7 +567,7 @@ public class GaussDBAdapter implements DataAdapter {
 	}
 
 	private JSONArray executeSql(String sql) throws Exception {
-		log.info(sql);
+		log.debug(sql);
 		Connection conn = null;
 		PreparedStatement pst = null;
 		ResultSet rs = null;

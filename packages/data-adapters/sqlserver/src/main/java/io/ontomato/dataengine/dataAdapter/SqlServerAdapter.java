@@ -58,12 +58,12 @@ public class SqlServerAdapter implements DataAdapter {
 
 	@Override
 	public String executeDsl(String queryJson, String sessionId, DslExecutionMode mode, List<String> generatedMqls) throws Exception {
-		log.info("[" + sessionId + "] SQL Server DSL to query: " + queryJson);
+		log.debug("[{}] SQL Server DSL to query: {}", sessionId, queryJson);
 		JSONArray dsls = JSONArray.parseArray(queryJson);
 		DslRowLimit.Tracker rowLimit = new DslRowLimit.Tracker();
 		String sql = toSql(dsls.getJSONObject(0), jsonRule, rowLimit);
 		generatedMqls.add(sql);
-		log.info("[" + sessionId + "] Converted SQL Server sql: " + sql);
+		log.debug("[{}] Converted SQL Server sql: {}", sessionId, sql);
 		JSONArray data = executeSql(sql);
 		boolean truncated = rowLimit.defaulted() && data.size() > rowLimit.effectiveLimit();
 		if (truncated) {
@@ -540,7 +540,7 @@ public class SqlServerAdapter implements DataAdapter {
 	}
 
 	private JSONArray executeSql(String sql) throws Exception {
-		log.info(sql);
+		log.debug(sql);
 		Connection conn = null;
 		PreparedStatement pst = null;
 		ResultSet rs = null;
@@ -1091,7 +1091,7 @@ public class SqlServerAdapter implements DataAdapter {
 			conn.setAutoCommit(false);
 			st = conn.createStatement();
 			for (String sql : sqls) {
-				log.info(sql);
+				log.debug(sql);
 				st.addBatch(sql);
 			}
 			st.executeBatch();

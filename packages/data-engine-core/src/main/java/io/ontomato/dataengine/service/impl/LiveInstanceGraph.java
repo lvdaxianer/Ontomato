@@ -7,8 +7,15 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.Semaphore;
+import java.util.function.Supplier;
 
 import org.springframework.stereotype.Service;
 
@@ -34,8 +41,65 @@ public class LiveInstanceGraph {
     private final BusinessConfigService configs;
     private final DataAdapterRegistry adapters;
     private final Semaphore permits = new Semaphore(4);
+    private static final int PAGE_SIZE = 100;
+    private static final int MAX_OVERVIEW_EDGES = 2000;
+    private static final int PARALLEL_THRESHOLD = 6;
+    private static final long SCHEMA_TTL_MS = 5_000;
+    private static final long STATISTICS_TTL_MS = 60_000;
+    private static final long OVERVIEW_TTL_MS = 30_000;
+    private static final ExecutorService QUERY_POOL = Executors.newFixedThreadPool(4, runnable -> {
+        Thread thread = new Thread(runnable, "instance-graph-query");
+        thread.setDaemon(true);
+        return thread;
+    });
     private record CachedStatistics(long expiresAt, JSONObject data) {}
+    private record CachedOverview(long expiresAt, JSONObject data) {}
+    private record SchemaSnapshot(String version, Map<String, Object> schema,
+            Map<String, ObjectType> types, List<Relation> relations, long expiresAt) {}
     private final Map<String, CachedStatistics> statisticsCache = new ConcurrentHashMap<>();
+    private final Map<String, CachedOverview> overviewCache = new ConcurrentHashMap<>();
+    private final Map<String, SchemaSnapshot> schemaSnapshots = new ConcurrentHashMap<>();
+    private final Map<String, CompletableFuture<JSONObject>> overviewBuilds = new ConcurrentHashMap<>();
+
+    /**
+     * Bounded lease pool: each parallel task borrows one adapter instance, so per-adapter caches stay
+     * useful while no adapter is ever used by two threads at once.
+     */
+    private final class AdapterPool {
+        private final Supplier<DataAdapter> factory;
+        private final BlockingQueue<DataAdapter> idle = new LinkedBlockingQueue<>();
+        private int created;
+
+        AdapterPool(Supplier<DataAdapter> factory) {
+            this.factory = factory;
+        }
+
+        DataAdapter acquire() throws InterruptedException {
+            DataAdapter adapter = idle.poll();
+            if (adapter != null) return adapter;
+            synchronized (this) {
+                if (created < PARALLEL_THRESHOLD) {
+                    created++;
+                    try {
+                        return factory.get();
+                    } catch (RuntimeException error) {
+                        created--;
+                        throw error;
+                    }
+                }
+            }
+            return idle.take();
+        }
+
+        void release(DataAdapter adapter) {
+            idle.offer(adapter);
+        }
+    }
+
+    @FunctionalInterface
+    private interface AdapterTask<T> {
+        T run(DataAdapter adapter) throws Exception;
+    }
 
     public LiveInstanceGraph(AdminService admin, BusinessConfigService configs, DataAdapterRegistry adapters) {
         this.admin = admin;
@@ -57,41 +121,97 @@ public class LiveInstanceGraph {
         if (!permits.tryAcquire()) throw new IllegalStateException("Graph queries are busy. Please retry.");
         try {
             var config = configs.get(domainId);
-            Map<String, Object> schema = admin.getJSONRule(domainId);
-            Map<String, ObjectType> types = objectTypes(schema);
-            List<Relation> relations = relations(schema, types);
-            String version = Integer.toHexString(schema.toString().hashCode());
+            SchemaSnapshot snapshot = schema(domainId);
+            String version = snapshot.version;
             if (request.getString("version") != null && !version.equals(request.getString("version")))
                 return JSONObject.of("success", false, "code", "GRAPH_VERSION_CHANGED", "message", "Ontology changed. Reload the overview.");
             String cacheKey = domainId + ":" + version + ":" + config.getDataAdapterConnections().hashCode();
             if ("statistics".equals(operation)) {
-                var cached = statisticsCache.get(cacheKey);
+                CachedStatistics cached = statisticsCache.get(cacheKey);
                 if (cached != null && cached.expiresAt > System.currentTimeMillis())
-                    return JSONObject.of("success", true, "status", "READY", "data", cached.data);
-            }
-            DataAdapter adapter = adapters.create(config, schema);
-            JSONObject data = switch (operation) {
-                case "summary" -> overview(adapter, types, relations, version);
-                case "statistics" -> statistics(adapter, types);
-                case "search" -> search(adapter, types, request, version);
-                case "neighborhood" -> neighborhood(adapter, types, relations, request, version);
-                default -> throw new IllegalArgumentException("Unknown graph operation");
-            };
-            if ("statistics".equals(operation)) {
-                statisticsCache.entrySet().removeIf(entry -> entry.getValue().expiresAt <= System.currentTimeMillis());
-                statisticsCache.put(cacheKey, new CachedStatistics(System.currentTimeMillis() + 60_000, data));
+                    return ready(cached.data);
             }
             if ("summary".equals(operation)) {
-                statisticsCache.entrySet().removeIf(entry -> entry.getValue().expiresAt <= System.currentTimeMillis());
-                statisticsCache.put(cacheKey, new CachedStatistics(System.currentTimeMillis() + 60_000,
-                        JSONObject.of("nodeCount", data.get("nodeCount"), "classes", data.get("classes"))));
+                CachedOverview cached = overviewCache.get(cacheKey);
+                if (cached != null && cached.expiresAt > System.currentTimeMillis())
+                    return ready(cached.data);
             }
-            return JSONObject.of("success", true, "status", "READY", "data", data);
+            DataAdapter adapter = adapters.create(config, snapshot.schema);
+            Supplier<DataAdapter> adapterFactory = () -> adapters.create(config, snapshot.schema);
+            AdapterPool pool = new AdapterPool(adapterFactory);
+            JSONObject data = switch (operation) {
+                case "summary" -> cachedOverview(adapter, pool, snapshot.types, snapshot.relations, version, cacheKey);
+                case "statistics" -> cachedStatistics(adapter, pool, snapshot.types, cacheKey);
+                case "search" -> search(adapter, snapshot.types, request, version);
+                case "neighborhood" -> neighborhood(adapter, snapshot.types, snapshot.relations, request, version);
+                default -> throw new IllegalArgumentException("Unknown graph operation");
+            };
+            return ready(data);
+        } catch (CompletionException e) {
+            Throwable cause = e.getCause() == null ? e : e.getCause();
+            return JSONObject.of("success", false, "message", cause.getMessage());
         } catch (Exception e) {
             return JSONObject.of("success", false, "message", e.getMessage());
         } finally {
             permits.release();
         }
+    }
+
+    private JSONObject ready(JSONObject data) {
+        return JSONObject.of("success", true, "status", "READY", "data", data);
+    }
+
+    /** Cached overview with single-flight: concurrent readers of the same version wait for one build. */
+    private JSONObject cachedOverview(DataAdapter adapter, AdapterPool pool,
+            Map<String, ObjectType> types, List<Relation> relations, String version, String cacheKey) throws Exception {
+        CachedOverview cached = overviewCache.get(cacheKey);
+        if (cached != null && cached.expiresAt > System.currentTimeMillis()) return cached.data;
+        CompletableFuture<JSONObject> future = new CompletableFuture<>();
+        CompletableFuture<JSONObject> running = overviewBuilds.putIfAbsent(cacheKey, future);
+        if (running != null) return running.join();
+        try {
+            cached = overviewCache.get(cacheKey);
+            if (cached != null && cached.expiresAt > System.currentTimeMillis()) {
+                future.complete(cached.data);
+                return cached.data;
+            }
+            JSONObject data = overview(adapter, pool, types, relations, version, cacheKey);
+            long now = System.currentTimeMillis();
+            overviewCache.entrySet().removeIf(entry -> entry.getValue().expiresAt <= now);
+            overviewCache.put(cacheKey, new CachedOverview(now + OVERVIEW_TTL_MS, data));
+            future.complete(data);
+            return data;
+        } catch (Throwable error) {
+            future.completeExceptionally(error);
+            throw error;
+        } finally {
+            overviewBuilds.remove(cacheKey, future);
+        }
+    }
+
+    private JSONObject cachedStatistics(DataAdapter adapter, AdapterPool pool,
+            Map<String, ObjectType> types, String cacheKey) throws Exception {
+        CachedStatistics cached = statisticsCache.get(cacheKey);
+        if (cached != null && cached.expiresAt > System.currentTimeMillis()) return cached.data;
+        JSONObject data = statistics(adapter, pool, types);
+        long now = System.currentTimeMillis();
+        statisticsCache.entrySet().removeIf(entry -> entry.getValue().expiresAt <= now);
+        statisticsCache.put(cacheKey, new CachedStatistics(now + STATISTICS_TTL_MS, data));
+        return data;
+    }
+
+    /** Parsed ontology snapshot; the short TTL removes the per-request JSON parse without hiding edits for long. */
+    private SchemaSnapshot schema(String domainId) {
+        long now = System.currentTimeMillis();
+        SchemaSnapshot cached = schemaSnapshots.get(domainId);
+        if (cached != null && cached.expiresAt > now) return cached;
+        Map<String, Object> schema = admin.getJSONRule(domainId);
+        Map<String, ObjectType> types = objectTypes(schema);
+        List<Relation> relations = relations(schema, types);
+        String version = Integer.toHexString(schema.toString().hashCode());
+        SchemaSnapshot snapshot = new SchemaSnapshot(version, schema, types, relations, now + SCHEMA_TTL_MS);
+        schemaSnapshots.put(domainId, snapshot);
+        return snapshot;
     }
 
     // ----------------------------------------------------------------------------------
@@ -145,46 +265,75 @@ public class LiveInstanceGraph {
     // Operations
     // ----------------------------------------------------------------------------------
 
-    private JSONObject overview(DataAdapter adapter, Map<String, ObjectType> types, List<Relation> relations, String version) throws Exception {
-        JSONObject statistics = statistics(adapter, types);
+    private JSONObject overview(DataAdapter adapter, AdapterPool pool,
+            Map<String, ObjectType> types, List<Relation> relations, String version, String cacheKey) throws Exception {
+        JSONObject statistics = cachedStatistics(adapter, pool, types, cacheKey);
         Map<String, Long> counts = new LinkedHashMap<>();
         for (Object raw : statistics.getJSONArray("classes")) {
             JSONObject item = (JSONObject) raw;
             counts.put(item.getString("class"), item.getLongValue("instanceCount"));
         }
         Map<String, Integer> quotas = InstanceGraphSampling.quotas(counts);
+        Map<String, List<JSONObject>> sampled = new LinkedHashMap<>();
+        List<ObjectType> sampledTypes = types.values().stream()
+                .filter(type -> quotas.get(type.name) > 0).toList();
+        if (sampledTypes.size() >= PARALLEL_THRESHOLD) {
+            List<AdapterTask<List<JSONObject>>> tasks = sampledTypes.stream()
+                    .map(type -> (AdapterTask<List<JSONObject>>) taskAdapter ->
+                            sampleRows(taskAdapter, type, quotas.get(type.name)))
+                    .toList();
+            List<List<JSONObject>> results = parallel(tasks, pool);
+            for (int i = 0; i < sampledTypes.size(); i++) sampled.put(sampledTypes.get(i).name, results.get(i));
+        } else {
+            for (ObjectType type : sampledTypes) sampled.put(type.name, sampleRows(adapter, type, quotas.get(type.name)));
+        }
         Map<String, List<String>> ids = new LinkedHashMap<>();
         JSONArray nodes = new JSONArray(), edges = new JSONArray(), classes = new JSONArray();
         for (ObjectType type : types.values()) {
             List<String> keys = new ArrayList<>();
-            int quota = quotas.get(type.name);
-            if (quota > 0) {
-                JSONObject dsl = dsl(objects(object(0, "n", type.name, null)), null,
-                    fields(field("n", type.pk, "pk"), field("n", type.label, "name")),
-                    sort(sortField("pk")), limit(quota, 0));
-                for (JSONObject row : runDsl(adapter, dsl)) {
-                    nodes.add(node(type, row));
-                    keys.add(row.getString("pk"));
-                }
+            for (JSONObject row : sampled.getOrDefault(type.name, List.of())) {
+                nodes.add(node(type, row));
+                keys.add(row.getString("pk"));
             }
             ids.put(type.name, keys);
             classes.add(JSONObject.of("class", type.name, "sampleCount", keys.size(), "instanceCount", counts.get(type.name)));
         }
         boolean truncated = false;
-        for (Relation relation : relations) {
-            List<String> from = ids.get(relation.from.name), to = ids.get(relation.to.name);
-            if (from.isEmpty() || to.isEmpty()) continue;
-            JSONObject dsl = dsl(
-                    objects(
-                            object(0, "f", relation.from.name, conditions(condition(relation.from.pk, "in", array(from)))),
-                            object(1, "t", relation.to.name, conditions(condition(relation.to.pk, "in", array(to))))),
-                    relationships(relation(0, 1, relation.type)),
-                    fields(field("f", relation.from.pk, "source"), field("t", relation.to.pk, "target")),
-                    null, limit(2001, 0));
-            for (JSONObject row : runDsl(adapter, dsl)) {
-                if (edges.size() == 2000) { truncated = true; break; }
-                edges.add(JSONObject.of("source", relation.from.name + ":" + row.getString("source"),
-                        "target", relation.to.name + ":" + row.getString("target"), "type", relation.type));
+        if (relations.size() < PARALLEL_THRESHOLD) {
+            relationLoop:
+            for (Relation relation : relations) {
+                int remaining = MAX_OVERVIEW_EDGES - edges.size();
+                if (remaining <= 0) { truncated = true; break; }
+                List<String> from = ids.get(relation.from.name), to = ids.get(relation.to.name);
+                if (from.isEmpty() || to.isEmpty()) continue;
+                for (JSONObject row : runDsl(adapter, relationDsl(relation, from, to, remaining + 1))) {
+                    if (edges.size() == MAX_OVERVIEW_EDGES) { truncated = true; break relationLoop; }
+                    addOverviewEdge(edges, relation, row);
+                }
+            }
+        } else {
+            relationLoop:
+            for (int index = 0; index < relations.size(); ) {
+                int remaining = MAX_OVERVIEW_EDGES - edges.size();
+                if (remaining <= 0) { truncated = true; break; }
+                int end = Math.min(index + PARALLEL_THRESHOLD, relations.size());
+                List<Relation> active = new ArrayList<>();
+                List<AdapterTask<List<JSONObject>>> tasks = new ArrayList<>();
+                for (Relation relation : relations.subList(index, end)) {
+                    List<String> from = ids.get(relation.from.name), to = ids.get(relation.to.name);
+                    if (from.isEmpty() || to.isEmpty()) continue;
+                    active.add(relation);
+                    tasks.add(taskAdapter -> runDsl(taskAdapter, relationDsl(relation, from, to, remaining + 1)));
+                }
+                List<List<JSONObject>> results = parallel(tasks, pool);
+                for (int i = 0; i < active.size(); i++) {
+                    Relation relation = active.get(i);
+                    for (JSONObject row : results.get(i)) {
+                        if (edges.size() == MAX_OVERVIEW_EDGES) { truncated = true; break relationLoop; }
+                        addOverviewEdge(edges, relation, row);
+                    }
+                }
+                index = end;
             }
         }
         return JSONObject.of("classes", classes, "overviewNodes", nodes, "overviewEdges", edges,
@@ -193,18 +342,90 @@ public class LiveInstanceGraph {
                 "relationTypes", new JSONArray(relations.stream().map(Relation::type).toList()));
     }
 
-    private JSONObject statistics(DataAdapter adapter, Map<String, ObjectType> types) throws Exception {
+    private JSONObject relationDsl(Relation relation, List<String> from, List<String> to, int limit) {
+        return dsl(
+                objects(
+                        object(0, "f", relation.from.name, conditions(condition(relation.from.pk, "in", array(from)))),
+                        object(1, "t", relation.to.name, conditions(condition(relation.to.pk, "in", array(to))))),
+                relationships(relation(0, 1, relation.type)),
+                fields(field("f", relation.from.pk, "source"), field("t", relation.to.pk, "target")),
+                null, limit(limit, 0));
+    }
+
+    private void addOverviewEdge(JSONArray edges, Relation relation, JSONObject row) {
+        edges.add(JSONObject.of("source", relation.from.name + ":" + row.getString("source"),
+                "target", relation.to.name + ":" + row.getString("target"), "type", relation.type));
+    }
+
+    private JSONObject statistics(DataAdapter adapter, AdapterPool pool,
+            Map<String, ObjectType> types) throws Exception {
+        Map<String, Long> counts = new LinkedHashMap<>();
+        if (types.size() >= PARALLEL_THRESHOLD) {
+            List<ObjectType> ordered = new ArrayList<>(types.values());
+            List<AdapterTask<Long>> tasks = ordered.stream()
+                    .map(type -> (AdapterTask<Long>) taskAdapter -> countRows(taskAdapter, type)).toList();
+            List<Long> results = parallel(tasks, pool);
+            for (int i = 0; i < ordered.size(); i++) counts.put(ordered.get(i).name, results.get(i));
+        } else {
+            for (ObjectType type : types.values()) counts.put(type.name, countRows(adapter, type));
+        }
         JSONArray classes = new JSONArray();
         long total = 0;
-        for (ObjectType type : types.values()) {
-            JSONObject dsl = dsl(objects(object(0, "n", type.name, null)), null,
-                    fields(aggField("n", type.pk, "count", "cnt")), null, null);
-            List<JSONObject> rows = runDsl(adapter, dsl);
-            long count = rows.isEmpty() ? 0 : ((Number) rows.get(0).get("cnt")).longValue();
-            total += count;
-            classes.add(JSONObject.of("class", type.name, "instanceCount", count));
+        for (Map.Entry<String, Long> entry : counts.entrySet()) {
+            total += entry.getValue();
+            classes.add(JSONObject.of("class", entry.getKey(), "instanceCount", entry.getValue()));
         }
         return JSONObject.of("nodeCount", total, "classes", classes);
+    }
+
+    private long countRows(DataAdapter adapter, ObjectType type) throws Exception {
+        JSONObject dsl = dsl(objects(object(0, "n", type.name, null)), null,
+                fields(aggField("n", type.pk, "count", "cnt")), null, null);
+        List<JSONObject> rows = runDsl(adapter, dsl);
+        return rows.isEmpty() ? 0 : ((Number) rows.get(0).get("cnt")).longValue();
+    }
+
+    private List<JSONObject> sampleRows(DataAdapter adapter, ObjectType type, int quota) throws Exception {
+        JSONObject dsl = dsl(objects(object(0, "n", type.name, null)), null,
+                fields(field("n", type.pk, "pk"), field("n", type.label, "name")),
+                sort(sortField("pk")), limit(quota, 0));
+        return runDsl(adapter, dsl);
+    }
+
+    /** Runs bounded independent reads on the shared pool; each task leases its own adapter instance. */
+    private <T> List<T> parallel(List<AdapterTask<T>> tasks, AdapterPool pool) throws Exception {
+        if (tasks.isEmpty()) return List.of();
+        List<CompletableFuture<T>> futures = new ArrayList<>();
+        for (AdapterTask<T> task : tasks) {
+            futures.add(CompletableFuture.supplyAsync(() -> {
+                DataAdapter taskAdapter;
+                try {
+                    taskAdapter = pool.acquire();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new CompletionException(e);
+                }
+                try {
+                    return task.run(taskAdapter);
+                } catch (Exception e) {
+                    throw new CompletionException(e);
+                } finally {
+                    pool.release(taskAdapter);
+                }
+            }, QUERY_POOL));
+        }
+        List<T> results = new ArrayList<>(futures.size());
+        for (CompletableFuture<T> future : futures) {
+            try {
+                results.add(future.join());
+            } catch (CompletionException e) {
+                Throwable cause = e.getCause();
+                if (cause instanceof Exception exception) throw exception;
+                if (cause instanceof Error error) throw error;
+                throw e;
+            }
+        }
+        return results;
     }
 
     private JSONObject search(DataAdapter adapter, Map<String, ObjectType> types, JSONObject request, String version) throws Exception {
@@ -261,6 +482,9 @@ public class LiveInstanceGraph {
         nodes.put(id, node(center, centerRows.get(0)));
 
         List<JSONObject> neighborRows = new ArrayList<>();
+        // Every relation group only needs its own top slice for the requested page, never the full neighbourhood.
+        int fetchLimit = offset + PAGE_SIZE + 1;
+        boolean truncated = false;
         for (Relation relation : relations) {
             boolean outgoingAllowed = relation.from.name.equals(center.name) && !"incoming".equals(direction);
             boolean incomingAllowed = relation.to.name.equals(center.name) && !"outgoing".equals(direction);
@@ -277,8 +501,11 @@ public class LiveInstanceGraph {
                 JSONObject fromObj = object(0, "f", relation.from.name, conditions(condition(relation.from.pk, "=", key)));
                 JSONObject toObj = object(1, "t", relation.to.name, null);
                 JSONObject dsl = dsl(objects(fromObj, toObj), relationships(relation(0, 1, relation.type)),
-                        fields(field("t", relation.to.pk, "pk"), field("t", relation.to.label, "name")), null, null);
-                for (JSONObject row : runDsl(adapter, dsl)) {
+                        fields(field("t", relation.to.pk, "pk"), field("t", relation.to.label, "name")), null,
+                        limit(fetchLimit, 0));
+                List<JSONObject> rows = runDsl(adapter, dsl);
+                if (rows.size() >= fetchLimit) truncated = true;
+                for (JSONObject row : rows) {
                     neighborRows.add(JSONObject.of("type", relation.type, "class", relation.to.name,
                             "pk", row.getString("pk"), "name", row.getString("name"), "outgoing", true));
                 }
@@ -291,8 +518,11 @@ public class LiveInstanceGraph {
                     fromObj.put("conditions", conditions(condition(relation.from.pk, "!=", key)));
                 }
                 JSONObject dsl = dsl(objects(fromObj, toObj), relationships(relation(0, 1, relation.type)),
-                        fields(field("f", relation.from.pk, "pk"), field("f", relation.from.label, "name")), null, null);
-                for (JSONObject row : runDsl(adapter, dsl)) {
+                        fields(field("f", relation.from.pk, "pk"), field("f", relation.from.label, "name")), null,
+                        limit(fetchLimit, 0));
+                List<JSONObject> rows = runDsl(adapter, dsl);
+                if (rows.size() >= fetchLimit) truncated = true;
+                for (JSONObject row : rows) {
                     neighborRows.add(JSONObject.of("type", relation.type, "class", relation.from.name,
                             "pk", row.getString("pk"), "name", row.getString("name"), "outgoing", false));
                 }
@@ -308,8 +538,8 @@ public class LiveInstanceGraph {
                 .thenComparing(n -> n.getString("class"))
                 .thenComparing(n -> n.getString("pk"))
                 .thenComparing(n -> n.getBooleanValue("outgoing")));
-        int end = Math.min(offset + 100, sorted.size());
-        boolean more = end < sorted.size();
+        int end = Math.min(offset + PAGE_SIZE, sorted.size());
+        boolean more = truncated || end < sorted.size();
         JSONArray edges = new JSONArray();
         for (int i = offset; i < end; i++) {
             JSONObject n = sorted.get(i);

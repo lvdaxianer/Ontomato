@@ -70,15 +70,137 @@ class LiveInstanceGraphTest {
                 .getJSONArray("objects").getJSONObject(1).getString("class"));
         assertEquals(1, service.query("statistics", new JSONObject(), "test").getJSONObject("data").getLongValue("nodeCount"));
         assertEquals(3, dsls.size());
+        // A second overview and its statistics reuse the cached snapshot instead of querying the datasource again.
+        service.query("summary", new JSONObject(), "test");
+        service.query("statistics", new JSONObject(), "test");
+        assertEquals(3, dsls.size());
+        verify(admin, times(1)).getJSONRule("test");
         JSONObject search = service.query("search", JSONObject.of("class", "/univ_demo/org"), "test");
         assertTrue(search.getBooleanValue("success"), search.toJSONString());
         assertEquals("/univ_demo/org:1", search.getJSONObject("data").getJSONArray("nodes").getJSONObject(0).getString("id"));
         JSONObject neighborhood = service.query("neighborhood", JSONObject.of("id", "/univ_demo/org:1"), "test");
         assertTrue(neighborhood.getBooleanValue("success"), neighborhood.toJSONString());
         assertFalse(neighborhood.getJSONObject("data").getJSONArray("edges").isEmpty());
+        // Neighbour reads ask only for the requested page plus one probe row per relation side.
+        for (int i = dsls.size() - 2; i < dsls.size(); i++) {
+            JSONObject step = JSON.parseArray(dsls.get(i)).getJSONObject(0).getJSONObject("answer")
+                    .getJSONArray("steps").getJSONObject(0);
+            assertEquals(101, step.getJSONObject("output").getJSONObject("limit").getIntValue("count"));
+        }
         // Queries go through the generic DSL adapter, never raw JDBC.
         verify(adapter, never()).openConnection();
         assertThrows(IllegalArgumentException.class, () -> LiveInstanceGraph.identifier("entity; drop table entity"));
+    }
+
+    @Test void overviewStopsReadingRelationsOnceTheEdgeBudgetIsReached() throws Exception {
+        var admin = mock(AdminService.class);
+        var configs = mock(BusinessConfigService.class);
+        var adapters = mock(DataAdapterRegistry.class);
+        var adapter = mock(DataAdapter.class);
+        when(configs.get("test")).thenReturn(new BusinessConfig());
+        when(admin.getJSONRule("test")).thenReturn(JSONObject.parseObject("""
+            {"classDef":[
+              {"className":"A","attrs":[{"name":"id","primaryKey":true}]},
+              {"className":"B","attrs":[{"name":"id","primaryKey":true}]}],
+             "relationship_rule":{
+               "first":{"fromclass":"A","toclass":"B"},
+               "second":{"fromclass":"A","toclass":"B"}}}
+            """));
+        when(adapters.create(any(), any())).thenReturn(adapter);
+        var edgeQueries = new java.util.concurrent.atomic.AtomicInteger();
+        when(adapter.executeDsl(anyString(), anyString(), any(), anyList())).thenAnswer(call -> {
+            JSONObject step = JSON.parseArray(call.getArgument(0, String.class)).getJSONObject(0)
+                    .getJSONObject("answer").getJSONArray("steps").getJSONObject(0);
+            JSONObject output = step.getJSONObject("output");
+            JSONObject pattern = step.getJSONObject("graph").getJSONArray("patterns").getJSONObject(0);
+            JSONArray rows = new JSONArray();
+            if ("count".equals(output.getJSONArray("fields").getJSONObject(0).getString("function"))) {
+                rows.add(JSONObject.of("cnt", 8000));
+            } else if (pattern.containsKey("relationship")) {
+                edgeQueries.incrementAndGet();
+                for (int i = 0; i <= 2000; i++) rows.add(JSONObject.of("source", "1", "target", "1"));
+            } else {
+                int limit = output.getJSONObject("limit").getIntValue("count");
+                for (int i = 0; i < limit; i++) rows.add(JSONObject.of("pk", String.valueOf(i)));
+            }
+            return JSONArray.of(JSONObject.of("answer", rows)).toJSONString();
+        });
+        JSONObject result = new LiveInstanceGraph(admin, configs, adapters).query("summary", new JSONObject(), "test");
+        assertTrue(result.getBooleanValue("success"), result.toJSONString());
+        JSONObject data = result.getJSONObject("data");
+        assertEquals(2000, data.getJSONArray("overviewEdges").size());
+        assertTrue(data.getBooleanValue("overviewEdgesTruncated"));
+        assertEquals(1, edgeQueries.get());
+    }
+
+    @Test void statisticsReadsManyTypesConcurrentlyAndKeepsEveryCount() throws Exception {
+        var admin = mock(AdminService.class);
+        var configs = mock(BusinessConfigService.class);
+        var adapters = mock(DataAdapterRegistry.class);
+        var adapter = mock(DataAdapter.class);
+        when(configs.get("test")).thenReturn(new BusinessConfig());
+        var classDefs = new JSONArray();
+        for (int i = 0; i < 8; i++) {
+            classDefs.add(JSONObject.of("className", "C" + i,
+                    "attrs", JSONArray.of(JSONObject.of("name", "id", "primaryKey", true))));
+        }
+        when(admin.getJSONRule("test")).thenReturn(JSONObject.of("classDef", classDefs, "relationship_rule", new JSONObject()));
+        when(adapters.create(any(), any())).thenReturn(adapter);
+        when(adapter.executeDsl(anyString(), anyString(), any(), anyList())).thenAnswer(call -> {
+            JSONObject step = JSON.parseArray(call.getArgument(0, String.class)).getJSONObject(0)
+                    .getJSONObject("answer").getJSONArray("steps").getJSONObject(0);
+            String className = step.getJSONObject("graph").getJSONArray("patterns").getJSONObject(0)
+                    .getJSONArray("objects").getJSONObject(0).getString("class");
+            int value = Integer.parseInt(className.substring(1));
+            return JSONArray.of(JSONObject.of("answer", JSONArray.of(JSONObject.of("cnt", 10 + value))))
+                    .toJSONString();
+        });
+        JSONObject result = new LiveInstanceGraph(admin, configs, adapters).query("statistics", new JSONObject(), "test");
+        assertTrue(result.getBooleanValue("success"), result.toJSONString());
+        assertEquals(108, result.getJSONObject("data").getLongValue("nodeCount"));
+        JSONArray classes = result.getJSONObject("data").getJSONArray("classes");
+        assertEquals(8, classes.size());
+        for (int i = 0; i < classes.size(); i++) {
+            assertEquals("C" + i, classes.getJSONObject(i).getString("class"));
+            assertEquals(10 + i, classes.getJSONObject(i).getIntValue("instanceCount"));
+        }
+    }
+
+    @Test void overviewBatchesManyRelationsAndStillStopsAtTheEdgeBudget() throws Exception {
+        var admin = mock(AdminService.class);
+        var configs = mock(BusinessConfigService.class);
+        var adapters = mock(DataAdapterRegistry.class);
+        var adapter = mock(DataAdapter.class);
+        when(configs.get("test")).thenReturn(new BusinessConfig());
+        var relations = new JSONObject();
+        for (int i = 0; i < 7; i++) {
+            relations.put("r" + i, JSONObject.of("fromclass", "A", "toclass", "B"));
+        }
+        when(admin.getJSONRule("test")).thenReturn(JSONObject.of("classDef", JSONArray.of(
+                JSONObject.of("className", "A", "attrs", JSONArray.of(JSONObject.of("name", "id", "primaryKey", true))),
+                JSONObject.of("className", "B", "attrs", JSONArray.of(JSONObject.of("name", "id", "primaryKey", true)))),
+                "relationship_rule", relations));
+        when(adapters.create(any(), any())).thenReturn(adapter);
+        when(adapter.executeDsl(anyString(), anyString(), any(), anyList())).thenAnswer(call -> {
+            JSONObject step = JSON.parseArray(call.getArgument(0, String.class)).getJSONObject(0)
+                    .getJSONObject("answer").getJSONArray("steps").getJSONObject(0);
+            JSONObject output = step.getJSONObject("output");
+            JSONObject pattern = step.getJSONObject("graph").getJSONArray("patterns").getJSONObject(0);
+            JSONArray rows = new JSONArray();
+            if ("count".equals(output.getJSONArray("fields").getJSONObject(0).getString("function"))) {
+                rows.add(JSONObject.of("cnt", 8000));
+            } else if (pattern.containsKey("relationship")) {
+                for (int i = 0; i < 400; i++) rows.add(JSONObject.of("source", String.valueOf(i), "target", String.valueOf(i)));
+            } else {
+                int limit = output.getJSONObject("limit").getIntValue("count");
+                for (int i = 0; i < limit; i++) rows.add(JSONObject.of("pk", String.valueOf(i)));
+            }
+            return JSONArray.of(JSONObject.of("answer", rows)).toJSONString();
+        });
+        JSONObject result = new LiveInstanceGraph(admin, configs, adapters).query("summary", new JSONObject(), "test");
+        assertTrue(result.getBooleanValue("success"), result.toJSONString());
+        assertEquals(2000, result.getJSONObject("data").getJSONArray("overviewEdges").size());
+        assertTrue(result.getJSONObject("data").getBooleanValue("overviewEdgesTruncated"));
     }
 
     @Test void overviewReadsProportionalQuotasAndSkipsEmptyClasses() throws Exception {
