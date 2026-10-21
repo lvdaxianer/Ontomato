@@ -211,6 +211,34 @@ describe("ontology versioning workspace", () => {
     expect(retryElement.textContent).toContain("Revision 2");
   });
 
+  it("blocks applying an import while a semantic conflict remains unresolved", async () => {
+    previewConflict = true;
+    const host = reactive({ ...base });
+    const app = createApp({ render: () => h(OntologyManager, { ...host }) });
+    const element = document.createElement("div");
+    document.body.append(element);
+    app.mount(element);
+    apps.push(app);
+    await settle();
+
+    [...element.querySelectorAll("button")].find((button) => button.textContent?.includes("Import ontology"))?.click();
+    await settle();
+    const input = element.querySelector<HTMLInputElement>(".file-input");
+    Object.defineProperty(input, "files", {
+      configurable: true,
+      value: [new File([JSON.stringify({ revision: 1, contentHash: "hash-1", content: firstRule })], "revision.json", { type: "application/json" })],
+    });
+    input?.dispatchEvent(new Event("change", { bubbles: true }));
+    await settle();
+    [...element.querySelectorAll("button")].find((button) => button.textContent?.includes("Preview import"))?.click();
+    await settle();
+
+    expect(element.textContent).toContain("Resolve 1 conflicts before applying.");
+    const applyButton = [...element.querySelectorAll("button")].find((button) => button.textContent?.includes("Apply import"));
+    expect(applyButton?.hasAttribute("disabled")).toBe(true);
+    expect(requests).not.toContain("/manager-api/data-query/admin/ontology/revisions/apply");
+  });
+
   it("requires confirmation before restoring a historical revision", async () => {
     const host = reactive({ ...base });
     const app = createApp({ render: () => h(OntologyManager, { ...host }) });
