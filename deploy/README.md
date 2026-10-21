@@ -43,7 +43,8 @@ production sites.
 On the connected build host, after CI has published the final images:
 
 ```bash
-make bundle ARCH=amd64 VERSION=4.0.1 BOOTSTRAP=1
+make tools-bundle ARCH=amd64
+make bundle ARCH=amd64 VERSION=4.1.1
 # Later versions, using the SAME persistent MIRROR_STATE:
 make bundle ARCH=amd64 VERSION=<next-version>
 ```
@@ -53,22 +54,26 @@ for production exports. `IMAGE_REGISTRY` and `IMAGE_TAG` select the published
 multi-architecture images, and `ARCH` selects the platform inside them.
 Either architecture can be exported on either host without emulation: oc-mirror
 runs with the Docker engine's own tool image, and the target architecture's tool
-image, built by copying only, goes into the bootstrap.
+image, built by copying only, goes into the independent tool kit.
 Each product image is checked for the expected architecture, component and version,
 then resolved to an immutable platform digest. `REGISTRY_AUTH_FILE` can point to
 an oc-mirror-compatible auth JSON; credentials are never copied into a delivery.
 
 The result is `.build/bundle/ontomato-<version>-<time>-<arch>.tar`, including
 this deployment template, `offline/` and `package/`. `package/mirror_*.tar` files
-are oc-mirror's own archives. The initial `bootstrap.tar.gz` contains Registry 3.1.2
-and the pinned oc-mirror 4.22.17 tool image. Subsequent packages omit bootstrap.
-The Registry is pinned by digest; the bundle option `--registry-repository`
-(default `docker.io/library/registry`) only chooses which repository serves that digest.
+are oc-mirror's own archives and contain only application image content. Every full or
+incremental package combines them with the prepared `offline/` tool kit, including
+Registry 3.1.2 and oc-mirror 4.22.17. amd64 uses the base-instruction-set binary on UBI 8.
+`make tools-bundle` prepares `.build/offline-tools/<arch>` independently of the application
+version; `TOOL_BUNDLE` selects an existing kit for final assembly. A new tool kit uses a
+new output directory. `tools-export --registry-repository` chooses the repository serving
+the pinned Registry digest. Tool images are currently included in full even in increments.
 Do not use `docker load` on `mirror_*.tar`.
 
 On the disconnected machine, extract the first bundle and run:
 
 ```bash
+python3 offline/mirror.py tools-install --bundle offline
 python3 offline/mirror.py import --bundle package \
   --state /var/lib/ontomato-mirror --output-env images.env
 cp .env.example .env
@@ -85,7 +90,9 @@ import runs the Docker engine's own oc-mirror and Registry images; on a site the
 are the bundled ones.
 
 For updates, extract the new bundle outside the existing deployment directory.
-Run its import command with the same state directory. After successful import,
+Run its `tools-install` and import commands with the same state directory.
+Tool installation only loads tool images; it does not import application images, change
+application configuration, restart services or install host Docker/Compose/Python. After successful import,
 replace the six image/version/architecture values in the existing `.env` with
 those in `images.env`, then pull and up. Keep existing secrets, data directories
 and database volumes. Import failure leaves the previous `.env` and application
@@ -105,7 +112,7 @@ application/database migration compatibility must be considered separately.
   output directory. The wrapper copies archives into the versioned bundle first.
 - Deliver increments in export order. A site missing a middle version must import
   the missing archives first. A fresh site or lost cache needs a full delivery:
-  export the required version with a NEW empty `MIRROR_STATE` and `BOOTSTRAP=1`.
+  export the required version with a NEW empty `MIRROR_STATE`, combined with the prepared tool kit.
 - A populated Registry does not replace oc-mirror's local cache. Do not prune or
   delete either history during a delivery chain. Retain packages for recovery.
 - This is whole-layer deduplication: changing a file in a large layer transfers

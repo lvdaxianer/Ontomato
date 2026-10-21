@@ -15,7 +15,6 @@ test("the pack carries the deploy template and no onsite state", () => {
     "docker-compose.yml",
     "initdb.sql",
     "README.md",
-    "offline",
   ]);
 });
 

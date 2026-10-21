@@ -172,7 +172,7 @@ class DeliveryTests(unittest.TestCase):
             (args.state / "export/mirror_000001.tar").write_bytes(b"archive")
         with patch.object(mirror, "resolve_image") as resolve, \
                 patch.object(mirror, "engine_arch", return_value="arm64"), \
-                patch.object(mirror, "ensure_tool", return_value=self.data["tool"]), \
+                patch.object(mirror, "run"), \
                 patch.object(mirror, "mirror", side_effect=write_archive):
             mirror.export(args)
         resolve.assert_not_called()
@@ -192,32 +192,78 @@ class DeliveryTests(unittest.TestCase):
             self.assertEqual(list((args.state / "export").glob("mirror_*.tar")), [])
             (args.state / "export/mirror_000001.tar").write_bytes(b"increment")
         with patch.object(mirror, "engine_arch", return_value="arm64"), \
-                patch.object(mirror, "ensure_tool", return_value=self.data["tool"]), \
+                patch.object(mirror, "run"), \
                 patch.object(mirror, "mirror", side_effect=write_archive):
             mirror.export(args)
         self.assertEqual(sorted(p.name for p in args.output.glob("mirror_*.tar")), ["mirror_000001.tar"])
         self.assertEqual((args.output / "mirror_000001.tar").read_bytes(), b"increment")
 
-    def test_cross_architecture_export_runs_the_engine_tool_and_ships_the_target_tool(self):
+    def test_application_export_uses_native_tool_without_building_or_shipping_tools(self):
         args = self.export_args()
-        args.bootstrap = True
-        args.registry_repository = "mirror.example.com/copies/registry"
         def write_archive(*_, **__):
             (args.state / "export").mkdir()
             (args.state / "export/mirror_000001.tar").write_bytes(b"archive")
-        def save(tool, target, arch, registry_repository):
-            target.write_bytes(b"bootstrap")
-            return "ontomato-offline-registry:3.1.2-" + arch
         with patch.object(mirror, "engine_arch", return_value="amd64"), \
-                patch.object(mirror, "ensure_tool", side_effect=lambda state, arch: mirror.tool_image(arch)) as tool, \
-                patch.object(mirror, "save_bootstrap", side_effect=save) as bootstrap, \
+                patch.object(mirror, "ensure_tool") as prepare, \
+                patch.object(mirror, "save_bootstrap") as bootstrap, patch.object(mirror, "run"), \
                 patch.object(mirror, "mirror", side_effect=write_archive) as invoke:
             mirror.export(args)
-        self.assertEqual([call.args[1] for call in tool.call_args_list], ["amd64", "arm64"])
+        prepare.assert_not_called()
+        bootstrap.assert_not_called()
         self.assertEqual(invoke.call_args.args[0], mirror.tool_image("amd64"))
-        self.assertEqual(bootstrap.call_args.args[0], mirror.tool_image("arm64"))
-        self.assertEqual(bootstrap.call_args.args[3], "mirror.example.com/copies/registry")
-        self.assertEqual(mirror.verify_bundle(args.output)["tool"], mirror.tool_image("arm64"))
+        data = mirror.verify_bundle(args.output)
+        self.assertEqual(data["arch"], "arm64")
+        self.assertEqual(data["tool"], mirror.tool_image("amd64"))
+        self.assertNotIn("bootstrap.tar.gz", data["files"])
+
+    def test_old_producer_identity_does_not_reload_old_bootstrap(self):
+        self.data["tool"], self.data["registry"] = "old-tool:1", "old-registry:1"
+        bootstrap = self.bundle / "bootstrap.tar.gz"
+        bootstrap.write_bytes(b"obsolete v2 tools")
+        self.data["files"][bootstrap.name] = {"bytes": bootstrap.stat().st_size, "sha256": mirror.sha256(bootstrap)}
+        self.write_manifest()
+        args = SimpleNamespace(bundle=self.bundle, state=self.root / "state", port=5000,
+                               project="fixture", output_env=self.root / "images.env")
+        with patch.object(mirror, "run") as run, patch.object(mirror, "engine_arch", return_value="amd64"), \
+                patch.object(mirror, "ensure_mirror_network"), patch.object(mirror, "mirror") as invoke:
+            mirror.import_bundle(args)
+        self.assertFalse(any(c.args[0][:2] == ["docker", "load"] for c in run.call_args_list))
+        self.assertEqual(invoke.call_args.args[0], mirror.tool_image("amd64"))
+
+    def tool_bundle(self):
+        args = SimpleNamespace(state=self.root / "tool-build", output=self.root / "tools", arch="arm64",
+                               registry_repository="mirror.example.com/registry")
+        def save(tool, target, arch, registry_repository):
+            target.write_bytes(b"tools only")
+            return mirror.registry_image(arch)
+        with patch.object(mirror, "engine_arch", return_value="amd64"), \
+                patch.object(mirror, "ensure_tool", side_effect=lambda state, arch: mirror.tool_image(arch)), \
+                patch.object(mirror, "save_bootstrap", side_effect=save):
+            mirror.export_tools(args)
+        return args.output
+
+    def test_tool_kit_is_independent_and_install_does_not_import_or_start_services(self):
+        bundle = self.tool_bundle()
+        data = mirror.verify_tools(bundle, "arm64")
+        self.assertEqual(data["version"], mirror.TOOLS_VERSION)
+        self.assertNotIn("applicationVersion", data)
+        with patch.object(mirror, "engine_arch", return_value="arm64"), \
+                patch.object(mirror, "run", return_value="arm64") as run:
+            for _ in range(2):
+                mirror.install_tools(SimpleNamespace(bundle=bundle))
+        self.assertEqual([c.args[0][:2] for c in run.call_args_list], [["docker", "load"], ["docker", "image"], ["docker", "image"]] * 2)
+        self.assertFalse((bundle / "delivery.json").exists())
+
+    def test_damaged_or_wrong_arch_tool_kit_fails_before_load(self):
+        bundle = self.tool_bundle()
+        with patch.object(mirror, "run") as run, self.assertRaisesRegex(ValueError, "platform"):
+            mirror.verify_tools(bundle, "amd64")
+        run.assert_not_called()
+        (bundle / "images.tar.gz").write_bytes(b"damaged")
+        with patch.object(mirror, "engine_arch", return_value="arm64"), \
+                patch.object(mirror, "run") as run, self.assertRaisesRegex(ValueError, "checksum"):
+            mirror.install_tools(SimpleNamespace(bundle=bundle))
+        run.assert_not_called()
 
     def test_export_mounts_the_state_cache_by_default_and_a_given_shared_cache(self):
         for cache_dir, expected in ((None, self.root / "state/cache"), (self.root / "shared cache", self.root / "shared cache")):
@@ -229,7 +275,6 @@ class DeliveryTests(unittest.TestCase):
                     (args.state / "export").mkdir(parents=True, exist_ok=True)
                     (args.state / "export/mirror_000001.tar").write_bytes(b"archive")
                 with patch.object(mirror, "engine_arch", return_value="arm64"), \
-                        patch.object(mirror, "ensure_tool", return_value=self.data["tool"]), \
                         patch.object(mirror, "run", side_effect=write_archive) as run:
                     mirror.export(args)
                 command = run.call_args.args[0]

@@ -21,9 +21,15 @@ IMAGE_TAG ?= $(VERSION)
 IMAGE_REGISTRY ?= ghcr.io/ontomato-ai
 MIRROR_STATE ?= $(CURDIR)/.build/mirror/$(ARCH)
 BOOTSTRAP ?= 0
+TOOL_BUNDLE ?= $(CURDIR)/.build/offline-tools/$(ARCH)
 
 # Export already published final images. Keep MIRROR_STATE between releases.
+.PHONY: tools-bundle
+tools-bundle:
+	python3 deploy/offline/mirror.py tools-export --arch $(ARCH) \
+	  --state "$(CURDIR)/.build/tool-build" --output "$(TOOL_BUNDLE)"
+
 bundle:
 	$(NODE) scripts/bundle.mjs --arch $(ARCH) \
-	  --version $(VERSION) --image-tag $(IMAGE_TAG) --registry $(IMAGE_REGISTRY) --state "$(MIRROR_STATE)" \
+	  --version $(VERSION) --image-tag $(IMAGE_TAG) --registry $(IMAGE_REGISTRY) --state "$(MIRROR_STATE)" --tool-bundle "$(TOOL_BUNDLE)" \
 	  $(if $(filter 1,$(BOOTSTRAP)),--bootstrap,)

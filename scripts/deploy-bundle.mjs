@@ -6,7 +6,7 @@ import { execute, output, parseOptions } from "./build-support.mjs";
 
 // Only the deploy template goes into the pack. .env, backend_data and
 // frontend_data are onsite state and are never packed.
-export const TEMPLATE_ENTRIES = ["docker-compose.yml", "initdb.sql", "README.md", "offline"];
+export const TEMPLATE_ENTRIES = ["docker-compose.yml", "initdb.sql", "README.md"];
 // The product hands over one directory of assembled onsite entries (install.sh and any
 // other entry with its helper scripts); the whole directory lands at the pack root, so a
 // new entry needs no change here. Top-level shell entries stay executable whatever the umask.
@@ -25,7 +25,7 @@ const FLAGS = {
   "--arch": "value", "--version": "value", "--image-tag": "value",
   "--registry": "value", "--state": "value", "--cache-dir": "value", "--bootstrap": "boolean",
   "--network": "value", "--insecure-source": "boolean", "--postgres": "value",
-  "--registry-repository": "value",
+  "--tool-bundle": "value",
 };
 
 // The pack is the only place that rewrites a template file, and only this line.
@@ -54,7 +54,7 @@ export function bundleName(name, version, arch, now) {
 
 export function parseBundleOptions(argv) {
   const options = parseOptions(argv, FLAGS);
-  for (const name of ["--version", "--image-tag", "--registry", "--state"])
+  for (const name of ["--version", "--image-tag", "--registry", "--state", "--tool-bundle"])
     if (!options[name]) throw new Error(`Required ${name}`);
   return options;
 }
@@ -63,7 +63,9 @@ export function parseBundleOptions(argv) {
 export function buildBundle(options, { name, deployDir, installDir, images, validateImages }) {
   const arch = options["--arch"];
   const version = options["--version"];
-  const mirror = join(deployDir, "offline", "mirror.py");
+  const tools = resolve(options["--tool-bundle"]);
+  const mirror = join(tools, "mirror.py");
+  execute("python3", [mirror, "tools-verify", "--bundle", tools, "--arch", arch]);
   const imageArgs = (refs) => refs.flatMap((ref, i) => [
     ["--workbench", "--data-engine", "--manager", "--postgres"][i], ref,
   ]);
@@ -73,9 +75,10 @@ export function buildBundle(options, { name, deployDir, installDir, images, vali
   const bundleRoot = resolve(".build", "bundle");
   const staging = join(bundleRoot, base);
   mkdirSync(staging, { recursive: true });
-  // Dereference the shared offline tool directory; the package is self-contained.
+  // The prepared tool kit is independent of the application export.
   for (const entry of TEMPLATE_ENTRIES)
     cpSync(realpathSync(join(deployDir, entry)), join(staging, entry), { recursive: true });
+  cpSync(tools, join(staging, "offline"), { recursive: true });
   if (installDir) stageInstallEntry(installDir, staging);
   writeFileSync(
     join(staging, ".env.example"),
@@ -86,8 +89,6 @@ export function buildBundle(options, { name, deployDir, installDir, images, vali
     "--state", resolve(options["--state"]), "--output", join(staging, "package"),
     ...(options["--cache-dir"] ? ["--cache-dir", resolve(options["--cache-dir"])] : []),
     ...imageArgs(resolved),
-    ...(options["--bootstrap"] ? ["--bootstrap"] : []),
-    ...(options["--registry-repository"] ? ["--registry-repository", options["--registry-repository"]] : []),
     ...(options["--network"] ? ["--network", options["--network"]] : []),
     ...(options["--insecure-source"] ? ["--insecure-source"] : []),
     ...(process.env.REGISTRY_AUTH_FILE ? ["--authfile", resolve(process.env.REGISTRY_AUTH_FILE)] : []),

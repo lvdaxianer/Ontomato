@@ -7,17 +7,23 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 import urllib.request
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 TOOL_VERSION = "4.22.17"
 TOOL_IMAGE = "ontomato-oc-mirror:" + TOOL_VERSION
+TOOLS_VERSION = "2026.10.21"
+TOOL_BASE = {
+    "amd64": "registry.access.redhat.com/ubi8/ubi@sha256:73071333d0cd7c526b6d7d01f0c9b709fd4a96c47853b1c9071e0a11284bd1da",
+    "arm64": "registry.access.redhat.com/ubi9/ubi@sha256:16e9e43d99e181463513cc84a514859b1abb9460f1c4d9e208da4b4e51cd5cc3",
+}
 # The bootstrap Registry is pinned by digest; only the repository serving it may vary (e.g. a mirror copy).
 REGISTRY_DIGEST = "sha256:ddf754342cfc8acc51a56d5d0ab6af06826461864460636d8bd5c546dab2a7b8"
 REGISTRY_REPOSITORY = "docker.io/library/registry"
 TOOL_SHA = {
-    "amd64": "2a2e3a3be56a5a44fca7c1e9249e7ed32a9dbf04c67225281c232b1cc31afe42",
+    "amd64": "7bad7aeeb27f6fee911599fcab000587d4066eafb58a7c88aed366676599bb73",
     "arm64": "1d1c755a7581e6bfbeab0198c6ad4349f2761918d53a88523e105e7362c14e5e",
 }
 IMAGE_KEYS = ("WORKBENCH_IMAGE", "DATA_ENGINE_IMAGE", "MANAGER_IMAGE", "POSTGRES_IMAGE")
@@ -86,7 +92,7 @@ def validate_sources(sources):
 
 
 def tool_image(arch):
-    return TOOL_IMAGE + "-" + arch
+    return TOOL_IMAGE + "-" + arch + ("-ubi8-v1" if arch == "amd64" else "")
 
 
 def registry_image(arch):
@@ -113,14 +119,14 @@ def ensure_tool(state, arch):
     archive = downloads / ("oc-mirror-" + arch + ".tar.gz")
     if not archive.exists() or sha256(archive) != TOOL_SHA[arch]:
         segment = "aarch64/" if arch == "arm64" else ""
-        url = "https://mirror.openshift.com/pub/openshift-v4/" + segment + "clients/ocp/" + TOOL_VERSION + "/oc-mirror.rhel9.tar.gz"
+        url = "https://mirror.openshift.com/pub/openshift-v4/" + segment + "clients/ocp/" + TOOL_VERSION + ("/oc-mirror.tar.gz" if arch == "amd64" else "/oc-mirror.rhel9.tar.gz")
         print("Downloading " + url, flush=True)
         with urllib.request.urlopen(url, timeout=120) as source, archive.open("wb") as target:
             shutil.copyfileobj(source, target)
         if sha256(archive) != TOOL_SHA[arch]:
             raise ValueError("oc-mirror download checksum mismatch")
     shutil.copyfile(HERE / "Dockerfile", context / "Dockerfile")
-    run(["docker", "buildx", "build", "--platform", "linux/" + arch, "--provenance=false", "--load", "-t", tag, context])
+    run(["docker", "buildx", "build", "--platform", "linux/" + arch, "--provenance=false", "--load", "--build-arg", "BASE_IMAGE=" + TOOL_BASE[arch], "-t", tag, context])
     return tag
 
 
@@ -154,6 +160,56 @@ def save_bootstrap(tool, target, arch, registry_repository):
     return registry_tag
 
 
+def export_tools(args):
+    state, output = Path(args.state).resolve(), Path(args.output).resolve()
+    if output.exists():
+        raise ValueError("Tool output already exists: " + str(output))
+    state.mkdir(parents=True, exist_ok=True)
+    # Prepare the native exporter as well when building a kit for another architecture.
+    ensure_tool(state, engine_arch())
+    tool = ensure_tool(state, args.arch)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".tools-", dir=output.parent) as temporary:
+        staging = Path(temporary) / "bundle"
+        staging.mkdir()
+        registry = save_bootstrap(tool, staging / "images.tar.gz", args.arch, args.registry_repository)
+        for name in ("mirror.py", "compose.yml", "Dockerfile"):
+            shutil.copyfile(HERE / name, staging / name)
+        files = {p.name: {"bytes": p.stat().st_size, "sha256": sha256(p)} for p in staging.iterdir()}
+        manifest = {"schema": 1, "version": TOOLS_VERSION, "arch": args.arch,
+                    "images": [tool, registry], "files": files}
+        (staging / "tools.json").write_text(json.dumps(manifest, indent=2) + "\n")
+        staging.rename(output)
+    print("TOOLS=" + str(output), flush=True)
+
+
+def verify_tools(bundle, arch):
+    data = json.loads((bundle / "tools.json").read_text())
+    if data.get("schema") != 1 or data.get("arch") != arch:
+        raise ValueError("Invalid tool metadata or wrong platform")
+    if data.get("images") != [tool_image(arch), registry_image(arch)]:
+        raise ValueError("Tool images do not match their bundled executor")
+    if set(data.get("files", {})) != {"images.tar.gz", "mirror.py", "compose.yml", "Dockerfile"}:
+        raise ValueError("Incomplete tool bundle")
+    for name, record in data["files"].items():
+        path = bundle / name
+        if path.stat().st_size != record["bytes"] or sha256(path) != record["sha256"]:
+            raise ValueError("Tool checksum mismatch: " + name)
+    return data
+
+
+def install_tools(args):
+    bundle = Path(args.bundle).resolve()
+    arch = engine_arch()
+    data = verify_tools(bundle, arch)
+    run(["docker", "load", "-i", bundle / "images.tar.gz"])
+    for image in data["images"]:
+        actual = run(["docker", "image", "inspect", image, "--format", "{{.Architecture}}"], capture=True)
+        if actual != arch:
+            raise ValueError("Wrong loaded tool platform: " + image)
+    print("TOOLS_INSTALLED=" + data["version"], flush=True)
+
+
 def export(args):
     state, output = Path(args.state).resolve(), Path(args.output).resolve()
     if output.exists():
@@ -172,14 +228,9 @@ def export(args):
                   {"name": ref if ref.split("@")[0] != repository(ref) else repository(ref) + ":mirror-" + ref.split("@sha256:")[1] + "@" + ref.split("@")[1]}
                   for ref in dict.fromkeys(sources.values())]}}
     (state / "imageset.yaml").write_text(json.dumps(config, indent=2) + "\n")
-    # Exporting copies pinned single-platform images, so the engine's own tool runs it; the
-    # target architecture's tool is what the site loads and runs on import.
-    exporter = ensure_tool(state, engine_arch())
-    tool = tool_image(args.arch)
-    registry_tag = registry_image(args.arch)
-    if args.bootstrap:
-        registry_tag = save_bootstrap(ensure_tool(state, args.arch), state / "bootstrap.tar.gz", args.arch,
-                                      args.registry_repository)
+    # Tool preparation is independent of the application archive and target architecture.
+    exporter = tool_image(engine_arch())
+    run(["docker", "image", "inspect", exporter], capture=True)
     flags = ["-c", "/work/imageset.yaml"]
     if args.insecure_source:
         flags += ["--src-tls-verify=false"]
@@ -198,11 +249,9 @@ def export(args):
     for archive in archives:
         shutil.copyfile(archive, output / archive.name)
     shutil.copyfile(state / "imageset.yaml", output / "imageset.yaml")
-    if args.bootstrap:
-        shutil.copyfile(state / "bootstrap.tar.gz", output / "bootstrap.tar.gz")
     files = {p.name: {"bytes": p.stat().st_size, "sha256": sha256(p)} for p in sorted(output.iterdir())}
     metadata = {"schema": 1, "version": args.version, "arch": args.arch, "images": sources,
-                "tool": tool, "registry": registry_tag, "files": files}
+                "tool": exporter, "files": files}
     (output / "delivery.json").write_text(json.dumps(metadata, indent=2) + "\n")
     size = sum(item["bytes"] for name, item in files.items() if name.startswith("mirror_"))
     print("DELIVERY=" + str(output) + "\nARCHIVE_BYTES=" + str(size), flush=True)
@@ -212,10 +261,8 @@ def verify_bundle(bundle):
     data = json.loads((bundle / "delivery.json").read_text())
     if data.get("schema") != 1 or data.get("arch") not in TOOL_SHA or set(data.get("images", {})) != set(IMAGE_KEYS):
         raise ValueError("Invalid delivery metadata")
-    expected_tool = tool_image(data["arch"])
-    expected_registry = registry_image(data["arch"])
-    if data.get("tool") != expected_tool or data.get("registry") != expected_registry:
-        raise ValueError("This tool version does not match the delivery; use its bundled offline/ directory")
+    # Older deliveries record their producer's tool/Registry tags. They do not select
+    # the executor; the independently installed tools own that choice.
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.+-]*", data.get("version", "")):
         raise ValueError("Invalid delivery version")
     files = data["files"]
@@ -248,8 +295,8 @@ def import_bundle(args):
     bundle, state = Path(args.bundle).resolve(), Path(args.state).resolve()
     data = verify_bundle(bundle)
     state.mkdir(parents=True, exist_ok=True)
-    if "bootstrap.tar.gz" in data["files"]:
-        run(["docker", "load", "-i", bundle / "bootstrap.tar.gz"])
+    # A 4.1.0 archive may contain its original bootstrap. Never reload those old tools:
+    # installation/updating of tool images is a separate operation.
     # Like export, run this engine's own tool and Registry: they only copy and store layers, so a delivery
     # imports on any engine (the release host keeps an arm64 import target on amd64 without emulation).
     # On a site the engine is the delivery architecture, i.e. the bundled images.
@@ -299,13 +346,20 @@ def main():
         command.add_argument("--arch", choices=tuple(TOOL_SHA), required=True)
     for name in ("state", "output", "version"):
         exp.add_argument("--" + name, required=True)
-    exp.add_argument("--bootstrap", action="store_true", help="Include Registry and oc-mirror images for a first installation")
-    exp.add_argument("--registry-repository", default=REGISTRY_REPOSITORY,
-                     help="Repository serving the pinned bootstrap Registry digest")
     exp.add_argument("--authfile", help="Container auth JSON with inline credentials; never copied to a delivery")
     exp.add_argument("--cache-dir", help="oc-mirror download cache (default: <state>/cache); may be shared")
     exp.add_argument("--network", help="Docker network for the exporter")
     exp.add_argument("--insecure-source", action="store_true")
+    tool_export = commands.add_parser("tools-export", help="Prepare standalone offline tool images and executor")
+    tool_export.add_argument("--arch", choices=tuple(TOOL_SHA), required=True)
+    tool_export.add_argument("--state", required=True)
+    tool_export.add_argument("--output", required=True)
+    tool_export.add_argument("--registry-repository", default=REGISTRY_REPOSITORY)
+    tool_install = commands.add_parser("tools-install", help="Install/update tool images without importing application images")
+    tool_install.add_argument("--bundle", required=True)
+    tool_check = commands.add_parser("tools-verify", help="Verify a prepared tool bundle before composing a delivery")
+    tool_check.add_argument("--bundle", required=True)
+    tool_check.add_argument("--arch", choices=tuple(TOOL_SHA), required=True)
     imp = commands.add_parser("import", help="Import a delivery to the persistent local Registry")
     for name in ("bundle", "state", "output-env"):
         imp.add_argument("--" + name, required=True)
@@ -318,6 +372,12 @@ def main():
                               (args.workbench, args.data_engine, args.manager, args.postgres)]))
         elif args.command == "export":
             export(args)
+        elif args.command == "tools-export":
+            export_tools(args)
+        elif args.command == "tools-install":
+            install_tools(args)
+        elif args.command == "tools-verify":
+            verify_tools(Path(args.bundle).resolve(), args.arch)
         else:
             if not 1 <= args.port <= 65535:
                 raise ValueError("Registry port must be 1..65535")
