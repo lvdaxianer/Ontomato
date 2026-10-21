@@ -8,6 +8,7 @@ import type {
 
 import { ref, computed, watch, onBeforeUnmount } from "vue";
 import { ElMessage } from "element-plus";
+import { WarningFilled } from "@element-plus/icons-vue";
 import { ArrowLeft, UserRound, Workflow, FileText, Blocks, Database, BarChart3, Cog, Flame, Settings, ZoomIn, ZoomOut, Maximize } from "lucide-vue-next";
 import CodeMirrorEditor from "../../../components/CodeMirrorEditor.vue";
 import { renderAgentMarkdown } from "../../../utils/agent-markdown";
@@ -794,12 +795,16 @@ watch(isDark, () => {
   </el-drawer>
   <el-dialog
     v-model="leaveConfirmationVisible"
+    class="agent-leave-confirmation"
     :title="t('admin.agentEditorUnsaved')"
-    width="440px"
+    width="420px"
     append-to-body
     :close-on-click-modal="false"
   >
-    <p>{{ t('admin.agentEditorLeaveConfirm') }}</p>
+    <div class="agent-leave-confirmation-message">
+      <el-icon class="agent-leave-confirmation-icon" :size="24" aria-hidden="true"><WarningFilled /></el-icon>
+      <span>{{ t('admin.agentEditorLeaveConfirm') }}</span>
+    </div>
     <template #footer>
       <el-button @click="leaveConfirmationVisible = false">{{ t('common.cancel') }}</el-button>
       <el-button @click="discardAndClose">{{ t('admin.agentEditorDiscardAction') }}</el-button>
@@ -809,6 +814,13 @@ watch(isDark, () => {
 </template>
 
 <style scoped>
+:global(.agent-leave-confirmation.el-dialog) { padding: 12px; max-width: calc(100vw - 32px); }
+:global(.agent-leave-confirmation .el-dialog__header) { padding: 0 28px 12px 0 !important; border-bottom: 0 !important; }
+:global(.agent-leave-confirmation .el-dialog__title) { font-size: var(--el-font-size-large) !important; font-weight: 400 !important; }
+:global(.agent-leave-confirmation .el-dialog__body) { padding: 0 !important; line-height: var(--el-font-line-height-primary); }
+:global(.agent-leave-confirmation .el-dialog__footer) { padding: var(--spacing-lg) 0 0 !important; border-top: 0 !important; }
+.agent-leave-confirmation-message { display: flex; align-items: center; gap: 12px; }
+.agent-leave-confirmation-icon { flex-shrink: 0; color: var(--el-color-warning); }
 :global(.agent-editor-drawer.el-drawer) { border-radius: 0 !important; overflow: hidden; font-family: var(--font-sans); font-size: var(--text-sm); }
 :global(.agent-editor-drawer) .el-button { font-family: inherit; }
 :global(.el-popper.agent-editor-select-dropdown) { max-width: none !important; box-sizing: border-box; }
