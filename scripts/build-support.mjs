@@ -78,6 +78,43 @@ export function execute(
 export const output = (executable, args) =>
   execute(executable, args, { capture: true }).stdout.trim();
 export const docker = (args) => execute("docker", args);
+const DOCKER_PROXY_FIELDS = [
+  ["HTTP_PROXY", "http_proxy", "HttpProxy"],
+  ["HTTPS_PROXY", "https_proxy", "HttpsProxy"],
+  ["NO_PROXY", "no_proxy", "NoProxy"],
+];
+
+function dockerDaemonProxyValues() {
+  try {
+    const result = execute(
+      "docker",
+      ["info", "--format", "{{json .}}"],
+      { capture: true, allowFailure: true },
+    );
+    if (result.status !== 0 || !result.stdout.trim()) return {};
+    const info = JSON.parse(result.stdout);
+    return info && typeof info === "object" ? info : {};
+  } catch {
+    // Explicit build arguments remain usable when the daemon is unavailable.
+    return {};
+  }
+}
+
+export function dockerProxyBuildArgs() {
+  const explicit = Object.fromEntries(
+    DOCKER_PROXY_FIELDS.map(([name, lowerName]) => [
+      name,
+      process.env[name] || process.env[lowerName],
+    ]),
+  );
+  const daemon = DOCKER_PROXY_FIELDS.some(([name]) => !explicit[name])
+    ? dockerDaemonProxyValues()
+    : {};
+  return DOCKER_PROXY_FIELDS.flatMap(([name, , daemonName]) => {
+    const value = explicit[name] || daemon[daemonName];
+    return value ? ["--build-arg", `${name}=${value}`] : [];
+  });
+}
 // `docker image inspect` accepts --platform from API 1.49 and `docker save` no
 // later; older servers reject the flag, so both commands share this threshold.
 function supportsPlatformFlag() {
