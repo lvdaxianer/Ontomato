@@ -438,6 +438,7 @@ public class LiveInstanceGraph {
             JSONObject conditions = null;
             if (!effectiveTerm.isEmpty()) {
                 JSONObject or = new JSONObject();
+                or.put("operator", "logic");
                 JSONArray ors = new JSONArray();
                 ors.add(condition(type.pk, "like", effectiveTerm));
                 if (!type.label.equals(type.pk)) ors.add(condition(type.label, "like", effectiveTerm));
