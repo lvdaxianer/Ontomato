@@ -141,5 +141,6 @@ export default {
     scheduledWriteTasks: "Schedule Tasks",
     visualModeling: "Visual Modeling",
     businessKnowledge: "Business Knowledge",
+    ontologyVersions: "Version History",
   },
 };

@@ -17,6 +17,7 @@ import OntologyObjectDetail from "./components/OntologyObjectDetail.vue";
 import OntologyRelationDetail from "./components/OntologyRelationDetail.vue";
 import OntologyResourceSidebar from "./components/OntologyResourceSidebar.vue";
 import OntologyWorkspaceHeader from "./components/OntologyWorkspaceHeader.vue";
+import OntologyVersioning from "./components/OntologyVersioning.vue";
 import {
   emptyOntologyResourceCounts,
   type AssetTab,
@@ -93,6 +94,10 @@ function changeWorkspace(workspace: Workspace) {
     navigate("/visual-modeling");
     return;
   }
+  if (workspace === "versions") {
+    navigate("/ontology-versions");
+    return;
+  }
   navigate(resourcePath(activeModelResource.value));
 }
 
@@ -151,6 +156,10 @@ function applyRouteState() {
   }
   if (section === "knowledge") {
     activeWorkspace.value = "knowledge";
+    return;
+  }
+  if (section === "ontology-versions") {
+    activeWorkspace.value = "versions";
     return;
   }
   if (section === "admin" && first === "ontology" && second === "visual-modeling") {
@@ -250,6 +259,10 @@ function openKnowledge() {
   navigate("/knowledge");
 }
 
+function openVersions() {
+  navigate("/ontology-versions");
+}
+
 function openModelingFocus(focus: "object" | "relation", id: string) {
   navigate(`/visual-modeling${queryString({ focus, id, back: "playground" })}`);
 }
@@ -301,6 +314,7 @@ onMounted(() => {
         @visual-modeling="openVisualModeling"
         @playground="openPlayground"
         @knowledge="openKnowledge"
+        @versions="openVersions"
       />
 
       <section class="content-area">
@@ -358,6 +372,9 @@ onMounted(() => {
         </section>
         <section v-else-if="activeWorkspace === 'knowledge'" class="knowledge-surface">
           <BusinessKnowledge />
+        </section>
+        <section v-else-if="activeWorkspace === 'versions'" class="versions-surface">
+          <OntologyVersioning />
         </section>
         <OntologyPlayground v-else class="playground-surface" @open-modeling="openModelingFocus" />
       </section>

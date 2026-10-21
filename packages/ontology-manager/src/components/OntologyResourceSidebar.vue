@@ -11,6 +11,7 @@ import {
   Tags,
   Table2,
   Workflow,
+  History,
 } from "lucide-vue-next";
 import { useSharedText } from "../context";
 import type { AssetTab, ModelResource, OntologyResourceCounts, Workspace } from "../workspace";
@@ -31,6 +32,7 @@ defineEmits<{
   visualModeling: [];
   playground: [];
   knowledge: [];
+  versions: [];
 }>();
 </script>
 
@@ -46,6 +48,14 @@ defineEmits<{
         >
           <Network :size="16" />
           <span>{{ t("nav.ontologyGraph") }}</span>
+        </button>
+        <button
+          :class="['nav-item', { active: activeWorkspace === 'versions' }]"
+          :title="t('nav.ontologyVersions')"
+          @click="$emit('versions')"
+        >
+          <History :size="16" />
+          <span>{{ t("nav.ontologyVersions") }}</span>
         </button>
       </section>
 
