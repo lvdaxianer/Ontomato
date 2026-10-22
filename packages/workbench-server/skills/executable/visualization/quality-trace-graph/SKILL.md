@@ -1,16 +1,24 @@
 ---
 name: quality-trace-graph
+defaultEnabled: false
 description: Render batches, process executions, assembly events, recall decisions, and products as an interactive directed evidence graph highlighting risk anchors, recall status, and data gaps.
 type: executable
 category: visualization
 title: Quality Traceability Graph
-tags: quality traceability, relationship graph, directed graph, derived paths, batch impact, ECharts
+tags:
+  - quality traceability
+  - relationship graph
+  - directed graph
+  - derived paths
+  - batch impact
+  - ECharts
 timeout: 15000
 outputType: html
 version: 1.0.0
 entries:
   - scripts/index.mjs
 ---
+
 ## Quality Traceability Graph
 
 Render objects and relationships returned by quality traceability queries as a directed evidence graph. Use it to explain how a batch leads to final products, which products received recalled batches, or where a traceability chain has missing records.
@@ -34,12 +42,28 @@ Recommended input:
 {
   "data": {
     "nodes": [
-      {"id": "BAT-0014", "name": "BAT-0014", "type": "batch", "status": "risk", "isAnchor": true},
-      {"id": "PE-00116", "name": "PE-00116", "type": "process-execution"},
-      {"id": "BAT-0092", "name": "BAT-0092", "type": "batch", "status": "recalled"}
+      {
+        "id": "BAT-0014",
+        "name": "BAT-0014",
+        "type": "batch",
+        "status": "risk",
+        "isAnchor": true
+      },
+      { "id": "PE-00116", "name": "PE-00116", "type": "process-execution" },
+      {
+        "id": "BAT-0092",
+        "name": "BAT-0092",
+        "type": "batch",
+        "status": "recalled"
+      }
     ],
     "links": [
-      {"source": "BAT-0014", "target": "PE-00116", "relation": "consumed_by", "pathType": "derived"}
+      {
+        "source": "BAT-0014",
+        "target": "PE-00116",
+        "relation": "consumed_by",
+        "pathType": "derived"
+      }
     ]
   },
   "title": "Downstream Product Lineage of BAT-0014",
@@ -49,15 +73,15 @@ Recommended input:
 }
 ```
 
-| Parameter | Required | Description |
-| --- | --- | --- |
-| `data` | Yes | `{nodes, links}`, `{nodes, edges}`, or an array of links containing at least `source` and `target`. |
-| `title` | No | Chart title. Defaults to "Quality Traceability Graph". |
-| `layout` | No | Uses the deterministic `layered` layout. |
-| `direction` | No | `LR` for left to right or `TB` for top to bottom. Defaults to `LR`. |
-| `maxNodes` | No | Maximum rendered nodes. Defaults to 120; accepts 10–200. When exceeded, nodes near anchors take priority. |
-| `anchorId` | No | A single anchor ID. Equivalent in priority to a node with `isAnchor: true`. |
-| `anchorIds` | No | Multiple anchor IDs, such as a product investigation anchor and a defective batch risk anchor. |
+| Parameter   | Required | Description                                                                                               |
+| ----------- | -------- | --------------------------------------------------------------------------------------------------------- |
+| `data`      | Yes      | `{nodes, links}`, `{nodes, edges}`, or an array of links containing at least `source` and `target`.       |
+| `title`     | No       | Chart title. Defaults to "Quality Traceability Graph".                                                    |
+| `layout`    | No       | Uses the deterministic `layered` layout.                                                                  |
+| `direction` | No       | `LR` for left to right or `TB` for top to bottom. Defaults to `LR`.                                       |
+| `maxNodes`  | No       | Maximum rendered nodes. Defaults to 120; accepts 10–200. When exceeded, nodes near anchors take priority. |
+| `anchorId`  | No       | A single anchor ID. Equivalent in priority to a node with `isAnchor: true`.                               |
+| `anchorIds` | No       | Multiple anchor IDs, such as a product investigation anchor and a defective batch risk anchor.            |
 
 Accepted link fields include `links/edges/relations`, `source/from/src`, `target/to/dst`, and `relation/relationName/edge_name/type`. Accepted node fields include `id/object_id/code`, `name/label`, `type/object_type`, and `status/state`.
 
