@@ -77,7 +77,6 @@ export const appTextSkillsEn = {
   "skills.mgr.deleteFailLog": "Failed to delete Skill {id}:",
   "skills.mgr.deleteFail": "Deletion failed: {error}",
   "skills.mgr.scriptReadFail": "Failed to read the Skill {id} script:",
-  "skills.mgr.contentReadFail": "Failed to read the Skill {id} content:",
   "skills.mgr.debugEntryUndefined": "Skill {id} has no entry file defined",
   "skills.mgr.execFailed": "Skill execution failed: {error}",
   "skills.mgr.exportDirMissing": "Skill directory does not exist: {dir}",

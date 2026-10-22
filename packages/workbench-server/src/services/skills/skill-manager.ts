@@ -9,6 +9,7 @@ import { randomUUID } from "crypto";
 import { skillRegistryManager } from "../../core/skills/registry/manager";
 import type { SkillRegistryManager } from "../../core/skills/registry/manager";
 import type { SkillMeta, SkillInput } from "../../core/skills/types";
+import { loadSkillContent } from "../../core/skills/discovery/loader";
 import {
   assertSkillPackageComplete,
   InvalidSkillPackageError,
@@ -365,17 +366,7 @@ class SkillManager {
       throw new Error(tApp("skills.mgr.skillNotFound", { id: skillId }));
     }
 
-    const skillMdPath = path.join(skill.path, "SKILL.md");
-    if (!fs.existsSync(skillMdPath)) {
-      return null;
-    }
-
-    try {
-      return readSkillMarkdown(skillMdPath)?.content ?? null;
-    } catch (error) {
-      logger.error(tApp("skills.mgr.contentReadFail", { id: skillId }), error);
-      return null;
-    }
+    return loadSkillContent(skill);
   }
 
   async searchSkills(domainId: string, query: string): Promise<SkillInfo[]> {

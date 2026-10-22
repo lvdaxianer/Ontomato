@@ -17,6 +17,8 @@ export interface ContentLayout {
   prompts: readonly ResourceCopy[];
   /** Public skill packages, read directly by all domains. */
   publicSkillsRoot: string;
+  /** Optional translated skill descriptions, using the same relative paths as the public packages. */
+  publicSkillTranslationsRoot?: string;
   /** Default runtime resources, synced into echart, knowledge, and skills under data/. */
   runtimeResources: readonly ResourceCopy[];
 }
@@ -50,6 +52,10 @@ export function promptSources(): readonly ResourceCopy[] {
 
 export function publicSkillsRoot(): string {
   return installedLayout().publicSkillsRoot;
+}
+
+export function publicSkillTranslationsRoot(): string | undefined {
+  return installedLayout().publicSkillTranslationsRoot;
 }
 
 export function runtimeResourceSources(): readonly ResourceCopy[] {

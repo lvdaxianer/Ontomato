@@ -10,7 +10,8 @@ import {
   skillRuntime,
   type SkillMeta,
 } from "../../../core/skills";
-import { normalizeSkillPackagePath, parseSkillMarkdown } from "../../../core/skills/manifest";
+import { normalizeSkillPackagePath } from "../../../core/skills/manifest";
+import { loadSkillContent } from "../../../core/skills/discovery/loader";
 import type { QueryResultDatasetEntry } from "../runtime/query-result";
 import { tApp } from "../../../i18n";
 
@@ -130,10 +131,10 @@ function createLoadSkillTool(deps: LoopSkillDeps): AgentTool {
         if (!skill.skillMdPath) {
           return result(tApp("analysis.loop.skills.358", { skillId: skillId }));
         }
-        const parsed = parseSkillMarkdown(await fs.promises.readFile(skill.skillMdPath, "utf-8"));
+        const content = loadSkillContent(skill);
         signal?.throwIfAborted();
-        if (!parsed) return result(tApp("analysis.loop.skills.359", { skillId: skillId }));
-        return result(parsed.content.trim(), true);
+        if (content === null) return result(tApp("analysis.loop.skills.359", { skillId: skillId }));
+        return result(content.trim(), true);
       } catch (error: unknown) {
         return result(tApp("analysis.loop.skills.360", { errorMessage: errorMessage(error) }));
       }

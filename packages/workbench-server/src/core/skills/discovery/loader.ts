@@ -29,6 +29,7 @@ export async function resolveSkillPackageFile(
 }
 
 export function loadSkillContent(skill: SkillMeta): string | null {
+  if (skill.localizedContent !== undefined) return skill.localizedContent;
   if (!skill.skillMdPath) return null;
 
   try {

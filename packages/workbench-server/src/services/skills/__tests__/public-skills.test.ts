@@ -18,12 +18,14 @@ vi.mock("../../analysis-agent/config/skill-references", () => ({
 
 const root = await fs.mkdtemp(path.join(os.tmpdir(), "public-skills-"));
 const publicRoot = path.join(root, "public");
-installContentLayout({ runtimeRoot: root, publicSkillsRoot: publicRoot, prompts: [], runtimeResources: [] });
+const translationsRoot = path.join(root, "translations");
+installContentLayout({ runtimeRoot: root, publicSkillsRoot: publicRoot, publicSkillTranslationsRoot: translationsRoot, prompts: [], runtimeResources: [] });
 configureI18n({ defaultLocale: "en", languageSwitchEnabled: false, appTextLocale: "en", packs: { en: { messages: { ...en, ...appTextEn }, ...enLocaleMeta } } });
 const { skillRegistryManager } = await import("../../../core/skills/registry/manager");
 const { skillRuntime } = await import("../../../core/skills/execution/runtime");
-const { resolveSkillPackageFile } = await import("../../../core/skills/discovery/loader");
+const { resolveSkillPackageFile, loadSkillContent } = await import("../../../core/skills/discovery/loader");
 const { skillManager } = await import("../skill-manager");
+const { createLoopSkillTools } = await import("../../analysis-agent/loop/skills");
 
 afterAll(async () => {
   skillRegistryManager.dispose();
@@ -98,5 +100,53 @@ describe("public skill ownership across domains", () => {
     await skillManager.updateSkill("writer", "mine", { skillContent: "after" });
     expect((await skillManager.getSkillContent("writer", "mine"))?.trim()).toBe("after");
     expect((await skillManager.getAllSkills("another")).some((skill) => skill.id === "mine")).toBe(false);
+  });
+
+  it("shares translated instructions across consumers while executing and exporting the core package", async () => {
+    const dir = await writePackage(publicRoot, "localized", "1.0.0");
+    const translationPath = path.join(translationsRoot, "executable", "analysis", "localized", "SKILL.md");
+    await fs.mkdir(path.dirname(translationPath), { recursive: true });
+    const translation = "---\ntitle: Translated title\ndescription: Translated description\ntags: [translated]\n---\nTranslated instructions\n";
+    await fs.writeFile(translationPath, translation);
+
+    const registry = await skillRegistryManager.forDomain("translated");
+    const skill = registry.getSkillById("localized")!;
+    expect(skill).toMatchObject({
+      path: dir,
+      skillMdPath: path.join(dir, "SKILL.md"),
+      isPublic: true,
+      manifest: { title: "Translated title", description: "Translated description", version: "1.0.0", entries: ["index.mjs"] },
+    });
+    expect(loadSkillContent(skill)?.trim()).toBe("Translated instructions");
+    expect((await skillManager.getSkillContent("translated", "localized"))?.trim()).toBe("Translated instructions");
+    expect((await skillManager.searchSkills("translated", "Translated title"))[0].id).toBe("localized");
+
+    const tools = createLoopSkillTools({
+      domainId: "translated",
+      selectedSkillIds: ["localized"],
+      resolveEvidence: () => undefined,
+      trajectory: { start: () => "activity", settle: vi.fn() },
+    });
+    const loaded = await tools.find((tool) => tool.name === "load_skill")!.execute("load", { skill_id: "localized" });
+    expect(loaded.content[0].text).toBe("Translated instructions");
+
+    await writePackage(publicRoot, "localized", "2.0.0");
+    expect(await skillRuntime.execute("translated", "localized", {})).toMatchObject({ text: "2.0.0" });
+    expect((await skillRegistryManager.forDomain("translated")).getSkillById("localized")?.manifest.version).toBe("2.0.0");
+    expect((await skillManager.getSkillContent("translated", "localized"))?.trim()).toBe("Translated instructions");
+    const raw = await tools.find((tool) => tool.name === "read_skill_file")!.execute("read", { skill_id: "localized", path: "SKILL.md" });
+    expect(raw.content[0].text).toContain("description: 2.0.0");
+    const exported = new AdmZip(await skillManager.exportSkill("translated", "localized"));
+    expect(exported.readAsText("SKILL.md")).toBe(await fs.readFile(path.join(dir, "SKILL.md"), "utf8"));
+    expect(exported.readAsText("index.mjs")).toBe(await fs.readFile(path.join(dir, "index.mjs"), "utf8"));
+    expect(await fs.readFile(await resolveSkillPackageFile(skill, "resource.txt"), "utf8")).toBe("2.0.0");
+
+    // A translation is not an alternate owner of enabled state or any other behavior field.
+    await fs.writeFile(translationPath, translation.replace("title:", "defaultEnabled: false\ntitle:"));
+    try {
+      await expect(skillRegistryManager.forDomain("translated")).rejects.toThrow(/Unrecognized key/);
+    } finally {
+      await fs.writeFile(translationPath, translation);
+    }
   });
 });

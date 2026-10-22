@@ -11,6 +11,8 @@ export interface SkillMeta {
   path: string;
   manifest: SkillManifest;
   skillMdPath?: string;
+  /** Translated instructions; executable files and the original package remain at path. */
+  localizedContent?: string;
 }
 
 export interface SkillInput {
