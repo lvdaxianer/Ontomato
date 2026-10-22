@@ -1,14 +1,34 @@
 ---
 name: ontomato-adapter-builder
-description: Build, test and expose a new Ontomato data adapter. Create the Maven module and DataAdapterProvider, implement the DataAdapter read and write paths against the real DSL and response contract, add the shared contract-suite test and provider test, and make the adapter configurable in the existing frontend without writing Vue code. Use when adding a database, search engine, graph store or proprietary store; completing a read-only adapter's write path; fixing dropped or truncated DSL results; or changing namespaces, edges, time values, vectors or connection fields.
+description: "Develop or repair an Ontomato data-adapter implementation in a compatible source checkout. Use for a new engine type or its DSL/read/write contract, tests and registration; configuring a database type already installed in a deployment does not require this skill."
 ---
 
 # Ontomato adapter builder
 
-An adapter is the only layer that knows how one data source stores and queries objects. Everything
-above it speaks DSL; everything below it speaks the engine's native language. This guide gives the
-exact contracts so a general-purpose coding agent can implement, test and expose an adapter without
-reading the existing adapters first.
+## Ontomato: work through one ontology
+
+Ontomato is an ontology platform: it describes a business domain and uses that shared meaning to connect data, answer questions and provide business operations.
+
+| Concept | Meaning |
+| --- | --- |
+| Class and object | A class describes a business object type, such as Employee or Department. An object is one instance, identified by its primary-key value. |
+| Attribute | A named property of an object, with a type and business meaning. Display names and descriptions explain a field; they do not replace its technical name. |
+| Relationship | A directed business connection, such as Employee **belongs to** Department. Its meaning is distinct from how a database stores or queries it. |
+| ontomap | The machine-readable definition of classes, attributes, relationships, descriptions and data mappings. It describes the data; it is not the object records themselves. |
+| Business knowledge and resources | Knowledge adds terminology, rules and calculation meanings. A `vector` attribute associates text or file resources with an object for semantic retrieval and display. Each skill exposes only its documented resource operations. |
+| Capabilities on the ontology | Queries and analyses use these definitions. MetricViews expose reusable queries; Actions expose defined business operations. Applications call those capabilities. Their definitions and business knowledge are managed separately from the ontomap JSON. |
+
+Classes and attributes must map to real structures in the selected data source. With a relational source, a relationship can use matching columns through JOIN; with a graph source, it can use stored edges. A storage change does not by itself remove a business relationship. Resolve its mapping, direction and multiplicity from evidence; do not infer a valid join merely from similar column names. A bridge table or another prepared mapping may be necessary for some relationships.
+
+Use one consistent ontology context: deployment, domain where applicable, object identities and resource references. Reuse the business intent, access and scope already established in the session. Resolve technical facts, such as JOIN columns and existing grant sources, through commands, authorized data tools and bundled references. Ask only for missing business decisions or access that those tools cannot supply; do not ask a nontechnical user to guess technical facts. If a required capability is unavailable, explain the missing prerequisite and affected business task while preserving the requested outcome.
+
+The skills cover different tasks on this same platform: `ontomato-ontomap-builder` maintains definitions and mappings; `ontomato-analyst` queries and analyzes them; `ontomato-app-builder` builds applications on their capabilities. Adapter development and enterprise permission management support this platform at their own boundaries. These names explain the roles, not dependencies on other installed skills. Keep this package's files together; its local references travel with it.
+
+## This skill’s role
+
+Develop the engine-specific implementation that makes ontology objects, relationships and DSL operations work on another data-source type. This is a developer workflow, not the way to configure an already supported database. It requires a compatible Ontomato development checkout, its Maven modules/test support, and an authorized test engine. The bundled contract explains the implementation; it does not supply a standalone SDK or a deployed API that installs adapters. Without that development environment, identify the missing prerequisite instead of promising to build or install an adapter from this skill alone.
+
+For an already supported source, use the existing connection configuration capability; section 9 lists the deployed HTTP endpoints. With the required URL, identity and authorization, an Agent can call them through an available HTTP client. The lack of a dedicated CLI alone is not a reason to hand the task back to the user. Check the ontology mappings after configuring the connection. If an expected supported type is missing from the installed list, check the deployment version and installation first; that alone does not call for a new adapter implementation.
 
 ## Non-negotiables
 
@@ -941,6 +961,8 @@ enterprise pom. Read `target/surefire-reports/TEST-*.xml` for counts. Report
 ## 9. Frontend configuration
 
 The configuration page is entirely metadata-driven. A new adapter requires **no Vue edit**.
+
+The paths below are relative to the frontend deployment base URL plus `/api/data-query`, for example `GET <envUrl>/api/data-query/businessConfig/dataAdapters`. The public edition uses anonymous access; an enterprise deployment requires its authorized identity context.
 
 | Endpoint | Purpose |
 | --- | --- |

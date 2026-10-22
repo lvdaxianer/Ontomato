@@ -180,9 +180,15 @@ export ONTOMATO_URL=http://<host>:3000
 
 | Skill | Use it to |
 | --- | --- |
-| `ontomato-ontomap-builder` | connect a database, draft and import the ontology, and check it with questions |
-| `ontomato-analyst` | read the ontology, run Ontology DSL queries and questions, and reach the analysis agents |
-| `ontomato-app-builder` | on a separate test deployment: build and debug MetricViews, Actions and the pages that call them |
+| `ontomato-ontomap-builder` | establish or maintain the ontology's data mappings and business knowledge, then check them with questions |
+| `ontomato-analyst` | query and analyze business objects and relationships through the same ontology |
+| `ontomato-app-builder` | build MetricViews, Actions and application pages on the ontology, in the configured single- or two-environment setup |
+| `ontomato-adapter-builder` | implement a new data-source type in a compatible development checkout; ordinary database connection setup uses ontomap-builder |
+
+The skills share one ontology model: business object types, their attributes and directed
+relationships, and mappings to real data. Using the deployed capabilities does not require
+the product source. Adapter development is a separate workflow that does require a development
+checkout. Each package explains its prerequisites, operation effects and limits for the agent.
 
 For deep analysis reports, also add the MCP server `http://<host>:3000/mcp/analysis-agents`
 (Streamable HTTP) to your agent.
@@ -190,8 +196,8 @@ For deep analysis reports, also add the MCP server `http://<host>:3000/mcp/analy
 <details>
 <summary>Install without the <code>skills</code> CLI</summary>
 
-Copy the skill directories from [`agent-skills/`](agent-skills) into your agent's skills
-directory, for example:
+Copy whole skill directories, including their scripts, configuration and local references,
+from [`agent-skills/`](agent-skills) into your agent's skills directory, for example:
 
 ```bash
 mkdir -p .claude/skills && cp -R agent-skills/* .claude/skills/   # Claude Code

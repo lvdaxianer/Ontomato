@@ -1,13 +1,32 @@
 ---
 name: ontomato-ontomap-builder
-description: Build an ontomap for one datasource, maintain business knowledge in Ontomato, and query that data in natural language. Use when connecting a supported database, writing or replacing the ontomap, importing or editing business knowledge, or asking a natural-language question.
+description: "Build and maintain Ontomato ontology definitions and their data mappings, business knowledge and text resources; connect a supported data source and verify the ontology with questions. Use for new or existing ontomaps and data-source changes, not database migration or adapter development."
 ---
 
 # Ontomap builder
 
-Build an ontomap for one business database, import it into Ontomato, and check it with natural-language questions. Copy this directory and install it on its own. `ontomato.mjs` reads `application.yml` from the directory that contains the script.
+## Ontomato: work through one ontology
 
-Ontomato uses one datasource at a time. Pointing it at another source replaces the previous one.
+Ontomato is an ontology platform: it describes a business domain and uses that shared meaning to connect data, answer questions and provide business operations.
+
+| Concept | Meaning |
+| --- | --- |
+| Class and object | A class describes a business object type, such as Employee or Department. An object is one instance, identified by its primary-key value. |
+| Attribute | A named property of an object, with a type and business meaning. Display names and descriptions explain a field; they do not replace its technical name. |
+| Relationship | A directed business connection, such as Employee **belongs to** Department. Its meaning is distinct from how a database stores or queries it. |
+| ontomap | The machine-readable definition of classes, attributes, relationships, descriptions and data mappings. It describes the data; it is not the object records themselves. |
+| Business knowledge and resources | Knowledge adds terminology, rules and calculation meanings. A `vector` attribute associates text or file resources with an object for semantic retrieval and display. Each skill exposes only its documented resource operations. |
+| Capabilities on the ontology | Queries and analyses use these definitions. MetricViews expose reusable queries; Actions expose defined business operations. Applications call those capabilities. Their definitions and business knowledge are managed separately from the ontomap JSON. |
+
+Classes and attributes must map to real structures in the selected data source. With a relational source, a relationship can use matching columns through JOIN; with a graph source, it can use stored edges. A storage change does not by itself remove a business relationship. Resolve its mapping, direction and multiplicity from evidence; do not infer a valid join merely from similar column names. A bridge table or another prepared mapping may be necessary for some relationships.
+
+Use one consistent ontology context: deployment, domain where applicable, object identities and resource references. Reuse the business intent, access and scope already established in the session. Resolve technical facts, such as JOIN columns and existing grant sources, through commands, authorized data tools and bundled references. Ask only for missing business decisions or access that those tools cannot supply; do not ask a nontechnical user to guess technical facts. If a required capability is unavailable, explain the missing prerequisite and affected business task while preserving the requested outcome.
+
+The skills cover different tasks on this same platform: `ontomato-ontomap-builder` maintains definitions and mappings; `ontomato-analyst` queries and analyzes them; `ontomato-app-builder` builds applications on their capabilities. Adapter development and enterprise permission management support this platform at their own boundaries. These names explain the roles, not dependencies on other installed skills. Keep this package's files together; its local references travel with it.
+
+## This skill’s role
+
+Maintain the ontology of one business data source: connect a supported source, create or adapt its ontomap, maintain business knowledge, attach text resources and check the result with questions. This package works through deployed APIs; it needs no product checkout. Database structure inspection or changes require separately available, authorized database tools. It does not export/import business datasets or migrate resource bindings.
 
 ## Prerequisites
 
@@ -19,7 +38,9 @@ Every call goes through the frontend: `<envUrl>/api/data-query/<backend path>`.
 
 ## Configure the Ontomato URL
 
-Set `envUrl` in `application.yml` to the frontend URL of Ontomato, with no path suffix:
+The script reads `application.yml` beside itself as simple `key: value` lines. Use unquoted values and full-line comments. Use the frontend base URL (including a deployment proxy prefix when needed), without `/api/data-query` or a browser `#` route. Keep the configuration private, especially enterprise credentials.
+
+Set `envUrl` in `application.yml` to the frontend URL of Ontomato, without an API path or browser route:
 
 ```yaml
 envUrl: http://host:3000
@@ -27,17 +48,25 @@ envUrl: http://host:3000
 
 When the environment variable `ONTOMATO_URL` is set, it takes precedence over `envUrl`, so one setting serves every installed Ontomato skill.
 
-## Workflow
+## Choose the ontology task
 
-1. Fill in `application.yml`.
-2. `node ontomato.mjs list-datasources` to see which database types this deployment supports and which connection fields each type needs.
-3. `node ontomato.mjs test-datasource <type> @payload.json`. Fix the payload until it succeeds; nothing is saved yet.
-4. `node ontomato.mjs use-datasource <type> @payload.json`
-5. Inspect the business tables and rows with your own database tools. `test-datasource` only lists table and view names; this skill does not query columns or rows.
-6. Write the ontomap from that structure.
-7. `node ontomato.mjs set-ontomap @ontomap.json`
-8. `node ontomato.mjs get-ontomap` and compare it with the file you wrote.
-9. `node ontomato.mjs ask "..."` with a few simple questions that touch the main tables and relationships. If an answer is missing or wrong, go back and fill in `desc` and relationships, then set the ontomap again.
+Start with the authorized deployment/context and the business purpose. Read `list-datasources` and `get-ontomap` before changing an existing configuration. Connection success establishes access, not a correct model or complete data migration.
+
+| Task | Use the existing capabilities this way | Completion evidence |
+| --- | --- | --- |
+| Create an ontomap | Test the connection. Use an available read-only database client to inspect actual tables/indices, columns, types, keys and representative relationship pairs. Prepare the definition, select the source with `use-datasource`, then save it with `set-ontomap`. | Read it back with `get-ontomap`; ask bounded questions that exercise the relevant objects and relationships. |
+| Maintain an existing ontomap | Save the current `get-ontomap` result, edit that object and carry back unrelated definitions, descriptions and returned fields unchanged. Resolve new or renamed mappings from the source. | The intended difference is present and unrelated meaning remains. A request to rename or adapt a mapping is not an instruction to remove its relationships. |
+| Change the data source | Test and inspect the target first. Prepare a compatible ontomap and resolve each existing relationship and resource binding before switching. Then call `use-datasource` and `set-ontomap`, and read back/test the result. | Definitions match the actual target; cross-object questions and relevant resources work. These are separate writes, not an atomic migration. If one fails, read actual state before retrying or restoring the affected configuration. |
+| Maintain business knowledge | Read current entries, then save the requested additions/edits or delete the identified entry. | Read back IDs, content and review status; metadata changes alone do not prove a business answer is correct. |
+| Attach text to an object | Use `upload-vector` for an existing object and a declared `vector` attribute. | Query that object/resource through `ask` or an authorized data reader; the success message alone does not identify the created resource. |
+
+If a required relationship, resource or permission reference cannot yet be preserved with the available tools, keep the current connection and ontomap active. Prepare the target definition and explain the missing access or capability. Resolve those dependencies before switching; do not switch first and plan repairs later, or turn a requirement such as keeping photos usable into deferred work.
+
+For relational relationships, use the observed columns and values to establish `fromField` and `toField`, including direction and multiplicity. Missing connection keys are a data-preparation gap, not a reason to delete the business relationship or join on a display name. Database changes require a suitable tool and authorization for that work; this skill has no column-creation or dataset-migration command. Explain an unresolved mapping in business terms and identify the access or preparation needed.
+
+For a whole-definition replacement, obtain any business decision that is still missing before removing classes, attributes or relationships; do not ask again when the user has already explicitly authorized that exact change. Configure and prepare only the task's scope. If the available tools cannot inspect a needed technical fact, state the missing prerequisite rather than ask the user to guess it or fall back to product-source assumptions.
+
+This is the public-edition client: it sends no enterprise login credentials and has no `login` command. An authenticated enterprise deployment needs the matching enterprise package and authorized identity.
 
 ## Commands
 
@@ -60,30 +89,47 @@ node ontomato.mjs ask "How many people are there?"
 node ontomato.mjs ask --lang en "How many people are there?"
 ```
 
+## Command results and write scope
+
+| Command | Observable result | Effect |
+| --- | --- | --- |
+| `list-datasources` | `currentType` and installed adapter metadata | Read only; `requiresJoinFields` says whether relationships require explicit join columns. |
+| `test-datasource` | Connection/catalog or search-index report | Does not select a source, save a connection, migrate data or validate every read/write capability. |
+| `use-datasource` | `datasource set` | Saves this adapter type's connection and selects it. Existing ontomap, knowledge, resources and permissions are not migrated; saved connections of other types remain. This command configures one source, not a multi-source definition. |
+| `get-ontomap` | Complete ontomap JSON | Reads definitions, not object records. |
+| `set-ontomap` | `ontomap saved` | Replaces the complete definition and validates the primary-key contract. It does not create/alter business tables or migrate objects, permissions or resources. Read back the result. |
+| `get-knowledge` | Entry array | Read only; use returned `knowledgeID` values to identify later edits/deletions. |
+| `save-knowledge`, `delete-knowledge` | Per-entry success message or failure | Writes knowledge; array saves stop at the first failure and retain earlier successes. |
+| `upload-vector` | `vector uploaded` or failure | Adds a resource and appends a reference to the object's vector field in the business data source. The CLI does not print the returned resource ID/path. An uncertain result is not grounds to append again. |
+| `ask` | Session/events and result data | Runs a question against the current context; it is not an ontomap editor or a dataset export. |
+
+The commands below document their current API paths. Legacy API names containing `Schema` do not change the product concept: the complete semantic definition is the ontomap.
+
 `type` is one of the types `list-datasources` prints.
 
 `ask` sends `Accept-Language`. The default is `en`.
 
-`upload-vector` uploads one text (for example a book paragraph) as a vector value: `POST /api/data-query/vectorResource/upload`. It computes the embedding, writes it into the vector store and attaches the file to the object's vector attribute. The object must already exist in the target database, with its vector attribute imported as `[]`. The payload is:
+## Text resources and object identity
+
+`upload-vector @vector.json` uploads **text only**. The script turns `text` into the bytes of a file and uses the same text for embedding; `suffix` only changes its filename extension, not its format. Keep `suffix: "txt"` for this command. It cannot upload an existing image or PDF; setting `suffix: "jpg"` or `"pdf"` does not convert text into that file type.
+
+The object must already exist and the attribute must be declared `vector`. For a new object its reference list can start as `[]`; do not clear an existing list before an append. Preserve the exact object primary-key value. The payload is:
 
 ```json
-{
-  "className": "paragraph",
-  "attrName": "content",
-  "objectId": "p1",
-  "text": "The paragraph text ...",
-  "suffix": "txt"
-}
+{"className":"paragraph","attrName":"content","objectId":"p1","text":"The paragraph text…","suffix":"txt"}
 ```
 
-- `className` is the class `name`, `attrName` is the `type: vector` attribute name, `objectId` is the object's primary-key value.
-- `text` is the full paragraph text: it is the input to the embedding and is also stored as the downloadable file.
-- `suffix` is the stored file extension, default `txt`.
-- The upload is append-only: uploading again for the same object adds another vector file rather than replacing.
+The resource file and embedding belong to Ontomato; the business field stores references shaped as `[{"path":"...","text":"..."}]`. Retrieval is scoped by domain/context, class name and attribute name; each resource also refers to an object key. Changing those names or keys requires explicit handling of existing bindings. `set-ontomap` and `use-datasource` do not perform that migration. If only the database connection changes, preserving names/keys and the reference values is a prerequisite, not proof that resources still work: check retrieval and a download before claiming completion.
 
-A JSON body of `{success, message, data}` with `success: false` is printed and the process exits non-zero. A non-2xx response prints the HTTP status and the response body, then exits non-zero.
+This package has no commands to migrate, delete or rebuild resources and no original-file upload flag. Use only an already available, authorized resource tool for such work; otherwise explain the capability gap. Repeated uploads append new resources rather than replacing old ones. `get-ontomap` cannot verify resource contents because it only returns definitions.
+
+Vector attachment needs a data adapter that can read the target object and write its reference field. The included implementations provide that path for PostgreSQL, MySQL, SQL Server, DuckDB, Neo4j, Elasticsearch and OpenSearch; GaussDB reports unsupported writes. Installed types come from `list-datasources`; connection success does not establish write authorization or deployment-version support. Treat an unsupported-operation error as a capability boundary, not a reason to write vector storage directly.
+
+A non-2xx response or JSON `success: false` is a failure and exits non-zero. A success message does not replace read-back or verification of the business result.
 
 ## Business knowledge
+
+`get-knowledge` entries include `knowledgeID`, `knowledgeTitle`, `knowledgeText`, `knowledgeTags` and `status`. Keep the returned ID for edits/deletions; a title alone is not an identity.
 
 Read the supplied business material and organize definitions, calculation rules, conditions and exceptions into knowledge entries. Use `get-knowledge` to inspect existing entries, `save-knowledge` to save them, then `get-knowledge` to verify the result.
 
@@ -107,7 +153,7 @@ Arrays are saved in order. The script prints each successful entry's title and s
 ## Connect a datasource
 
 1. `node ontomato.mjs list-datasources` — `GET /api/data-query/businessConfig/dataAdapters`. Prints `currentType` (the adapter this domain uses now) and `adapters`, the adapters installed in this deployment. Each entry has `type`, `label`, `requiresJoinFields`, `fields` (the connection fields the type needs) and `examples` (a sample value per field); saved connections are not shown.
-2. `node ontomato.mjs test-datasource <type> '<json>'` — `POST /api/data-query/businessConfig/testDataAdapter`. Same arguments and body as `use-datasource`, but nothing is saved and the domain's datasource does not change. On success it prints the connection report told apart by `kind`. For catalog sources (`kind: "catalog"`: JDBC, Neo4j, M3), it prints `elapsedMs`, `databaseProduct`, `databaseVersion`, `driverName`, `driverVersion`, `catalog`, `schema` and `tables` (`name` and `type`, `TABLE` or `VIEW`, of the schema the connection landed in). For search engines (`kind: "search"`: `elasticsearch`, `opensearch`), it prints `elapsedMs`, `databaseProduct`, `databaseVersion`, `clusterName` and `indices` (visible, queryable open indices). For catalog sources those table names are what class `name` must resolve to; for search engines the class `name` derives the index (see the class `name` rule below). A connection that lands in no schema (for example a PostgreSQL `currentSchema` that does not exist) fails, as does a DuckDB file that does not exist; the test does not create the file. The connection test gives up after 15 seconds.
+2. `node ontomato.mjs test-datasource <type> '<json>'` — `POST /api/data-query/businessConfig/testDataAdapter`. Same arguments and body as `use-datasource`, but nothing is saved and the domain's datasource does not change. On success it prints the connection report told apart by `kind`. For catalog sources (`kind: "catalog"`: JDBC, Neo4j), it prints `elapsedMs`, `databaseProduct`, `databaseVersion`, `driverName`, `driverVersion`, `catalog`, `schema` and `tables` (`name` and `type`, `TABLE` or `VIEW`, of the schema the connection landed in). For search engines (`kind: "search"`: `elasticsearch`, `opensearch`), it prints `elapsedMs`, `databaseProduct`, `databaseVersion`, `clusterName` and `indices` (visible, queryable open indices). For catalog sources those table names are what class `name` must resolve to; for search engines the class `name` derives the index (see the class `name` rule below). A connection that lands in no schema (for example a PostgreSQL `currentSchema` that does not exist) fails, as does a DuckDB file that does not exist; the test does not create the file. The connection test gives up after 15 seconds.
 3. `node ontomato.mjs use-datasource <type> '{"url":"jdbc:postgresql://db.example:5432/my_database?currentSchema=public","user":"app","password":"change-me"}'` — `POST /api/data-query/businessConfig/useDataAdapter`. The script merges `type` into the JSON and posts it. Send the fields listed in that type's `fields`; usually `url`, `user`, `password`.
 
 Which types are actually available depends on the deployment. `list-datasources` is authoritative.
@@ -144,14 +190,14 @@ Do not put regional JDBC parameters such as `serverTimezone=Asia/Shanghai` in th
 | attr `name` | SQL column name, or document field name for Elasticsearch/OpenSearch. Relational adapters paste it unchanged and unquoted (`alias.column`); search requests use it as the document field name. Same exact-match rule as the class name. |
 | attr `showName` | Saved on the ontomap and returned by `get-ontomap`. The schema text and SQL use `name` and `desc`. |
 | attr `desc` | Field description the model reads. `getSchemaByClassName` and the question-splitter schema put it in the "field description" column. Write the business meaning, units, and enumeration values. |
-| `type` | One of `varchar`, `text`, `int`, `long`, `double`, `date`, `timestamp`, `vector`. Adapters pick the SQL type and the comparison form from this value. When set to `vector`, it corresponds to a text column in the underlying database storing a JSON array `[{"path":"...","text":"..."}]`, which is maintained by the vector upload interface and should not be hand-written; vector writes are supported only on PostgreSQL and DuckDB, while other data sources (MySQL, SQL Server, GaussDB) explicitly fail with unsupported; vector attributes cannot be used for equality or range comparisons and can only be semantically queried via DSL vector conditions. |
+| `type` | One of `varchar`, `text`, `int`, `long`, `double`, `date`, `timestamp`, `vector`, chosen for the actual mapping. `vector` denotes object-resource references held as a text array representation in the business field; maintain it through resource operations, not equality/range comparisons. See “Text resources and object identity” for upload scope, supported writes and identity constraints. |
 | `bizzKey` | On the DSL question path, `true` adds this column to the result when the query left it out. The SQL built for `ask` does not read this flag. Use `true` for columns that path should keep, and `false` otherwise. |
 | `enable` | `true` includes the column in the schema text and in SQL. `false` omits it. A missing value counts as enabled. Use `true`. |
-| `primaryKey` | Exactly one `true` on each class. The schema text marks it, and insert and object lookup use it as the id column. |
+| `primaryKey` | Exactly one `true` per class, with `enable: true` and `type: varchar`; otherwise saving fails. The label does not convert stored data. Resolve a non-text source key with the authorized data tools before assuming a compatible mapping; changing only the label is not proof. |
 | relationship key | Relationship type name: the machine name a join and the DSL look the relationship up by, and the content of the "relationship type" column of the prompt table. Keep it short, stable and identifier-like (letters, digits, `_`). It is what the model copies into the DSL; the meaning it reads is the `desc`, not the key. |
 | `fromClass`, `toClass` | Class `name` of the two ends. The direction runs from `fromClass` to `toClass` and is part of the meaning; the prompt asks the model to check it. |
-| `fromField` | Column/field `name` on `fromClass`. Both relational databases and search engines (Elasticsearch / OpenSearch) require this join field. |
-| `toField` | Column/field `name` on `toClass`. The join is `fromClass.fromField = toClass.toField`. Both relational databases and search engines require this join field. |
+| `fromField` | A real join field on `fromClass`. Required when `list-datasources` returns `requiresJoinFields: true`: the adapter needs an explicit column pair to implement the relationship, not removal of the business relationship. |
+| `toField` | A real join field on `toClass`; the condition is `fromClass.fromField = toClass.toField`. Verify the pair, direction and multiplicity. Graph adapters with `requiresJoinFields: false` use the corresponding stored relationship edges. |
 | relationship `desc` | Relationship description, the "relationship description" column of the prompt table. Write it as a predicate, the verb phrase that holds from `fromClass` to `toClass`: `belongs to`, `is located in`, `contains`, `is parent of`. See "Write relationship descriptions as predicates" below. |
 
 ## Write relationship descriptions as predicates
