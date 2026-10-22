@@ -493,6 +493,7 @@ async function focusNode(id: string | undefined) {
   neighborPages.value = {};
   await renderGraph(++graphRequest);
   await selectNode(id);
+  await showDirectNeighborhood();
   if (graph) {
     const maxZoom = Math.min(1, context.presentation.maxFitZoom ?? 1);
     if (graph.getZoom() > maxZoom) await graph.zoomTo(maxZoom, false);

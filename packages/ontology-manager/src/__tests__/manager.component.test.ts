@@ -333,7 +333,7 @@ describe("OntologyManager root component with real pages", () => {
     expect(root().querySelector(".sample-legend")).not.toBeNull();
   });
 
-  it("instance graph search filters nodes and focuses the selected result without stale record details", async () => {
+  it("instance graph search opens direct neighbors and focuses the result without stale record details", async () => {
     vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
       width: 800, height: 600,
     } as DOMRect);
@@ -361,13 +361,11 @@ describe("OntologyManager root component with real pages", () => {
     expect(root().querySelector(".attribute-row code")?.textContent).toBe("Item:2");
     expect(requests.find((request) => request.url.endsWith("/instanceGraph/search"))?.body)
       .toEqual({ term: "spare", version: "v1", limit: 50 });
-    expect(requests.some((request) => request.url.endsWith("/instanceGraph/neighborhood"))).toBe(false);
-    const expandButton = Array.from(root().querySelectorAll<HTMLButtonElement>(".detail-content button"))
-      .find((button) => button.textContent?.includes("Expand neighbors"))!;
-    expandButton.click();
-    await settle();
     expect(requests.find((request) => request.url.endsWith("/instanceGraph/neighborhood"))?.body)
       .toEqual({ id: "Item:2", version: "v1", offset: 0, limit: 100 });
+    expect(graphRecord.dataBatches.at(-2).nodes.map((node: any) => node.id)).toEqual(["Item:2", "Order:1"]);
+    expect(graphRecord.dataBatches.at(-1).edges[0]).toMatchObject({ source: "Order:1", target: "Item:2" });
+    expect(root().querySelector(".neighbor-progress")?.textContent).toContain("Loaded 1 of 1");
 
     holdPaths.add("/data/queryInfoByNode");
     graphHandlers["node:click"]({ target: { id: "Order:1" } });
