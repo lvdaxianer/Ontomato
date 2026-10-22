@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
+import MarkdownIt from "markdown-it";
 import { ArrowLeft, History, Play, Plus, Save, Sparkles, Trash2 } from "lucide-vue-next";
 import {
   ElAlert,
@@ -59,6 +60,9 @@ const metricGenerating = ref(false);
 const testVisible = ref(false);
 const testTab = ref("markdown");
 const testMarkdown = ref("");
+const markdownView = ref("preview");
+const markdown = new MarkdownIt({ html: false, linkify: true, breaks: true });
+const testMarkdownPreview = computed(() => markdown.render(testMarkdown.value));
 const testJson = ref("");
 const testResultUrl = ref("");
 const taskResultsVisible = ref(false);
@@ -367,6 +371,7 @@ async function viewTaskResult(result: AssetRecord) {
 }
 
 function openMetricTest() {
+  markdownView.value = "preview";
   testMarkdown.value = "";
   testJson.value = "";
   testResultUrl.value = "";
@@ -380,6 +385,7 @@ async function testMetricView() {
   try {
     const response = await requestSmartAsset("metrics", "test", record.value);
     testMarkdown.value = response?.data?.md || ot("metricTestNoResult");
+    markdownView.value = "preview";
     testResultUrl.value = typeof response?.data?.url === "string" ? response.data.url : "";
     testTab.value = "markdown";
   } catch (error) {
@@ -797,7 +803,16 @@ onMounted(() => void loadDetail());
       </el-form>
       <el-tabs v-model="testTab">
         <el-tab-pane :label="ot('metricMarkdownTest')" name="markdown">
+          <el-radio-group v-model="markdownView" class="markdown-view-toggle" :aria-label="ot('metricMarkdownTest')" size="small">
+            <el-radio value="preview">{{ ot('metricMarkdownPreview') }}</el-radio>
+            <el-radio value="source">{{ ot('metricMarkdownSource') }}</el-radio>
+          </el-radio-group>
+          <div v-if="markdownView === 'preview'" class="metric-markdown-preview">
+            <div v-if="testMarkdown" v-html="testMarkdownPreview" />
+            <p v-else class="markdown-placeholder">{{ ot('metricTestResultPlaceholder') }}</p>
+          </div>
           <el-input
+            v-else
             v-model="testMarkdown"
             type="textarea"
             :rows="14"
@@ -897,6 +912,35 @@ onMounted(() => void loadDetail());
 </template>
 
 <style scoped>
+.markdown-view-toggle { margin-bottom: var(--spacing-md); }
+.metric-markdown-preview {
+  min-height: 300px;
+  max-height: 55vh;
+  overflow: auto;
+  padding: var(--spacing-md);
+  border: 1px solid var(--el-border-color);
+  border-radius: var(--radius-sm);
+  color: var(--el-text-color-primary);
+  background: var(--el-bg-color);
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+.markdown-placeholder { color: var(--el-text-color-placeholder); margin: 0; }
+.metric-markdown-preview :deep(h1),
+.metric-markdown-preview :deep(h2),
+.metric-markdown-preview :deep(h3) { margin: 1em 0 0.5em; line-height: 1.4; color: inherit; }
+.metric-markdown-preview :deep(h1) { font-size: var(--text-2xl); }
+.metric-markdown-preview :deep(h2) { font-size: var(--text-xl); }
+.metric-markdown-preview :deep(h3) { font-size: var(--text-lg); }
+.metric-markdown-preview :deep(table) { border-collapse: collapse; width: 100%; margin: 1em 0; }
+.metric-markdown-preview :deep(th),
+.metric-markdown-preview :deep(td) { padding: 8px 12px; border: 1px solid var(--el-border-color); text-align: left; }
+.metric-markdown-preview :deep(th) { background: var(--el-fill-color-light); }
+.metric-markdown-preview :deep(pre) { overflow: auto; padding: var(--spacing-md); background: var(--el-fill-color-light); border-radius: var(--radius-sm); }
+.metric-markdown-preview :deep(code) { font-family: var(--font-mono); background: var(--el-fill-color-light); }
+.metric-markdown-preview :deep(blockquote) { margin-left: 0; padding-left: var(--spacing-md); border-left: 3px solid var(--el-border-color); color: var(--el-text-color-secondary); }
+.metric-markdown-preview :deep(a) { color: var(--el-color-primary); }
+.metric-markdown-preview :deep(img) { max-width: 100%; }
 .asset-detail {
   min-height: 100%;
   background: var(--el-bg-color);
