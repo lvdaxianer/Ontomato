@@ -1,5 +1,6 @@
 ---
 name: generate-ppt
+defaultEnabled: false
 description: Generate a downloadable PowerPoint presentation from the entire current conversation, including query tables, charts and explanations.
 type: executable
 category: analysis

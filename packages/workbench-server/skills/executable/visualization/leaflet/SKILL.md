@@ -1,5 +1,6 @@
 ---
 name: leaflet
+defaultEnabled: false
 description: Interactive Leaflet base map for geospatial points with value-scaled markers and detail popups.
 type: executable
 category: visualization
