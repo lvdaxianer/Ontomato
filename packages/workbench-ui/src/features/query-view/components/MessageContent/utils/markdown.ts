@@ -1,4 +1,5 @@
 import { marked } from "../../../../../utils/marked";
+import { withPptDownloadCredentials } from "../../../../../utils/ppt-links";
 import type { ChartSpec, TableData, VisualizationHTML } from "../types";
 import { normalizeMermaidSrc } from "../../../utils/mermaid";
 import { workbenchContent } from "../../../../../content";
@@ -199,5 +200,5 @@ export function renderMarkdown(content: string): string {
     return `<img src="${escapeAttr(src)}" alt="${escapeAttr(text || "")}" title="${escapeAttr(caption)}" data-lightbox-group="message-content" data-caption="${escapeAttr(caption)}" class="message-inline-image" />`;
   };
 
-  return marked.parse(cleaned, { renderer, breaks: true, gfm: true }) as string;
+  return withPptDownloadCredentials(marked.parse(cleaned, { renderer, breaks: true, gfm: true }) as string);
 }
