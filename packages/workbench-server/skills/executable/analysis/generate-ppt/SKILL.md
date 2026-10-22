@@ -9,6 +9,7 @@ useCases: [Create a PPT from the conversation]
 timeout: 600000
 outputType: json
 version: 1.0.0
+defaultEnabled: false
 entries:
   - scripts/index.mjs
 ---

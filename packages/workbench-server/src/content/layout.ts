@@ -19,6 +19,8 @@ export interface ContentLayout {
   publicSkillsRoot: string;
   /** Optional JSON labels for public skill cards, keyed by skill ID. */
   publicSkillLabelsPath?: string;
+  /** Optional localized documentation overlays, relative to the public skill root. */
+  publicSkillTranslationsRoot?: string;
   /** Default runtime resources, synced into echart, knowledge, and skills under data/. */
   runtimeResources: readonly ResourceCopy[];
 }
@@ -72,4 +74,8 @@ export function knowledgeDir(): string {
 
 export function diagnosisSkillsDir(): string {
   return runtimeDataDir("skills");
+}
+
+export function publicSkillTranslationsRoot(): string | undefined {
+  return installedLayout().publicSkillTranslationsRoot;
 }

@@ -7,6 +7,8 @@ import {
   migrateLegacySkillManifest,
   readSkillMarkdown,
   readSkillLabels,
+  parseSkillMarkdownFrontmatter,
+  SkillManifestSchema,
 } from "../manifest";
 import type { RuntimeConfig, SkillMeta } from "../types";
 import { createLogger } from "../../../logging/logger";
@@ -19,7 +21,8 @@ export class SkillScanner {
   constructor(
     private readonly config: RuntimeConfig,
     private readonly isPublic = false,
-    private readonly labelsPath?: string
+    private readonly labelsPath?: string,
+    private readonly translationsRoot?: string
   ) {}
 
   async scan(): Promise<SkillMeta[]> {
@@ -119,12 +122,30 @@ export class SkillScanner {
         content
       );
 
+      let localizedManifest = manifest;
+      let localizedPath = skillMdPath;
+      if (this.isPublic && this.translationsRoot) {
+        const overlayPath = path.join(this.translationsRoot, path.relative(this.config.skillsRoot, skillMdPath));
+        if (fs.existsSync(overlayPath)) {
+          const overlay = parseSkillMarkdownFrontmatter(fs.readFileSync(overlayPath, "utf8"));
+          if (!overlay || !overlay.frontmatter || typeof overlay.frontmatter !== "object") {
+            throw new Error(`Invalid skill translation: ${overlayPath}`);
+          }
+          const fields = overlay.frontmatter as Record<string, unknown>;
+          const patch = Object.fromEntries(
+            ["title", "description", "tags", "useCases", "defaultEnabled"]
+              .filter((key) => Object.hasOwn(fields, key)).map((key) => [key, fields[key]])
+          );
+          localizedManifest = SkillManifestSchema.parse({ ...manifest, ...patch });
+          localizedPath = overlayPath;
+        }
+      }
       return {
         id: manifest.name,
         isPublic: this.isPublic,
         path: skillPath,
-        manifest,
-        skillMdPath,
+        manifest: localizedManifest,
+        skillMdPath: localizedPath,
       };
     } catch (error) {
       logger.warn(`[Scanner] Failed to scan ${skillName}:`, error);

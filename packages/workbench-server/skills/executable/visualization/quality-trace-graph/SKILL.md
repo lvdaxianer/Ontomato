@@ -14,6 +14,7 @@ tags:
 timeout: 15000
 outputType: html
 version: 1.0.0
+defaultEnabled: false
 entries:
   - scripts/index.mjs
 ---
