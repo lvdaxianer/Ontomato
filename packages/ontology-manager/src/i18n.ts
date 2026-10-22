@@ -375,6 +375,8 @@ const ontologyEn = {
   metricUnnamedParameter: "Unnamed parameter",
   metricParameterValue: "Execution value",
   metricMarkdownTest: "Markdown test",
+  metricMarkdownPreview: "Preview",
+  metricMarkdownSource: "Source",
   metricTestResultPlaceholder: "Test results will appear here",
   metricOpenFullResult: "Open full result",
   metricJsonTest: "JSON test",

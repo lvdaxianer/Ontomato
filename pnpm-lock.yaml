@@ -167,10 +167,16 @@ importers:
       lucide-vue-next:
         specifier: 1.0.0
         version: 1.0.0(vue@3.5.30(typescript@5.9.3))
+      markdown-it:
+        specifier: 14.2.0
+        version: 14.2.0
       vue:
         specifier: 3.5.30
         version: 3.5.30(typescript@5.9.3)
     devDependencies:
+      '@types/markdown-it':
+        specifier: 14.1.2
+        version: 14.1.2
       '@types/node':
         specifier: 22.19.15
         version: 22.19.15

@@ -67,6 +67,16 @@ function respond(url: string, body?: Record<string, unknown>): Response {
   if (path === "/admin/delBussinessKnowledge" && knowledgeDeleteFails.has(String(body?.knowledgeID)))
     return json({ success: false, message: "locked" });
   if (path === "/admin/getMetas") return json(metasFor(url));
+  if (path === "/metricView/queryList") return json({ success: true, data: [
+    { id: "metric-1", name: "Revenue metric", status: "PUBLISHED", origin: "USER" },
+  ] });
+  if (path === "/metricView/queryById") return json({ success: true, data: {
+    id: "metric-1", name: "Revenue metric", status: "PUBLISHED", origin: "USER",
+    function: { name: "Revenue", parameters: [], returnDef: { classNames: [] } },
+  } });
+  if (path === "/metricView/test") return json({ success: true, data: {
+    md: "# Revenue\n\n| Month | Total |\n| --- | ---: |\n| Jan | 42 |",
+  } });
   if (path === "/data/instanceGraph/summary") return json({ success: true, status: "READY", data: {
     classes: [{ class: "Order", instanceCount: instanceNodeCount }, { class: "Item", instanceCount: 1 }],
     relationships: [{ source: "Order", target: "Item", count: 1 }],
@@ -465,6 +475,29 @@ describe("OntologyManager root component with real pages", () => {
       expect(request.headers.tk).toBeUndefined();
       expect(request.headers["Accept-Language"]).toBe("en");
     }
+  });
+
+  it("previews metric Markdown and lets the user switch to its source", async () => {
+    const { root } = mountHost({ ...base, view: "/assets/metrics" });
+    await settle();
+    (root().querySelector(".resource-table-row") as HTMLButtonElement).click();
+    await settle();
+    clickButton("Test");
+    await settle();
+    clickButton("Test and generate Markdown");
+    await settle();
+
+    const preview = root().querySelector(".metric-markdown-preview")!;
+    expect(preview.querySelector("h1")?.textContent).toBe("Revenue");
+    expect(preview.querySelector("table")?.textContent).toContain("42");
+    expect(root().querySelector(".metric-markdown-preview textarea")).toBeNull();
+
+    const sourceRadio = [...root().querySelectorAll<HTMLElement>(".markdown-view-toggle .el-radio")]
+      .find((item) => item.textContent?.trim() === "Source")!;
+    sourceRadio.querySelector("input")!.click();
+    await settle();
+    expect(root().querySelector(".metric-markdown-preview")).toBeNull();
+    expect((root().querySelector(".el-dialog textarea") as HTMLTextAreaElement).value).toContain("# Revenue");
   });
 
   it("view locates data browsing; internal navigation goes back to the host through update:view, unknown paths return to the graph by the original rule", async () => {
