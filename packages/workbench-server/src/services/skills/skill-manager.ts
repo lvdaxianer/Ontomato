@@ -52,15 +52,23 @@ function requireWritableSkill(skill: SkillMeta): void {
 }
 
 class SkillManager {
-  async getAllSkills(domainId: string): Promise<SkillInfo[]> {
+  async getAllSkills(domainId: string, locale?: string): Promise<SkillInfo[]> {
     const registry = await skillRegistryManager.forDomain(domainId);
 
     return registry
       .getSkills({ includeDisabled: true })
-      .map((skill) => this.toSkillInfo(skill, registry));
+      .map((skill) => this.toSkillInfo(skill, registry, locale));
   }
 
-  private toSkillInfo(skill: SkillMeta, registry: SkillRegistryManager): SkillInfo {
+  private localizedSkill(skill: SkillMeta, locale?: string): SkillMeta {
+    if (!skill.isPublic || !locale?.toLowerCase().startsWith("en")) return skill;
+    const originalPath = path.join(skill.path, "SKILL.md");
+    const original = readSkillMarkdown(originalPath);
+    return original ? { ...skill, manifest: original.manifest, skillMdPath: originalPath } : skill;
+  }
+
+  private toSkillInfo(skill: SkillMeta, registry: SkillRegistryManager, locale?: string): SkillInfo {
+    skill = this.localizedSkill(skill, locale);
     return {
       id: skill.id,
       type: skill.manifest.type,
@@ -358,7 +366,7 @@ class SkillManager {
     }
   }
 
-  async getSkillContent(domainId: string, skillId: string): Promise<string | null> {
+  async getSkillContent(domainId: string, skillId: string, locale?: string): Promise<string | null> {
     const registry = await skillRegistryManager.forDomain(domainId);
 
     const skill = registry.getSkillById(skillId);
@@ -366,16 +374,19 @@ class SkillManager {
       throw new Error(tApp("skills.mgr.skillNotFound", { id: skillId }));
     }
 
-    return loadSkillContent(skill);
+    return loadSkillContent(this.localizedSkill(skill, locale));
   }
 
-  async searchSkills(domainId: string, query: string): Promise<SkillInfo[]> {
+  async searchSkills(domainId: string, query: string, locale?: string): Promise<SkillInfo[]> {
     const registry = await skillRegistryManager.forDomain(domainId);
     if (!query || query.trim() === "") {
       return [];
     }
 
-    return registry.searchSkills(query).map((skill) => this.toSkillInfo(skill, registry));
+    const needle = query.toLowerCase();
+    return (await this.getAllSkills(domainId, locale)).filter((skill) =>
+      [skill.id, skill.title, skill.description, ...skill.tags].some((text) => text?.toLowerCase().includes(needle))
+    );
   }
 
   async importSkill(domainId: string, zipBuffer: Buffer, overwrite = false): Promise<SkillInfo> {

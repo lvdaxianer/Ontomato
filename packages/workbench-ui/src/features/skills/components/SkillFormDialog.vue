@@ -9,7 +9,7 @@ import CodeEditorDialog from "./CodeEditorDialog.vue";
 import MarkdownEditorDialog from "./MarkdownEditorDialog.vue";
 import { useI18n } from "vue-i18n";
 
-const { t } = useI18n();
+const { t, locale } = useI18n();
 
 const visible = defineModel<boolean>("visible");
 
@@ -92,6 +92,15 @@ async function loadSkillData() {
     // ignore
   }
 }
+
+watch([locale, () => props.editSkill], () => {
+  if (visible.value && props.editSkill?.isPublic) {
+    form.value.title = props.editSkill.title || "";
+    form.value.description = props.editSkill.description || "";
+    form.value.tags = props.editSkill.tags.join(", ");
+    loadSkillData();
+  }
+});
 
 async function handleSubmit() {
   if (!form.value.id.trim()) {

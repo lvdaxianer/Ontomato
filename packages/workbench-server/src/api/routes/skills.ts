@@ -16,6 +16,7 @@ import { requirePermission } from "../../identity/installed";
 import type { AuthenticatedRequest } from "../../utils/request-identity";
 import { asyncHandler, sendError } from "../utils/http";
 import { HttpError } from "../../utils/errors";
+import { getLocaleFromRequest } from "../utils/request";
 const router: ReturnType<typeof Router> = Router();
 const upload = multer({ storage: multer.memoryStorage() });
 const requireSkillAdmin = requirePermission(["skill-management"]);
@@ -81,7 +82,7 @@ router.get(
   "/",
   asyncHandler(async (req: Request, res: Response) => {
     const domainId = (req as AuthenticatedRequest).domainId;
-    const skills = domainId ? await skillManager.getAllSkills(domainId) : [];
+    const skills = domainId ? await skillManager.getAllSkills(domainId, getLocaleFromRequest(req)) : [];
     res.json({ success: true, skills });
   })
 );
@@ -91,7 +92,7 @@ router.get(
   asyncHandler(async (req: Request, res: Response) => {
     const domainId = (req as AuthenticatedRequest).domainId;
     const query = String(req.query.q || "").trim();
-    const skills = domainId ? await skillManager.searchSkills(domainId, query) : [];
+    const skills = domainId ? await skillManager.searchSkills(domainId, query, getLocaleFromRequest(req)) : [];
     res.json({ success: true, skills });
   })
 );
@@ -121,7 +122,7 @@ router.get(
   asyncHandler(async (req: Request, res: Response) => {
     const domainId = (req as AuthenticatedRequest).domainId;
     const skillContent = domainId
-      ? await skillManager.getSkillContent(domainId, req.params.id)
+      ? await skillManager.getSkillContent(domainId, req.params.id, getLocaleFromRequest(req))
       : null;
     res.json({ success: true, skillContent });
   })
