@@ -231,6 +231,10 @@ export class AnalysisScheduleRuleService {
     return result.rows[0] ? mapRuleRow(result.rows[0]) : null;
   }
 
+  async deleteByUser(userId: string): Promise<void> {
+    await this.pool.query(`DELETE FROM ${qualifiedTable("analysis_schedule_rules")} WHERE user_id = $1 AND domain_id <> ''`, [userId]);
+  }
+
   async remove(id: string, domainId: string): Promise<boolean> {
     const result = await this.pool.query(
       `DELETE FROM ${qualifiedTable("analysis_schedule_rules")} WHERE id = $1 AND domain_id = $2`,

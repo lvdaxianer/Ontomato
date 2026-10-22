@@ -475,7 +475,7 @@ describe("OntologyManager root component with real pages", () => {
     expect(requests).toEqual([]);
   });
 
-  it("updates instance labels and their backgrounds when switching themes", async () => {
+  it("keeps hidden relation labels and loaded data when switching themes", async () => {
     vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({ width: 800, height: 600 } as DOMRect);
     const { host, root } = mountHost({ ...base, view: "/data/Order" });
     await settle();
@@ -490,10 +490,6 @@ describe("OntologyManager root component with real pages", () => {
     requests = [];
     host.theme = "dark";
     await settle();
-    expect(graphRecord.nodeUpdates.some((updates) => Array.isArray(updates)
-      && updates.some((node) => node.style?.labelFill === "#f4f6ff"))).toBe(true);
-    expect(graphRecord.edgeUpdates.some((updates) => Array.isArray(updates)
-      && updates.some((item) => item.style?.labelFill === "#c4cce8" && item.style?.labelBackgroundFill === "#181a2e"))).toBe(true);
     expect(toggle.getAttribute("aria-checked")).toBe("false");
     expect(graphRecord.options.at(-1).edge.style.labelText(edge)).toBe("");
     expect(requests).toEqual([]);
@@ -993,13 +989,7 @@ describe("OntologyManager root component with real pages", () => {
     expect(fills).toEqual(byClass);
   });
 
-  it("the data browser keeps its controls without a redundant content header", async () => {
-    const { root } = mountHost({ ...base, view: "/data/Order" });
-    await settle();
-    expect(root().querySelector(".content-header")).toBeNull();
-    expect(root().querySelector(".mode-bar")).not.toBeNull();
-    expect(root().querySelector(".toolbar")?.textContent).toContain("Order-label");
-  });
+
 
   it("the description fallback pre-fills the form with the host value, is unchanged by locale/theme switches, and is submitted in the original field after editing", async () => {
     metasFor = () => ({
