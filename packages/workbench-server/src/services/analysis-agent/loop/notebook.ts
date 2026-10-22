@@ -25,6 +25,12 @@ const logger = createLogger("analysis-loop-notebook");
 /** Parent directory of all task notebooks; each task owns its own working directory beneath it. */
 const NOTEBOOK_ROOT = path.join(os.tmpdir(), "analysis-loop-notebook");
 
+export async function deleteAnalysisNotebook(dirKey: string): Promise<void> {
+  // Sanitized legacy names can collide; delete only a key that already names its exact directory.
+  if (!/^[A-Za-z0-9_-]+$/.test(dirKey)) return;
+  await fs.promises.rm(path.join(NOTEBOOK_ROOT, dirKey), { recursive: true, force: true });
+}
+
 /** Assembly separator between chapters. */
 const CHAPTER_SEPARATOR = "\n\n";
 
