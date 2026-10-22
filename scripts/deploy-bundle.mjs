@@ -23,7 +23,7 @@ export function stageInstallEntry(installDir, staging) {
 
 const FLAGS = {
   "--arch": "value", "--version": "value", "--image-tag": "value",
-  "--registry": "value", "--state": "value", "--cache-dir": "value", "--bootstrap": "boolean",
+  "--registry": "value", "--state": "value", "--cache-dir": "value",
   "--network": "value", "--insecure-source": "boolean", "--postgres": "value",
   "--tool-bundle": "value", "--source-version": "value", "--application-only": "boolean",
 };
