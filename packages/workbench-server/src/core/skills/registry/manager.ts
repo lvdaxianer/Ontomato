@@ -22,6 +22,7 @@ const defaultConfig: Omit<RuntimeConfig, "skillsRoot"> = {
 
 interface SkillStates {
   disabledSkills: string[];
+  enabledSkills?: string[];
   lastUpdated: string;
 }
 
@@ -47,6 +48,7 @@ export class SkillRegistryManager {
   private scanner: SkillScanner;
   private skills: SkillMeta[] | null = null;
   private disabledSkillIds: Set<string> = new Set();
+  private enabledSkillIds: Set<string> = new Set();
   private statesWatcherCleanup: (() => void) | null = null;
   private readonly skillStatesPath: string;
 
@@ -63,10 +65,12 @@ export class SkillRegistryManager {
         const content = fs.readFileSync(this.skillStatesPath, "utf-8");
         const states: SkillStates = JSON.parse(content);
         this.disabledSkillIds = new Set(states.disabledSkills ?? []);
+        this.enabledSkillIds = new Set(states.enabledSkills ?? []);
         logger.debug(`Loaded disabled skills: ${this.disabledSkillIds.size}`);
       }
     } catch {
       this.disabledSkillIds = new Set();
+      this.enabledSkillIds = new Set();
     }
   }
 
@@ -148,20 +152,26 @@ export class SkillRegistryManager {
   }
 
   isSkillEnabled(skillId: string): boolean {
-    return !this.disabledSkillIds.has(skillId);
+    if (this.disabledSkillIds.has(skillId)) return false;
+    if (this.enabledSkillIds.has(skillId)) return true;
+    return this.skills?.find((skill) => skill.id === skillId)?.manifest.defaultEnabled !== false;
   }
 
   setSkillEnabled(skillId: string, enabled: boolean): void {
     if (enabled) {
       this.disabledSkillIds.delete(skillId);
+      this.enabledSkillIds.add(skillId);
     } else {
       this.disabledSkillIds.add(skillId);
+      this.enabledSkillIds.delete(skillId);
     }
     this.saveDisabledSkills();
   }
 
   removeSkillState(skillId: string): void {
-    if (this.disabledSkillIds.delete(skillId)) {
+    const wasDisabled = this.disabledSkillIds.delete(skillId);
+    const wasEnabled = this.enabledSkillIds.delete(skillId);
+    if (wasDisabled || wasEnabled) {
       this.saveDisabledSkills();
     }
   }
@@ -169,6 +179,7 @@ export class SkillRegistryManager {
   private saveDisabledSkills(): void {
     const states: SkillStates = {
       disabledSkills: [...this.disabledSkillIds].sort(),
+      enabledSkills: [...this.enabledSkillIds].sort(),
       lastUpdated: new Date().toISOString(),
     };
     fs.mkdirSync(path.dirname(this.skillStatesPath), { recursive: true });

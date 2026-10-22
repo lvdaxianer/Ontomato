@@ -51,6 +51,7 @@ const commonFrontmatterFields = {
   }),
   category: SkillCategorySchema,
   title: z.string().optional(),
+  defaultEnabled: z.boolean().optional(),
   tags: z.array(z.string()).default([]),
   useCases: z.array(z.string()).optional(),
   timeout: z.number().optional(),
@@ -189,6 +190,7 @@ export function writeSkillMarkdown(
 ): void {
   const frontmatter = {
     name: manifest.name,
+    defaultEnabled: manifest.defaultEnabled,
     description: manifest.description,
     type: manifest.type,
     category: manifest.category,
