@@ -18,8 +18,9 @@ vi.mock("../../analysis-agent/config/skill-references", () => ({
 
 const root = await fs.mkdtemp(path.join(os.tmpdir(), "public-skills-"));
 const publicRoot = path.join(root, "public");
-const translationsRoot = path.join(root, "translations");
-installContentLayout({ runtimeRoot: root, publicSkillsRoot: publicRoot, publicSkillTranslationsRoot: translationsRoot, prompts: [], runtimeResources: [] });
+const labelsPath = path.join(root, "skill-labels.json");
+await fs.writeFile(labelsPath, "{}");
+installContentLayout({ runtimeRoot: root, publicSkillsRoot: publicRoot, publicSkillLabelsPath: labelsPath, prompts: [], runtimeResources: [] });
 configureI18n({ defaultLocale: "en", languageSwitchEnabled: false, appTextLocale: "en", packs: { en: { messages: { ...en, ...appTextEn }, ...enLocaleMeta } } });
 const { skillRegistryManager } = await import("../../../core/skills/registry/manager");
 const { skillRuntime } = await import("../../../core/skills/execution/runtime");
@@ -102,12 +103,10 @@ describe("public skill ownership across domains", () => {
     expect((await skillManager.getAllSkills("another")).some((skill) => skill.id === "mine")).toBe(false);
   });
 
-  it("shares translated instructions across consumers while executing and exporting the core package", async () => {
+  it("localizes cards while sharing core instructions, execution, resources, and exports", async () => {
     const dir = await writePackage(publicRoot, "localized", "1.0.0");
-    const translationPath = path.join(translationsRoot, "executable", "analysis", "localized", "SKILL.md");
-    await fs.mkdir(path.dirname(translationPath), { recursive: true });
-    const translation = "---\ntitle: Translated title\ndescription: Translated description\ntags: [translated]\n---\nTranslated instructions\n";
-    await fs.writeFile(translationPath, translation);
+    const labels = { localized: { title: "Translated title", description: "Translated description", tags: ["translated"] } };
+    await fs.writeFile(labelsPath, JSON.stringify(labels));
 
     const registry = await skillRegistryManager.forDomain("translated");
     const skill = registry.getSkillById("localized")!;
@@ -117,8 +116,8 @@ describe("public skill ownership across domains", () => {
       isPublic: true,
       manifest: { title: "Translated title", description: "Translated description", version: "1.0.0", entries: ["index.mjs"] },
     });
-    expect(loadSkillContent(skill)?.trim()).toBe("Translated instructions");
-    expect((await skillManager.getSkillContent("translated", "localized"))?.trim()).toBe("Translated instructions");
+    expect(loadSkillContent(skill)?.trim()).toBe("1.0.0");
+    expect((await skillManager.getSkillContent("translated", "localized"))?.trim()).toBe("1.0.0");
     expect((await skillManager.searchSkills("translated", "Translated title"))[0].id).toBe("localized");
 
     const tools = createLoopSkillTools({
@@ -128,12 +127,14 @@ describe("public skill ownership across domains", () => {
       trajectory: { start: () => "activity", settle: vi.fn() },
     });
     const loaded = await tools.find((tool) => tool.name === "load_skill")!.execute("load", { skill_id: "localized" });
-    expect(loaded.content[0].text).toBe("Translated instructions");
+    expect(loaded.content[0].text).toBe("1.0.0");
 
     await writePackage(publicRoot, "localized", "2.0.0");
     expect(await skillRuntime.execute("translated", "localized", {})).toMatchObject({ text: "2.0.0" });
     expect((await skillRegistryManager.forDomain("translated")).getSkillById("localized")?.manifest.version).toBe("2.0.0");
-    expect((await skillManager.getSkillContent("translated", "localized"))?.trim()).toBe("Translated instructions");
+    expect((await skillManager.getSkillContent("translated", "localized"))?.trim()).toBe("2.0.0");
+    const reloaded = await tools.find((tool) => tool.name === "load_skill")!.execute("reload", { skill_id: "localized" });
+    expect(reloaded.content[0].text).toBe("2.0.0");
     const raw = await tools.find((tool) => tool.name === "read_skill_file")!.execute("read", { skill_id: "localized", path: "SKILL.md" });
     expect(raw.content[0].text).toContain("description: 2.0.0");
     const exported = new AdmZip(await skillManager.exportSkill("translated", "localized"));
@@ -141,12 +142,19 @@ describe("public skill ownership across domains", () => {
     expect(exported.readAsText("index.mjs")).toBe(await fs.readFile(path.join(dir, "index.mjs"), "utf8"));
     expect(await fs.readFile(await resolveSkillPackageFile(skill, "resource.txt"), "utf8")).toBe("2.0.0");
 
-    // A translation is not an alternate owner of enabled state or any other behavior field.
-    await fs.writeFile(translationPath, translation.replace("title:", "defaultEnabled: false\ntitle:"));
+    await writePackage(publicRoot, "without-card-labels", "1.0.0");
+    const updated = await skillRegistryManager.forDomain("translated");
+    expect(updated.getSkillById("without-card-labels")?.manifest.description).toBe("1.0.0");
+    expect(updated.isSkillEnabled("without-card-labels")).toBe(true);
+
+    // Labels cannot become an alternate owner of instructions or enabled state.
     try {
-      await expect(skillRegistryManager.forDomain("translated")).rejects.toThrow(/Unrecognized key/);
+      for (const forbidden of [{ defaultEnabled: false }, { content: "Duplicated instructions" }]) {
+        await fs.writeFile(labelsPath, JSON.stringify({ localized: { ...labels.localized, ...forbidden } }));
+        await expect(skillRegistryManager.forDomain("translated")).rejects.toThrow(/Unrecognized key/);
+      }
     } finally {
-      await fs.writeFile(translationPath, translation);
+      await fs.writeFile(labelsPath, JSON.stringify(labels));
     }
   });
 });

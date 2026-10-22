@@ -6,7 +6,7 @@ import {
   assertSkillPackageComplete,
   migrateLegacySkillManifest,
   readSkillMarkdown,
-  readSkillTranslation,
+  readSkillLabels,
 } from "../manifest";
 import type { RuntimeConfig, SkillMeta } from "../types";
 import { createLogger } from "../../../logging/logger";
@@ -19,7 +19,7 @@ export class SkillScanner {
   constructor(
     private readonly config: RuntimeConfig,
     private readonly isPublic = false,
-    private readonly translationsRoot?: string
+    private readonly labelsPath?: string
   ) {}
 
   async scan(): Promise<SkillMeta[]> {
@@ -33,14 +33,11 @@ export class SkillScanner {
     ];
     this.assertUniqueIds(skills);
 
-    if (this.translationsRoot) {
+    if (this.labelsPath) {
+      const labels = readSkillLabels(this.labelsPath);
       for (const skill of skills) {
-        const relativePath = path.relative(this.config.skillsRoot, skill.path);
-        const translationPath = path.join(this.translationsRoot, relativePath, "SKILL.md");
-        if (!fs.existsSync(translationPath)) continue;
-        const translation = readSkillTranslation(translationPath);
-        skill.manifest = { ...skill.manifest, ...translation.fields };
-        if (translation.content.trim()) skill.localizedContent = translation.content;
+        const text = labels[skill.id];
+        if (text) skill.manifest = { ...skill.manifest, ...text };
       }
     }
 

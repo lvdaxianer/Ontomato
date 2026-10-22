@@ -183,18 +183,17 @@ export function readSkillMarkdown(skillMdPath: string): ParsedSkillMarkdown | nu
   return parseSkillMarkdown(fs.readFileSync(skillMdPath, "utf-8"));
 }
 
-// A translation may change descriptions, never the package identity or execution contract.
-const SkillTranslationSchema = z.object({
-  title: z.string().optional(),
-  description: z.string().trim().min(1).optional(),
+// Card labels cannot replace instructions, package identity, or execution behavior.
+const SkillLabelsSchema = z.object({
+  title: z.string().trim().min(1),
+  description: z.string().trim().min(1),
   tags: z.array(z.string()).optional(),
-  useCases: z.array(z.string()).optional(),
 }).strict();
 
-export function readSkillTranslation(filePath: string) {
-  const parsed = parseSkillMarkdownFrontmatter(fs.readFileSync(filePath, "utf-8"));
-  if (!parsed) throw new InvalidSkillPackageError(`Skill translation requires frontmatter: ${filePath}`);
-  return { fields: SkillTranslationSchema.parse(parsed.frontmatter), content: parsed.content };
+export function readSkillLabels(filePath: string) {
+  return z.record(SkillIdSchema, SkillLabelsSchema).parse(
+    JSON.parse(fs.readFileSync(filePath, "utf-8"))
+  );
 }
 
 export function writeSkillMarkdown(

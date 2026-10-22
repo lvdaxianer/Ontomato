@@ -1,4 +1,4 @@
-import { runtimeDataDir, publicSkillsRoot, publicSkillTranslationsRoot } from "../../../content/layout";
+import { runtimeDataDir, publicSkillsRoot, publicSkillLabelsPath } from "../../../content/layout";
 import { randomUUID } from "node:crypto";
 import { SkillScanner } from "../discovery/scanner";
 import { loadSkillContent } from "../discovery/loader";
@@ -397,10 +397,10 @@ export class DomainSkillRegistryManager {
   constructor(
     skillsRoot = publicSkillsRoot(),
     private readonly domainsRoot = runtimeDataDir("domain-skills"),
-    translationsRoot = publicSkillTranslationsRoot()
+    labelsPath = publicSkillLabelsPath()
   ) {
     this.publicScanner = new SkillScanner(
-      { ...defaultConfig, skillsRoot, enableCache: false }, true, translationsRoot
+      { ...defaultConfig, skillsRoot, enableCache: false }, true, labelsPath
     );
   }
 

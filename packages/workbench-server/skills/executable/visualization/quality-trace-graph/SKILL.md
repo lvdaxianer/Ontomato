@@ -1,6 +1,5 @@
 ---
 name: quality-trace-graph
-defaultEnabled: false
 description: Render batches, process executions, assembly events, recall decisions, and products as an interactive directed evidence graph highlighting risk anchors, recall status, and data gaps.
 type: executable
 category: visualization
