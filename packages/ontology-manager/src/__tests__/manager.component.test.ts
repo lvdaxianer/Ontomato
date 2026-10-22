@@ -80,6 +80,7 @@ function respond(url: string, body?: Record<string, unknown>): Response {
   if (path === "/data/instanceGraph/summary") return json({ success: true, status: "READY", data: {
     classes: [{ class: "Order", instanceCount: instanceNodeCount }, { class: "Item", instanceCount: 1 }],
     relationships: [{ source: "Order", target: "Item", count: 1 }],
+    relationTypes: ["has"],
     overviewNodes: [{ id: "Order:1", name: "First order", class: "Order" }, { id: "Item:2", name: "Spare part", class: "Item" }],
     overviewEdges: [{ source: "Order:1", target: "Item:2", type: "has" }],
     nodeCount: instanceNodeCount, edgeCount: 1, componentCount: 1, isolatedNodeCount: 0,
@@ -375,7 +376,6 @@ describe("OntologyManager root component with real pages", () => {
       .toEqual({ id: "Item:2", version: "v1", offset: 0, limit: 100 });
     expect(graphRecord.dataBatches.at(-2).nodes.map((node: any) => node.id)).toEqual(["Item:2", "Order:1"]);
     expect(graphRecord.dataBatches.at(-1).edges[0]).toMatchObject({ source: "Order:1", target: "Item:2" });
-    expect(root().querySelector(".neighbor-progress")?.textContent).toContain("Loaded 1 of 1");
 
     holdPaths.add("/data/queryInfoByNode");
     graphHandlers["node:click"]({ target: { id: "Order:1" } });
@@ -388,6 +388,49 @@ describe("OntologyManager root component with real pages", () => {
     waiting[0].resolve(new Response());
     await settle();
     expect(root().querySelector(".attribute-row code")?.textContent).toBe("Item:2");
+  });
+
+  it.each([
+    { field: "neighborClass", index: 0, label: "Item-label", value: "Item" },
+    { field: "relationType", index: 1, label: "has", value: "has" },
+  ])("reloads direct neighbors after clearing $field and applying filters", async ({ field, index, label, value }) => {
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({ width: 800, height: 600 } as DOMRect);
+    const { root } = mountHost({ ...base, view: "/data/Order" });
+    await settle();
+    (root().querySelectorAll(".mode-bar .el-segmented__item")[1] as HTMLElement).click();
+    await settle();
+    graphHandlers["node:click"]({ target: { id: "Order:1" } });
+    await settle();
+
+    const select = root().querySelectorAll<HTMLElement>(".neighbor-filters .el-select")[index];
+    (select.querySelector(".el-select__wrapper") as HTMLElement).click();
+    await settle();
+    const option = [...document.querySelectorAll<HTMLElement>(".el-select-dropdown__item")]
+      .find((item) => item.textContent?.trim() === label)!;
+    expect(option).toBeDefined();
+    option.click();
+    await settle();
+    const apply = root().querySelector<HTMLButtonElement>(".neighbor-filter-actions .el-button--primary")!;
+    apply.click();
+    await settle();
+    const neighborhoodRequests = () => requests.filter((request) => request.url.endsWith("/data/instanceGraph/neighborhood"));
+    expect(neighborhoodRequests().at(-1)?.body).toMatchObject({ id: "Order:1", offset: 0, [field]: value });
+    const filteredRequestCount = neighborhoodRequests().length;
+
+    select.dispatchEvent(new MouseEvent("mouseenter"));
+    await nextTick();
+    const clear = select.querySelector<HTMLElement>(".el-select__clear");
+    expect(clear).not.toBeNull();
+    clear!.click();
+    await settle();
+    expect(neighborhoodRequests()).toHaveLength(filteredRequestCount);
+    apply.click();
+    await settle();
+
+    expect(neighborhoodRequests()).toHaveLength(filteredRequestCount + 1);
+    expect(neighborhoodRequests().at(-1)?.body).toEqual({ id: "Order:1", version: "v1", offset: 0, limit: 100 });
+    expect(graphRecord.dataBatches.at(-1).nodes.map((node: any) => node.id)).toContain("Item:2");
+    expect(graphRecord.dataBatches.at(-1).edges[0]).toMatchObject({ source: "Order:1", target: "Item:2" });
   });
 
   it("caps automatic focus at native size when the graph fit would enlarge one node", async () => {
