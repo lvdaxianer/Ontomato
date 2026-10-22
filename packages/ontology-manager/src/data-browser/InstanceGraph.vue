@@ -56,13 +56,13 @@ const selectedAttributes = ref<Array<{ name: string; showName: string; value: un
 const detailsLoading = ref(false);
 const detailsError = ref("");
 const nodeActionPosition = ref<{ x: number; y: number } | null>(null);
-const neighborClass = ref("");
-const relationType = ref("");
+const neighborClass = ref<string | null | undefined>("");
+const relationType = ref<string | null | undefined>("");
 const direction = ref("both");
 const fitAfterExpand = ref(false);
 const appliedNeighborFilters = shallowRef<{ neighborClass?: string; relationType?: string; direction?: string }>({});
-const filtersDirty = computed(() => (appliedNeighborFilters.value.neighborClass || "") !== neighborClass.value
-  || (appliedNeighborFilters.value.relationType || "") !== relationType.value
+const filtersDirty = computed(() => (appliedNeighborFilters.value.neighborClass ?? "") !== (neighborClass.value ?? "")
+  || (appliedNeighborFilters.value.relationType ?? "") !== (relationType.value ?? "")
   || (appliedNeighborFilters.value.direction || "both") !== direction.value);
 const versionChanged = ref(false);
 const relationLabels = ref<Record<string, string>>({});
@@ -940,11 +940,9 @@ onBeforeUnmount(() => {
           </el-select>
           </div>
           <div class="neighbor-filter-actions">
-            <p v-if="filtersDirty" class="neighbor-progress" role="status">{{ ot('instanceGraphFiltersPending') }}</p>
             <el-checkbox v-model="fitAfterExpand">{{ ot('instanceGraphKeepView') }}</el-checkbox>
             <el-button :icon="SlidersHorizontal" type="primary" :loading="expanding" :disabled="expanding || rendering" @click="applyNeighborhoodFilters">{{ ot('instanceGraphApply') }}</el-button>
             <el-button :icon="GitFork" :loading="expanding" :disabled="rendering || filtersDirty || versionChanged || currentPage?.nextOffset === null" @click="expandNeighbors">{{ ot(currentPage ? 'instanceGraphMore' : 'instanceGraphExpand') }}</el-button>
-            <p v-if="currentPage" class="neighbor-progress" role="status">{{ currentPage.total == null ? ot('instanceGraphConnectionsMore', { loaded: currentPage.loaded }) : ot('instanceGraphConnections', { loaded: currentPage.loaded, total: currentPage.total }) }}</p>
           </div>
         </div>
         <div class="detail-title">
@@ -1039,7 +1037,6 @@ onBeforeUnmount(() => {
 .neighbor-filter-actions :deep(.el-checkbox__label) { padding-left: var(--spacing-sm); font-size: var(--text-xs); line-height: 16px; }
 .neighbor-filter-actions .el-button { width: 100%; min-height: 32px; margin: 0; padding: 6px var(--spacing-md); }
 .neighbor-filter-actions :deep(.el-button .el-icon) { font-size: 15px; }
-.neighbor-progress { margin: 0; font-size: var(--text-xs); line-height: var(--leading-relaxed); color: var(--el-text-color-secondary); }
 .node-actions { position: absolute; z-index: 3; display: flex; transform: translateX(-50%); padding: 4px; gap: 2px; border: 1px solid var(--el-border-color); border-radius: 6px; background: var(--el-bg-color); box-shadow: 0 3px 12px rgba(0, 0, 0, 0.12); }
 .node-actions button { display: grid; place-items: center; width: 32px; height: 32px; border: 0; border-radius: 4px; background: transparent; color: var(--el-text-color-regular); cursor: pointer; }
 .node-actions button:hover { background: var(--el-fill-color-light); color: var(--el-color-primary); }
