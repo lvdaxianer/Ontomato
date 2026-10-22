@@ -1,5 +1,5 @@
 <template>
-  <div class="deep-analysis-result" :class="{ compact: props.compact }">
+  <div class="deep-analysis-result">
     <!-- Thinking panel: shows the dimension tree and query status -->
     <div v-if="thinkingTree.length > 0" class="thinking-tree">
       <div class="thinking-header">
@@ -25,10 +25,7 @@
           class="tree-dimension"
         >
           <div class="dim-header" @click="toggleDimension(dimIndex)">
-            <span v-if="props.compact && isDimensionDone(dim)" class="dim-index compact-done">
-              <el-icon><CircleCheck /></el-icon>
-            </span>
-            <span v-else class="dim-index">{{ Number(dimIndex) + 1 }}</span>
+            <span class="dim-index">{{ Number(dimIndex) + 1 }}</span>
             <span class="dim-name">{{ dim.dimName }}</span>
             <span v-if="isDimensionDone(dim)" class="dim-status">
               <el-icon><CircleCheck /></el-icon>
@@ -144,7 +141,6 @@ const props = defineProps<{
   activities: AnalysisActivity[];
   runState?: AnalysisRunState;
   archived?: boolean;
-  compact?: boolean;
   /**
    * Where deferred question executions are read from. Legacy chat-history snapshots carry inline
    * facts and no task; every producer of deferred questions has a task.
@@ -178,13 +174,7 @@ watch(
   () => thinkingTree.value,
   (tree) => {
     if (!initialExpandDone && tree.length > 0) {
-      if (props.compact) {
-        tree.forEach((_, index) => {
-          expandedDimensions.value[index] = true;
-        });
-      } else {
-        expandedDimensions.value[0] = true;
-      }
+      expandedDimensions.value[0] = true;
       initialExpandDone = true;
     }
   },
@@ -520,87 +510,5 @@ const isDimensionDone = (dim: DeepAnalysisDimension) => {
 
 .skill-status-item.complete {
   color: var(--el-color-success);
-}
-/* Preserve the compact conversation-list hierarchy while retaining expandable data details. */
-.deep-analysis-result.compact :deep(.thinking-tree) {
-  background: transparent;
-  border: none;
-}
-
-.deep-analysis-result.compact :deep(.tree-container) {
-  gap: 10px;
-}
-
-.deep-analysis-result.compact :deep(.tree-dimension) {
-  padding: 12px 14px;
-  border-radius: 18px;
-  box-shadow: var(--shadow-card);
-}
-
-.deep-analysis-result.compact :deep(.dim-header) {
-  gap: 8px;
-  margin-bottom: 0;
-  font-size: 13px;
-}
-
-.deep-analysis-result.compact :deep(.dim-index.compact-done) {
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  background: var(--el-color-success-light-9);
-  color: var(--el-color-success);
-  font-size: 15px;
-}
-
-.deep-analysis-result.compact :deep(.dim-name) {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--el-text-color-primary);
-}
-
-.deep-analysis-result.compact :deep(.dim-status) {
-  display: none;
-}
-
-.deep-analysis-result.compact :deep(.dim-header > .expand-btn) {
-  display: none;
-}
-
-.deep-analysis-result.compact :deep(.dim-reason) {
-  margin: 4px 0 0;
-  padding-left: 28px;
-  font-size: 11px;
-  line-height: 1.5;
-}
-
-.deep-analysis-result.compact :deep(.dim-questions) {
-  margin-top: 8px;
-  padding-left: 28px;
-  gap: 4px;
-}
-
-.deep-analysis-result.compact :deep(.question-item) {
-  gap: 0;
-  padding: 4px 8px;
-  border-radius: 6px;
-  font-size: 12px;
-  line-height: 1.5;
-}
-
-.deep-analysis-result.compact :deep(.question-left) {
-  align-items: center;
-  gap: 6px;
-}
-
-.deep-analysis-result.compact :deep(.question-text) {
-  color: var(--el-color-success);
-  font-size: 12px;
-  font-weight: 400;
-}
-
-.deep-analysis-result.compact :deep(.done-icon) {
-  width: 12px;
-  height: 12px;
-  margin-top: 0;
 }
 </style>

@@ -61,7 +61,7 @@ const { currentTask, hasReportArtifact, showPendingTaskNotice, isSelectedLatestR
           <ChatView />
         </template>
         <template v-else>
-          <AnalysisChatView />
+          <AnalysisChatView @open-report="emit('update:currentView', 'report')" />
         </template>
       </div>
       <!-- Sending is not allowed while reviewing a historical run, to avoid writing new instructions into an old turn. -->

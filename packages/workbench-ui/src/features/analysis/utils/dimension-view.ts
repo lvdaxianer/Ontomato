@@ -3,6 +3,7 @@ import type {
   DeepAnalysisTaskPayload,
 } from "@ontomato/contracts/analysis-presentation";
 import type { DeepAnalysisDimension, DeepAnalysisQuestion } from "../../../types/chat";
+import type { ProcessTone } from "./process-view";
 
 /** The plan provides the full question set, and evidence activities provide current status; failures and empty results are not pruned. */
 export function buildDimensionTree(
@@ -43,10 +44,13 @@ export function buildDimensionTree(
   });
 }
 
-/** Four-stage completion checks the global precondition; stopping falls on the first unsatisfied stage. */
-export function dimensionStageStates(
-  data: DeepAnalysisTaskPayload
-): Array<"done" | "active" | "pending" | "stopped"> {
+export type DimensionStageState = "done" | "active" | "pending" | "stopped" | "failed";
+
+/**
+ * Four-stage completion checks the global precondition; a run that ends early marks the first
+ * unsatisfied stage as failed or stopped according to the run's own terminal state.
+ */
+export function dimensionStageStates(data: DeepAnalysisTaskPayload): DimensionStageState[] {
   const plan = data.activities.find((a) => a.kind === "plan");
   const dimensions = plan?.dimensions || [];
   const evidence = data.activities.filter((a) => a.kind === "evidence");
@@ -71,7 +75,23 @@ export function dimensionStageStates(
       : index === first
         ? data.runState.status === "running"
           ? "active"
-          : "stopped"
+          : data.runState.status === "failed"
+            ? "failed"
+            : "stopped"
         : "pending"
   );
+}
+
+/**
+ * Display tone of one dimension from its own question facts: running work wins, then an explicit
+ * stop, then any failed question; only a dimension whose questions all completed reads as success.
+ */
+export function dimensionTone(dimension: DeepAnalysisDimension): ProcessTone {
+  const questions = dimension.questions;
+  if (dimension.status === "running" || questions.some((q) => q.status === "running"))
+    return "running";
+  if (dimension.status === "stopped") return "cancelled";
+  if (dimension.status === "failed" || questions.some((q) => q.status === "failed")) return "failed";
+  if (dimension.status === "completed") return "completed";
+  return "pending";
 }
