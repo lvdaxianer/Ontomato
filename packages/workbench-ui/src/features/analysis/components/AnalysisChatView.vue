@@ -1485,7 +1485,7 @@ function showFailedNotice(group: TurnGroup): boolean {
 .loop-activity-header:focus-visible,
 .loop-trace-toggle:focus-visible {
   outline: 2px solid var(--el-color-primary-light-3);
-  outline-offset: 2px;
+  outline-offset: 3px;
 }
 
 .loop-expand-icon {
