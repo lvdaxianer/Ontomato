@@ -222,18 +222,6 @@ function loopActivities(payload: DeepAnalysisTaskPayload | null): AnalysisActivi
 function loopProgress(payload: DeepAnalysisTaskPayload | null) {
   return payload?.runState.progress;
 }
-function loopRunning(payload: DeepAnalysisTaskPayload | null): boolean {
-  return payload?.runState.status === "running";
-}
-function loopStatusClass(
-  payload: DeepAnalysisTaskPayload | null
-): "active" | "done" | "failed" | "stopped" {
-  const status = payload?.runState.status;
-  if (status === "running") return "active";
-  if (status === "failed") return "failed";
-  if (status === "cancelled") return "stopped";
-  return "done";
-}
 function activityStatusText(status: AnalysisActivity["status"]): string {
   if (status === "running") return t("common.inProgress");
   if (status === "failed") return t("common.failed");
@@ -401,19 +389,28 @@ function visibleLoopActivities(group: TurnGroup): AnalysisActivity[] {
   return activities;
 }
 
-interface LoopTurnView {
-  /** Public assistant narration, shown directly as the turn body. */
-  narratives: AnalysisActivity[];
-  /** Every non-narrative activity, shown inside the collapsed execution process. */
+/** One stretch of process activities between two visible narrations, folded as one block. */
+interface LoopProcessSegment {
+  kind: "process";
+  /** Stable across streaming and history: the turn key plus the segment's first activity. */
+  key: string;
   steps: AnalysisActivity[];
+  /** Steps that failed or carry a failed query or skill, surfaced on the collapsed header. */
+  failedSteps: number;
+}
+
+/** A turn's loop activities in acceptance order: public narration shown directly, process stretches folded. */
+type LoopEntry = { kind: "narrative"; activity: AnalysisActivity } | LoopProcessSegment;
+
+interface LoopTurnView {
+  entries: LoopEntry[];
   /**
    * This turn's tool calls and results. The user message and the assistant text are dropped
    * because they are already shown as the turn's question and body (each assistant text is
-   * recorded as a narrative activity).
+   * recorded as a narrative activity). Activities carry no tool call identity, so these stay
+   * one turn-level detail instead of being attached to a segment.
    */
   toolTrace: EgressMessage[];
-  /** Steps that failed or carry a failed query or skill, surfaced on the collapsed header. */
-  failedSteps: number;
 }
 
 function hasFailure(activity: AnalysisActivity): boolean {
@@ -433,20 +430,55 @@ function processToolTrace(trace: EgressMessage[]): EgressMessage[] {
   });
 }
 
+function loopEntries(group: TurnGroup): LoopEntry[] {
+  const entries: LoopEntry[] = [];
+  for (const activity of visibleLoopActivities(group)) {
+    if (activity.kind === "narrative") {
+      // Only narration with visible text separates process stretches.
+      if (activity.narrative?.trim()) entries.push({ kind: "narrative", activity });
+      continue;
+    }
+    const last = entries[entries.length - 1];
+    if (last?.kind === "process") {
+      last.steps.push(activity);
+      continue;
+    }
+    entries.push({
+      kind: "process",
+      key: `${group.key}|${activity.activityId}`,
+      steps: [activity],
+      failedSteps: 0,
+    });
+  }
+  for (const entry of entries) {
+    if (entry.kind === "process") entry.failedSteps = entry.steps.filter(hasFailure).length;
+  }
+  return entries;
+}
+
 const loopViews = computed(() =>
-  turnGroups.value.map((group): LoopTurnView | null => {
-    if (!isLoopMode(group.payload)) return null;
-    const steps = loopActivities(group.payload).filter((a) => a.kind !== "narrative");
-    return {
-      narratives: visibleLoopActivities(group).filter(
-        (a) => a.kind === "narrative" && !!a.narrative?.trim()
-      ),
-      steps,
-      toolTrace: processToolTrace(group.trace),
-      failedSteps: steps.filter(hasFailure).length,
-    };
-  })
+  turnGroups.value.map((group): LoopTurnView | null =>
+    isLoopMode(group.payload)
+      ? { entries: loopEntries(group), toolTrace: processToolTrace(group.trace) }
+      : null
+  )
 );
+
+/** Folded header state of one process segment. */
+function segmentStatusClass(segment: LoopProcessSegment): "active" | "done" | "failed" | "stopped" {
+  if (segment.steps.some((a) => a.status === "running")) return "active";
+  if (segment.failedSteps) return "failed";
+  if (segment.steps.some((a) => a.status === "cancelled")) return "stopped";
+  return "done";
+}
+
+function segmentRunning(segment: LoopProcessSegment): boolean {
+  return segmentStatusClass(segment) === "active";
+}
+
+function segmentDone(segment: LoopProcessSegment): number {
+  return segment.steps.filter((a) => a.status !== "running").length;
+}
 
 function showFirstTurnAcknowledgment(group: TurnGroup, index: number): boolean {
   if (index !== 0 || !group.user) return false;
@@ -532,275 +564,285 @@ function showFailedNotice(group: TurnGroup): boolean {
             <div class="chat-bubble system">{{ t("analysis.analysisReceived") }}</div>
           </div>
 
-          <!-- Loop execution mode: one collapsed execution process per turn (L1 steps, on-demand L2 details, L3 worker trace and tool results); narration is the turn body below it -->
-          <div
-            v-if="loopViews[gi]?.steps.length || loopViews[gi]?.toolTrace.length"
-            class="loop-process"
-          >
-            <button
-              type="button"
-              class="loop-process-toggle"
-              :aria-expanded="!!expandedLoopProcesses[group.key]"
-              @click="toggleLoopProcess(group.key)"
+          <!-- Loop execution mode: activities in acceptance order. Public narration is shown directly; each stretch of process activities between narrations is one collapsed block (L1 steps, on-demand L2 details, L3 worker trace). -->
+          <template v-if="loopViews[gi]">
+            <template
+              v-for="entry in loopViews[gi]!.entries"
+              :key="entry.kind === 'process' ? entry.key : entry.activity.activityId"
             >
-              <ChevronDown
-                v-if="expandedLoopProcesses[group.key]"
-                class="loop-process-chevron"
-                :size="15"
-              />
-              <ChevronRight v-else class="loop-process-chevron" :size="15" />
-              <span class="step-icon" :class="loopStatusClass(group.payload)">
-                <Zap v-if="loopRunning(group.payload)" :size="12" />
-                <CheckCircle2 v-else-if="hasCompletedAnalysis(group.payload)" :size="12" />
-                <CircleSlash v-else :size="12" />
-              </span>
-              <span class="step-name" :class="loopStatusClass(group.payload)">
-                {{ t("analysis.loopProcess") }}
-              </span>
-              <span
-                v-if="group.payload"
-                class="loop-status-pill"
-                :class="loopStatusClass(group.payload)"
-              >
-                {{ activityStatusText(group.payload.runState.status) }}
-              </span>
-              <span class="loop-process-summary">
-                {{
-                  t("analysis.loopActivityCount", { done: loopProgress(group.payload)?.done || 0 })
-                }}
-                <template v-if="loopRunning(group.payload) && loopProgress(group.payload)?.label">
-                  ·
-                  {{
-                    t("analysis.loopCurrentActivity", {
-                      name: loopProgress(group.payload)?.label || "",
-                    })
-                  }}
-                </template>
-              </span>
-              <span v-if="loopViews[gi]!.failedSteps" class="loop-process-failures">
-                {{ t("analysis.loopProcessFailures", { n: loopViews[gi]!.failedSteps }) }}
-              </span>
-            </button>
-
-            <div v-if="expandedLoopProcesses[group.key]" class="loop-process-body">
-              <div v-if="loopViews[gi]!.steps.length" class="loop-timeline">
+              <div v-if="entry.kind === 'narrative'" class="chat-msg assistant">
                 <div
-                  v-for="activity in loopViews[gi]!.steps"
-                  :key="activity.activityId"
-                  class="loop-timeline-item"
-                  :class="`status-${activity.status}`"
+                  class="chat-bubble assistant loop-content"
+                  :class="{ streaming: entry.activity.status === 'running' }"
                 >
-                  <div class="loop-rail" aria-hidden="true">
-                    <div
-                      class="tree-dim-icon"
-                      :class="{
-                        done: activity.status === 'completed',
-                        running: activity.status === 'running',
-                        failed: activity.status === 'failed',
-                        stopped: activity.status === 'cancelled',
-                      }"
-                    >
-                      <CheckCircle2 v-if="activity.status === 'completed'" :size="12" />
-                      <Zap v-else-if="activity.status === 'running'" :size="12" />
-                      <CircleSlash v-else :size="12" />
-                    </div>
-                  </div>
+                  <div
+                    class="loop-narrative markdown-body"
+                    v-html="renderAgentMarkdown(entry.activity.narrative || '')"
+                  ></div>
+                </div>
+              </div>
 
-                  <div class="loop-item-body">
-                    <button
-                      type="button"
-                      class="tree-dim-header loop-activity-header"
-                      :disabled="!isLoopActivityExpandable(activity)"
-                      :aria-expanded="
-                        isLoopActivityExpandable(activity)
-                          ? isLoopActivityExpanded(group.key, activity)
-                          : undefined
-                      "
-                      @click="toggleLoopActivity(group.key, activity)"
-                    >
-                      <span class="tree-dim-name loop-step-title">
-                        {{ loopActivityLabel(activity, t) }}
-                      </span>
-                      <span
-                        v-if="activity.status !== 'completed'"
-                        class="loop-step-state"
-                        :class="activity.status"
-                      >
-                        {{ activityStatusText(activity.status) }}
-                      </span>
-                      <template v-if="isLoopActivityExpandable(activity)">
-                        <ChevronDown
-                          v-if="isLoopActivityExpanded(group.key, activity)"
-                          class="loop-expand-icon"
-                          :size="15"
-                        />
-                        <ChevronRight v-else class="loop-expand-icon" :size="15" />
-                      </template>
-                    </button>
+              <div v-else class="loop-process">
+                <button
+                  type="button"
+                  class="loop-process-toggle"
+                  :aria-expanded="!!expandedLoopProcesses[entry.key]"
+                  @click="toggleLoopProcess(entry.key)"
+                >
+                  <ChevronDown
+                    v-if="expandedLoopProcesses[entry.key]"
+                    class="loop-process-chevron"
+                    :size="15"
+                  />
+                  <ChevronRight v-else class="loop-process-chevron" :size="15" />
+                  <span class="step-icon" :class="segmentStatusClass(entry)">
+                    <Zap v-if="segmentRunning(entry)" :size="12" />
+                    <CheckCircle2 v-else-if="segmentStatusClass(entry) === 'done'" :size="12" />
+                    <CircleSlash v-else :size="12" />
+                  </span>
+                  <span class="step-name" :class="segmentStatusClass(entry)">
+                    {{ t("analysis.loopProcess") }}
+                  </span>
+                  <span class="loop-process-summary">
+                    {{ t("analysis.loopActivityCount", { done: segmentDone(entry) }) }}
+                    <template v-if="segmentRunning(entry) && loopProgress(group.payload)?.label">
+                      ·
+                      {{
+                        t("analysis.loopCurrentActivity", {
+                          name: loopProgress(group.payload)?.label || "",
+                        })
+                      }}
+                    </template>
+                  </span>
+                  <span v-if="entry.failedSteps" class="loop-process-failures">
+                    {{ t("analysis.loopProcessFailures", { n: entry.failedSteps }) }}
+                  </span>
+                </button>
 
+                <div v-if="expandedLoopProcesses[entry.key]" class="loop-process-body">
+                  <div class="loop-timeline">
                     <div
-                      v-if="loopActivityDetail(activity, t)"
-                      class="tree-dim-reason loop-step-detail"
-                      :class="{
-                        'is-tool-meta':
-                          activity.kind === 'probe' || activity.kind === 'external_tool',
-                        'is-error': activity.status === 'failed' || !!activity.error,
-                      }"
+                      v-for="activity in entry.steps"
+                      :key="activity.activityId"
+                      class="loop-timeline-item"
+                      :class="`status-${activity.status}`"
                     >
-                      {{ loopActivityDetail(activity, t) }}
-                    </div>
-
-                    <div
-                      v-if="
-                        activity.kind === 'evidence' &&
-                        isLoopActivityExpanded(group.key, activity) &&
-                        activity.questions?.length
-                      "
-                      class="tree-questions loop-questions-box"
-                    >
-                      <div
-                        v-for="question in activity.questions"
-                        :key="question.questionId"
-                        class="tree-question loop-question-row"
-                        :class="{
-                          done: question.status === 'completed',
-                          running: question.status === 'running',
-                          failed: question.status === 'failed',
-                          stopped: question.status === 'cancelled',
-                        }"
-                      >
-                        <div class="tree-q-status">
-                          <CheckCircle2 v-if="question.status === 'completed'" :size="11" />
-                          <Zap v-else-if="question.status === 'running'" :size="11" class="spin" />
-                          <CircleSlash v-else :size="11" />
-                        </div>
-                        <span class="tree-q-text">{{ question.question }}</span>
-                        <span
-                          class="tree-q-status-text"
-                          :class="{ error: question.status === 'failed' }"
+                      <div class="loop-rail" aria-hidden="true">
+                        <div
+                          class="tree-dim-icon"
+                          :class="{
+                            done: activity.status === 'completed',
+                            running: activity.status === 'running',
+                            failed: activity.status === 'failed',
+                            stopped: activity.status === 'cancelled',
+                          }"
                         >
-                          {{ loopQuestionStatusText(question, t) }}
-                        </span>
-                        <QuestionExecution
-                          v-if="question.execution"
-                          class="loop-query-execution"
-                          :question="question"
-                          :scope="executionScope(group)"
-                        />
-                      </div>
-                    </div>
-
-                    <div
-                      v-if="
-                        activity.kind === 'dispatch' &&
-                        isLoopActivityExpanded(group.key, activity)
-                      "
-                      class="loop-dispatch-detail"
-                    >
-                      <div class="loop-detail-field">
-                        <span>{{ t("analysis.loopDispatchTopic") }}</span>
-                        <p>{{ activity.topic || "-" }}</p>
-                      </div>
-                      <div v-if="activity.workerSummary" class="loop-detail-field">
-                        <span>{{ t("analysis.loopDispatchSummary") }}</span>
-                        <div
-                          class="loop-worker-summary markdown-body"
-                          v-html="renderAgentMarkdown(activity.workerSummary)"
-                        ></div>
-                      </div>
-                      <button
-                        v-if="activity.status !== 'running' && task?.id"
-                        type="button"
-                        class="loop-trace-toggle"
-                        :aria-expanded="
-                          !!subagentTraceState(group.key, activity.activityId)?.expanded
-                        "
-                        :disabled="subagentTraceState(group.key, activity.activityId)?.loading"
-                        @click.stop="toggleSubagentTrace(group.key, activity.activityId)"
-                      >
-                        <Loader2
-                          v-if="subagentTraceState(group.key, activity.activityId)?.loading"
-                          class="spin"
-                          :size="13"
-                        />
-                        <ChevronDown
-                          v-else-if="subagentTraceState(group.key, activity.activityId)?.expanded"
-                          :size="13"
-                        />
-                        <ChevronRight v-else :size="13" />
-                        {{
-                          subagentTraceState(group.key, activity.activityId)?.expanded
-                            ? t("common.collapse")
-                            : t("common.view")
-                        }}
-                        {{ t("analysis.loopWorkerTrace") }}
-                      </button>
-                      <div
-                        v-if="subagentTraceState(group.key, activity.activityId)?.expanded"
-                        class="message-trace-list"
-                      >
-                        <div
-                          v-if="subagentTraceState(group.key, activity.activityId)?.error"
-                          class="loop-trace-error"
-                        >
-                          {{ t("analysis.loopWorkerTraceLoadFailed") }}
+                          <CheckCircle2 v-if="activity.status === 'completed'" :size="12" />
+                          <Zap v-else-if="activity.status === 'running'" :size="12" />
+                          <CircleSlash v-else :size="12" />
                         </div>
-                        <div
-                          v-else-if="
-                            subagentTraceState(group.key, activity.activityId)?.trace?.error
+                      </div>
+
+                      <div class="loop-item-body">
+                        <button
+                          type="button"
+                          class="tree-dim-header loop-activity-header"
+                          :disabled="!isLoopActivityExpandable(activity)"
+                          :aria-expanded="
+                            isLoopActivityExpandable(activity)
+                              ? isLoopActivityExpanded(group.key, activity)
+                              : undefined
                           "
-                          class="loop-trace-error"
+                          @click="toggleLoopActivity(group.key, activity)"
                         >
-                          {{ subagentTraceState(group.key, activity.activityId)?.trace?.error }}
-                        </div>
+                          <span class="tree-dim-name loop-step-title">
+                            {{ loopActivityLabel(activity, t) }}
+                          </span>
+                          <span
+                            v-if="activity.status !== 'completed'"
+                            class="loop-step-state"
+                            :class="activity.status"
+                          >
+                            {{ activityStatusText(activity.status) }}
+                          </span>
+                          <template v-if="isLoopActivityExpandable(activity)">
+                            <ChevronDown
+                              v-if="isLoopActivityExpanded(group.key, activity)"
+                              class="loop-expand-icon"
+                              :size="15"
+                            />
+                            <ChevronRight v-else class="loop-expand-icon" :size="15" />
+                          </template>
+                        </button>
+
                         <div
-                          v-else-if="
-                            !subagentTraceState(group.key, activity.activityId)?.loading &&
-                            !subagentTraceState(group.key, activity.activityId)?.trace?.messages
-                              .length
-                          "
-                          class="loop-trace-empty"
+                          v-if="loopActivityDetail(activity, t)"
+                          class="tree-dim-reason loop-step-detail"
+                          :class="{
+                            'is-tool-meta':
+                              activity.kind === 'probe' || activity.kind === 'external_tool',
+                            'is-error': activity.status === 'failed' || !!activity.error,
+                          }"
                         >
-                          {{ t("common.noData") }}
+                          {{ loopActivityDetail(activity, t) }}
                         </div>
-                        <AgentMessageTrace
+
+                        <div
                           v-if="
-                            subagentTraceState(group.key, activity.activityId)?.trace?.messages
-                              .length
+                            activity.kind === 'evidence' &&
+                            isLoopActivityExpanded(group.key, activity) &&
+                            activity.questions?.length
                           "
-                          :messages="
-                            subagentTraceState(group.key, activity.activityId)?.trace?.messages ||
-                            []
+                          class="tree-questions loop-questions-box"
+                        >
+                          <div
+                            v-for="question in activity.questions"
+                            :key="question.questionId"
+                            class="tree-question loop-question-row"
+                            :class="{
+                              done: question.status === 'completed',
+                              running: question.status === 'running',
+                              failed: question.status === 'failed',
+                              stopped: question.status === 'cancelled',
+                            }"
+                          >
+                            <div class="tree-q-status">
+                              <CheckCircle2 v-if="question.status === 'completed'" :size="11" />
+                              <Zap v-else-if="question.status === 'running'" :size="11" class="spin" />
+                              <CircleSlash v-else :size="11" />
+                            </div>
+                            <span class="tree-q-text">{{ question.question }}</span>
+                            <span
+                              class="tree-q-status-text"
+                              :class="{ error: question.status === 'failed' }"
+                            >
+                              {{ loopQuestionStatusText(question, t) }}
+                            </span>
+                            <QuestionExecution
+                              v-if="question.execution"
+                              class="loop-query-execution"
+                              :question="question"
+                              :scope="executionScope(group)"
+                            />
+                          </div>
+                        </div>
+
+                        <div
+                          v-if="
+                            activity.kind === 'dispatch' &&
+                            isLoopActivityExpanded(group.key, activity)
                           "
-                          variant="worker"
-                        />
+                          class="loop-dispatch-detail"
+                        >
+                          <div class="loop-detail-field">
+                            <span>{{ t("analysis.loopDispatchTopic") }}</span>
+                            <p>{{ activity.topic || "-" }}</p>
+                          </div>
+                          <div v-if="activity.workerSummary" class="loop-detail-field">
+                            <span>{{ t("analysis.loopDispatchSummary") }}</span>
+                            <div
+                              class="loop-worker-summary markdown-body"
+                              v-html="renderAgentMarkdown(activity.workerSummary)"
+                            ></div>
+                          </div>
+                          <button
+                            v-if="activity.status !== 'running' && task?.id"
+                            type="button"
+                            class="loop-trace-toggle"
+                            :aria-expanded="
+                              !!subagentTraceState(group.key, activity.activityId)?.expanded
+                            "
+                            :disabled="subagentTraceState(group.key, activity.activityId)?.loading"
+                            @click.stop="toggleSubagentTrace(group.key, activity.activityId)"
+                          >
+                            <Loader2
+                              v-if="subagentTraceState(group.key, activity.activityId)?.loading"
+                              class="spin"
+                              :size="13"
+                            />
+                            <ChevronDown
+                              v-else-if="subagentTraceState(group.key, activity.activityId)?.expanded"
+                              :size="13"
+                            />
+                            <ChevronRight v-else :size="13" />
+                            {{
+                              subagentTraceState(group.key, activity.activityId)?.expanded
+                                ? t("common.collapse")
+                                : t("common.view")
+                            }}
+                            {{ t("analysis.loopWorkerTrace") }}
+                          </button>
+                          <div
+                            v-if="subagentTraceState(group.key, activity.activityId)?.expanded"
+                            class="message-trace-list"
+                          >
+                            <div
+                              v-if="subagentTraceState(group.key, activity.activityId)?.error"
+                              class="loop-trace-error"
+                            >
+                              {{ t("analysis.loopWorkerTraceLoadFailed") }}
+                            </div>
+                            <div
+                              v-else-if="
+                                subagentTraceState(group.key, activity.activityId)?.trace?.error
+                              "
+                              class="loop-trace-error"
+                            >
+                              {{ subagentTraceState(group.key, activity.activityId)?.trace?.error }}
+                            </div>
+                            <div
+                              v-else-if="
+                                !subagentTraceState(group.key, activity.activityId)?.loading &&
+                                !subagentTraceState(group.key, activity.activityId)?.trace?.messages
+                                  .length
+                              "
+                              class="loop-trace-empty"
+                            >
+                              {{ t("common.noData") }}
+                            </div>
+                            <AgentMessageTrace
+                              v-if="
+                                subagentTraceState(group.key, activity.activityId)?.trace?.messages
+                                  .length
+                              "
+                              :messages="
+                                subagentTraceState(group.key, activity.activityId)?.trace?.messages ||
+                                []
+                              "
+                              variant="worker"
+                            />
+                          </div>
+                        </div>
                       </div>
                     </div>
                   </div>
                 </div>
               </div>
+            </template>
 
-              <div v-if="loopViews[gi]!.toolTrace.length" class="loop-tool-trace">
-                <div class="loop-tool-trace-title">{{ t("analysis.loopToolResults") }}</div>
-                <AgentMessageTrace :messages="loopViews[gi]!.toolTrace" variant="turn" />
+            <!-- Tool calls and results: activities carry no tool call identity, so they stay one turn-level detail -->
+            <div v-if="loopViews[gi]!.toolTrace.length" class="loop-process">
+              <button
+                type="button"
+                class="loop-process-toggle"
+                :aria-expanded="!!expandedLoopProcesses[`${group.key}|tools`]"
+                @click="toggleLoopProcess(`${group.key}|tools`)"
+              >
+                <ChevronDown
+                  v-if="expandedLoopProcesses[`${group.key}|tools`]"
+                  class="loop-process-chevron"
+                  :size="15"
+                />
+                <ChevronRight v-else class="loop-process-chevron" :size="15" />
+                <span class="step-name">{{ t("analysis.loopToolResults") }}</span>
+              </button>
+              <div v-if="expandedLoopProcesses[`${group.key}|tools`]" class="loop-process-body">
+                <div class="loop-tool-trace">
+                  <AgentMessageTrace :messages="loopViews[gi]!.toolTrace" variant="turn" />
+                </div>
               </div>
             </div>
-          </div>
-
-          <!-- Loop body: public narration shown directly as safe Markdown -->
-          <div v-if="loopViews[gi]?.narratives.length" class="chat-msg assistant">
-            <div
-              class="chat-bubble assistant loop-content"
-              :class="{ streaming: loopRunning(group.payload) }"
-            >
-              <div
-                v-for="activity in loopViews[gi]!.narratives"
-                :key="activity.activityId"
-                class="loop-narrative markdown-body"
-                v-html="renderAgentMarkdown(activity.narrative || '')"
-              ></div>
-            </div>
-          </div>
+          </template>
 
           <!-- Step cards (Dimension orchestration: preserved as baseline) -->
           <div v-if="showStepCards(group.payload)" class="analysis-steps">
@@ -1273,35 +1315,6 @@ function showFailedNotice(group: TurnGroup): boolean {
   border-top: 1px solid var(--el-border-color-lighter);
 }
 
-.loop-status-pill {
-  display: inline-flex;
-  align-items: center;
-  padding: 2px 8px;
-  border-radius: 999px;
-  font-size: 11px;
-  font-weight: 600;
-}
-
-.loop-status-pill.active {
-  background: var(--el-color-primary-light-9);
-  color: var(--el-color-primary);
-}
-
-.loop-status-pill.done {
-  background: var(--el-color-success-light-9);
-  color: var(--el-color-success);
-}
-
-.loop-status-pill.stopped {
-  background: var(--el-color-warning-light-9);
-  color: var(--el-color-warning);
-}
-
-.loop-status-pill.failed {
-  background: var(--el-color-danger-light-9);
-  color: var(--el-color-danger);
-}
-
 .loop-timeline {
   display: flex;
   flex-direction: column;
@@ -1464,27 +1477,7 @@ function showFailedNotice(group: TurnGroup): boolean {
 }
 
 .loop-tool-trace {
-  padding: 0 16px 14px;
-}
-
-.loop-timeline + .loop-tool-trace {
-  padding-top: 12px;
-  border-top: 1px dashed var(--el-border-color-lighter);
-}
-
-.loop-tool-trace-title {
-  margin: 12px 0 8px;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--el-text-color-secondary);
-}
-
-.loop-timeline + .loop-tool-trace .loop-tool-trace-title {
-  margin-top: 0;
-}
-
-.loop-content .loop-narrative + .loop-narrative {
-  margin-top: 8px;
+  padding: 12px 16px 14px;
 }
 
 .loop-process .tree-q-text {
@@ -2030,7 +2023,7 @@ function showFailedNotice(group: TurnGroup): boolean {
     padding: 10px 12px;
   }
   :where(html.workbench-mobile-navigation) .loop-tool-trace {
-    padding: 0 12px 10px;
+    padding: 10px 12px;
   }
   :where(html.workbench-mobile-navigation) .run-switcher-row {
     margin-right: 0;

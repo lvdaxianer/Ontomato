@@ -507,76 +507,146 @@ it("keeps each turn's tool calls and results inside its own collapsed process wi
   expect(occurrences(wrapper.text(), "stock-result-B")).toBe(1);
 });
 
-// Public surface under test: collapsed process header; observable result: running progress and step failures are
-// readable without opening the process, and the user's choice survives the turn settling into history.
-it("surfaces progress and failures on the collapsed process header and keeps the user's choice when the turn settles", async () => {
-  const steps: AnalysisActivity[] = [
-    {
-      activityId: "ext-1",
-      seq: 1,
-      revision: 1,
-      kind: "external_tool",
-      status: "failed",
-      startedAt: 1,
-      serviceName: "erp",
-      toolName: "sync",
-      error: "mcp-down",
-    },
-    {
-      activityId: "ev-1",
-      seq: 2,
-      revision: 1,
+function step(
+  activityId: string,
+  seq: number,
+  patch: Partial<AnalysisActivity> & Pick<AnalysisActivity, "kind">
+): AnalysisActivity {
+  return { activityId, seq, revision: 1, status: "completed", startedAt: seq, ...patch };
+}
+
+function narration(activityId: string, seq: number, text: string, status: AnalysisActivity["status"] = "completed") {
+  return step(activityId, seq, { kind: "narrative", narrative: text, status });
+}
+
+/** Rendered order of a turn's loop blocks: "process" for a folded stretch, otherwise the narration text. */
+function loopBlockOrder(wrapper: ReturnType<typeof render>): string[] {
+  return wrapper
+    .findAll(".loop-process, .loop-content, .chat-bubble.assistant:not(.loop-content)")
+    .map((node) => (node.classes("loop-process") ? "process" : node.text()));
+}
+
+// Public surface under test: the turn follows the agent's real rhythm; observable result: each stretch of process
+// activities is its own collapsed block, stage summaries sit between them in acceptance order, and the final reply closes the turn.
+it("interleaves collapsed process stretches with stage summaries in acceptance order before the final reply", async () => {
+  const activities = [
+    step("ext-1", 1, { kind: "external_tool", status: "failed", serviceName: "erp", toolName: "sync", error: "mcp-down" }),
+    step("ev-1", 2, {
       kind: "evidence",
-      status: "completed",
-      startedAt: 2,
       questions: [{ questionId: "q-1", question: "gap-question", status: "failed", error: "no-rows" }],
-    },
+    }),
+    narration("n-1", 3, "stage-summary-one"),
+    step("disp-1", 4, { kind: "dispatch", topic: "channel-check" }),
+    narration("n-2", 5, "final-reply"),
   ];
   seed({
-    messages: [{ id: 1, role: "user", content: "question" }],
-    streamingSnapshot: {
-      mode: "deep-analysis",
-      status: "streaming",
-      source: "live",
-      primaryText: "",
-      requestSeq: 9,
-      deepAnalysis: execution([...steps, activity("live-narration")], {
-        runState: { status: "running", revision: 1, progress: { done: 2, label: "querying-orders" } },
-      }),
-    },
+    messages: [
+      { id: 1, role: "user", content: "question" },
+      answerMessage(2, "final-reply", "unused", { activities, finalAnswer: "final-reply" }),
+    ],
+  });
+  const wrapper = render();
+
+  expect(loopBlockOrder(wrapper)).toEqual(["process", "stage-summary-one", "process", "final-reply"]);
+  const [first, second] = wrapper.findAll(".loop-process");
+  expect(first.find(".loop-process-toggle").attributes("aria-expanded")).toBe("false");
+  expect(second.find(".loop-process-toggle").attributes("aria-expanded")).toBe("false");
+  // Failures and result gaps are readable on the folded header; the details stay folded.
+  expect(first.find(".loop-process-failures").text()).toContain("2");
+  expect(second.find(".loop-process-failures").exists()).toBe(false);
+  expect(wrapper.text()).not.toContain("mcp-down");
+
+  await first.find(".loop-process-toggle").trigger("click");
+  expect(first.text()).toContain("mcp-down");
+  expect(first.text()).not.toContain("channel-check");
+  expect(second.find(".loop-process-body").exists()).toBe(false);
+});
+
+// Public surface under test: live query progress inside its own stretch; observable result: the running stretch shows
+// progress while folded, an opened stretch keeps showing the query as it advances, a new stretch arrives folded, and the
+// user's choices survive the turn settling into history.
+it("keeps a live stretch open while its query advances and new stretches arrive folded, through settling into history", async () => {
+  const runningQuery = step("ev-1", 2, {
+    kind: "evidence",
+    status: "running",
+    questions: [{ questionId: "q-1", question: "orders-by-region", status: "running", execution: {} }],
+  });
+  const live = (activities: AnalysisActivity[], label: string): ResponseSnapshot => ({
+    mode: "deep-analysis",
+    status: "streaming",
+    source: "live",
+    primaryText: "",
+    requestSeq: 9,
+    deepAnalysis: execution(activities, {
+      runState: { status: "running", revision: 1, progress: { done: 1, label } },
+    }),
+  });
+  seed({
+    messages: [{ id: 1_700_000_000_000, role: "user", content: "question" }],
+    streamingSnapshot: live([narration("n-0", 1, "opening-note"), runningQuery], "querying-orders"),
   });
   const wrapper = render();
   const header = wrapper.find(".loop-process-toggle");
   expect(header.attributes("aria-expanded")).toBe("false");
   expect(header.text()).toContain("querying-orders");
-  expect(header.find(".loop-process-failures").text()).toContain("2");
-  expect(wrapper.text()).toContain("live-narration");
-  expect(wrapper.text()).not.toContain("mcp-down");
 
   await header.trigger("click");
-  expect(wrapper.text()).toContain("mcp-down");
+  await wrapper.find(".loop-activity-header").trigger("click");
+  expect(wrapper.find(".loop-question-row").text()).toContain("Querying");
 
+  // The query finishes, a stage summary streams and the next stretch starts.
   const session = useAnalysisStore().sessions["task-1"];
+  const doneQuery = step("ev-1", 2, {
+    kind: "evidence",
+    questions: [
+      { questionId: "q-1", question: "orders-by-region", status: "completed", dataCount: 5, execution: {} },
+    ],
+  });
+  const later = [
+    narration("n-0", 1, "opening-note"),
+    doneQuery,
+    narration("n-1", 3, "stage-summary-one"),
+    step("probe-1", 4, { kind: "probe", status: "running", probeTool: "probe_classes" }),
+  ];
+  session.streamingSnapshot = live(later, "probing");
+  await nextTick();
+
+  expect(loopBlockOrder(wrapper)).toEqual(["opening-note", "process", "stage-summary-one", "process"]);
+  let processes = wrapper.findAll(".loop-process");
+  expect(processes[0].find(".loop-process-toggle").attributes("aria-expanded")).toBe("true");
+  expect(processes[0].find(".loop-question-row").text()).toContain("5 rows");
+  expect(processes[1].find(".loop-process-toggle").attributes("aria-expanded")).toBe("false");
+  expect(processes[1].text()).toContain("probing");
+  // Progress belongs to the running stretch only.
+  expect(processes[0].find(".loop-process-toggle").text()).not.toContain("probing");
+
   session.streamingSnapshot = null;
   session.messages = [
     { id: 1, role: "user", content: "question" },
     {
       id: 2,
       role: "assistant",
-      content: "",
+      content: "final-reply",
       snapshot: {
         mode: "deep-analysis",
         status: "completed",
         source: "history",
-        primaryText: "",
+        primaryText: "final-reply",
         requestSeq: 9,
-        deepAnalysis: execution([...steps, activity("live-narration")]),
+        deepAnalysis: execution(
+          [...later.slice(0, 3), { ...later[3], status: "completed" }, narration("n-2", 5, "final-reply")],
+          { finalAnswer: "final-reply" }
+        ),
       },
     },
   ];
   await nextTick();
-  expect(wrapper.find(".loop-process-toggle").attributes("aria-expanded")).toBe("true");
-  expect(wrapper.text()).toContain("mcp-down");
+
+  processes = wrapper.findAll(".loop-process");
+  expect(processes[0].find(".loop-process-toggle").attributes("aria-expanded")).toBe("true");
+  expect(processes[0].find(".loop-question-row").text()).toContain("5 rows");
+  expect(processes[1].find(".loop-process-toggle").attributes("aria-expanded")).toBe("false");
+  expect(occurrences(wrapper.text(), "final-reply")).toBe(1);
 });
 
 // Public surface under test: a regular continuous session does not switch by run history; observable result: all turns and activities stay present,
