@@ -1,32 +1,39 @@
 <script setup lang="ts">
+import type { LoopSubagentTrace } from "@ontomato/contracts/analysis-task";
 import type { EgressMessage } from "@ontomato/contracts/agent-egress";
-import type { DeepAnalysisTaskPayload } from "@ontomato/contracts/analysis-presentation";
 
 import { computed, ref, watch } from "vue";
 import { storeToRefs } from "pinia";
 import { useAnalysisStore } from "../stores/analysis";
 import {
   CheckCircle2,
+  Zap,
+  Clock,
+  CircleSlash,
   ChevronDown,
   ChevronRight,
-  CircleSlash,
-  CircleX,
-  Clock,
-  FileText,
+  Loader2,
 } from "lucide-vue-next";
 import { useI18n } from "vue-i18n";
+import { analysisTaskApi } from "../api";
 import type { Message } from "../../../types/chat";
+import type {
+  AnalysisActivity,
+  DeepAnalysisTaskPayload,
+} from "@ontomato/contracts/analysis-presentation";
 import { renderMarkdown } from "../../../utils/markdown";
+import { renderAgentMarkdown } from "../../../utils/agent-markdown";
+import {
+  loopActivityDetail,
+  loopActivityLabel,
+  loopQuestionStatusText,
+} from "../utils/loop-activity";
+import DeepAnalysisResult from "./DeepAnalysisResult.vue";
 import AgentMessageTrace from "./AgentMessageTrace.vue";
-import AnalysisTurnProcess from "./AnalysisTurnProcess.vue";
-import type { QuestionExecutionScope } from "./QuestionExecution.vue";
+import QuestionExecution, { type QuestionExecutionScope } from "./QuestionExecution.vue";
 import TurnDiagnoseButton from "../../diagnosis/components/TurnDiagnoseButton.vue";
+import { buildDimensionTree, dimensionStageStates } from "../utils/dimension-view";
 import { workbenchContent } from "../../../content";
-
-const emit = defineEmits<{
-  /** Asks the host to switch to its report view; the host owns which view is shown. */
-  openReport: [];
-}>();
 
 const runSwitcherCopy = workbenchContent().text.runSwitcher;
 
@@ -46,17 +53,55 @@ function selectRun(index: number) {
   store.selectRun(index);
 }
 
+const expandedLoopActivities = ref<Record<string, boolean>>({});
 const expandedTurnTraces = ref<Record<string, boolean>>({});
+
+interface SubagentTraceState {
+  expanded: boolean;
+  loading: boolean;
+  trace?: LoopSubagentTrace;
+  error?: boolean;
+}
+
+const subagentTraceStates = ref<Record<string, SubagentTraceState>>({});
 
 watch(
   () => task.value?.id,
   () => {
+    expandedLoopActivities.value = {};
     expandedTurnTraces.value = {};
+    subagentTraceStates.value = {};
   }
 );
 
+/** Only report tasks switch by run history; regular continuous conversations always show all turns. Judged by the task's own delivery mode. */
+const isReportTask = computed(() => task.value?.reportDeliverableEnabled !== false);
+
+/**
+ * Stable identity of a rendered turn. Message ids are rebuilt when live turns settle into history
+ * and historical runs reuse the same message and activity ids, so the key is scoped by the task,
+ * the run view being inspected, and the turn's own acceptance sequence (or runId / position).
+ */
+function buildTurnKey(
+  turn: { requestSeq?: number; runId?: string },
+  index: number
+): string {
+  const view =
+    isReportTask.value && !store.isSelectedLatestRun
+      ? `run:${store.selectedRun?.id}`
+      : "current";
+  const identity =
+    turn.requestSeq !== undefined
+      ? `seq:${turn.requestSeq}`
+      : turn.runId
+        ? `run:${turn.runId}`
+        : `pos:${index}`;
+  return `${task.value?.id || "task"}|${view}|${identity}`;
+}
+
 /** Rendered turn by turn: each turn's user message, execution artifacts, and reply are grouped, and later turns don't overwrite earlier ones. */
 interface TurnGroup {
+  key: string;
   user: Message | null;
   assistant: Message | null;
   payload: DeepAnalysisTaskPayload | null;
@@ -67,7 +112,7 @@ interface TurnGroup {
   streamingText: string;
   /** Acceptance sequence of the turn this group shows, when its snapshot carries one. */
   requestSeq?: number;
-  /** Run the turn's snapshot belongs to, when it carries one. */
+  /** Run identity carried by the snapshot when present. */
   runId?: string;
 }
 
@@ -76,6 +121,7 @@ const turnGroups = computed<TurnGroup[]>(() => {
   for (const message of messages.value) {
     if (message.role === "user") {
       groups.push({
+        key: "",
         user: message,
         assistant: null,
         payload: null,
@@ -88,6 +134,7 @@ const turnGroups = computed<TurnGroup[]>(() => {
     let group = groups[groups.length - 1];
     if (!group || group.assistant) {
       group = {
+        key: "",
         user: null,
         assistant: null,
         payload: null,
@@ -112,6 +159,7 @@ const turnGroups = computed<TurnGroup[]>(() => {
     // Only attach to the current turn that has no reply yet; when the previous turn is complete, don't overwrite its artifacts.
     if (!group || group.assistant) {
       group = {
+        key: "",
         user: null,
         assistant: null,
         payload: null,
@@ -131,7 +179,11 @@ const turnGroups = computed<TurnGroup[]>(() => {
       group.streamingText = streaming.primaryText || "";
     }
   }
-  return groups;
+
+  return groups.map((group, index) => ({
+    ...group,
+    key: buildTurnKey(group, index),
+  }));
 });
 
 /** First occurrence position of a follow-up record: the first standard follow-up turn after a turn with execution artifacts. */
@@ -148,20 +200,164 @@ const followUpDividerIndex = computed(() => {
   return -1;
 });
 
-/** Only report tasks switch by run history; regular continuous conversations always show all turns. Judged by the task's own delivery mode. */
-const isReportTask = computed(() => task.value?.reportDeliverableEnabled !== false);
-
 /**
  * Where a group's deferred question facts are read: a report addresses the run being viewed (the
  * current one or a selected historical run); a regular session addresses the group's own turn.
  */
-function executionScope(group: TurnGroup): QuestionExecutionScope | undefined {
-  const taskId = task.value?.id;
-  if (!taskId) return undefined;
-  if (!isReportTask.value) return { taskId, requestSeq: group.requestSeq };
+function executionScope(group: TurnGroup): QuestionExecutionScope {
+  const taskId = task.value!.id;
+  if (task.value!.reportDeliverableEnabled === false)
+    return { taskId, requestSeq: group.requestSeq };
   return { taskId, runId: store.isSelectedLatestRun ? undefined : store.selectedRun?.id };
 }
 
+/** Loop-mode progress is expressed by a monotone activity stream, not the dimension-orchestration stage cards and dimension framework. */
+function isLoopMode(payload: DeepAnalysisTaskPayload | null): boolean {
+  return payload?.executionMode === "loop";
+}
+function loopActivities(payload: DeepAnalysisTaskPayload | null): AnalysisActivity[] {
+  return payload?.activities || [];
+}
+function loopProgress(payload: DeepAnalysisTaskPayload | null) {
+  return payload?.runState.progress;
+}
+function loopRunning(payload: DeepAnalysisTaskPayload | null): boolean {
+  return payload?.runState.status === "running";
+}
+function loopStatusClass(
+  payload: DeepAnalysisTaskPayload | null
+): "active" | "done" | "failed" | "stopped" {
+  const status = payload?.runState.status;
+  if (status === "running") return "active";
+  if (status === "failed") return "failed";
+  if (status === "cancelled") return "stopped";
+  return "done";
+}
+function activityStatusText(status: AnalysisActivity["status"]): string {
+  if (status === "running") return t("common.inProgress");
+  if (status === "failed") return t("common.failed");
+  if (status === "cancelled") return t("common.stopped");
+  return t("analysis.completed");
+}
+function thinkingTree(payload: DeepAnalysisTaskPayload | null) {
+  return buildDimensionTree(payload?.activities || []);
+}
+
+function loopActivityKey(groupKey: string, activityId: string): string {
+  return `${groupKey}|${activityId}`;
+}
+
+function isLoopActivityExpandable(activity: AnalysisActivity): boolean {
+  return (
+    activity.kind === "dispatch" || (activity.kind === "evidence" && !!activity.questions?.length)
+  );
+}
+
+function isLoopActivityExpanded(groupKey: string, activity: AnalysisActivity): boolean {
+  return !!expandedLoopActivities.value[loopActivityKey(groupKey, activity.activityId)];
+}
+
+function toggleLoopActivity(groupKey: string, activity: AnalysisActivity) {
+  if (!isLoopActivityExpandable(activity)) return;
+  const key = loopActivityKey(groupKey, activity.activityId);
+  expandedLoopActivities.value = {
+    ...expandedLoopActivities.value,
+    [key]: !expandedLoopActivities.value[key],
+  };
+}
+
+function subagentTraceState(
+  groupKey: string,
+  activityId: string
+): SubagentTraceState | undefined {
+  return subagentTraceStates.value[loopActivityKey(groupKey, activityId)];
+}
+
+async function toggleSubagentTrace(groupKey: string, activityId: string) {
+  const key = loopActivityKey(groupKey, activityId);
+  const current = subagentTraceStates.value[key];
+  if (current?.expanded) {
+    subagentTraceStates.value = {
+      ...subagentTraceStates.value,
+      [key]: { ...current, expanded: false },
+    };
+    return;
+  }
+  if (current?.trace) {
+    subagentTraceStates.value = {
+      ...subagentTraceStates.value,
+      [key]: { ...current, expanded: true },
+    };
+    return;
+  }
+
+  const taskId = task.value?.id;
+  if (!taskId) return;
+  subagentTraceStates.value = {
+    ...subagentTraceStates.value,
+    [key]: { expanded: true, loading: true },
+  };
+  try {
+    const trace = await analysisTaskApi.getLoopSubagentTrace(taskId, activityId);
+    if (task.value?.id !== taskId) return;
+    subagentTraceStates.value = {
+      ...subagentTraceStates.value,
+      [key]: { expanded: true, loading: false, trace },
+    };
+  } catch {
+    if (task.value?.id !== taskId) return;
+    subagentTraceStates.value = {
+      ...subagentTraceStates.value,
+      [key]: { expanded: true, loading: false, error: true },
+    };
+  }
+}
+
+function toggleTurnTrace(key: string) {
+  expandedTurnTraces.value = {
+    ...expandedTurnTraces.value,
+    [key]: !expandedTurnTraces.value[key],
+  };
+}
+
+interface StepState {
+  name: string;
+  status: "done" | "active" | "pending" | "stopped";
+  detail: string;
+}
+
+const stages = [
+  t("analysis.frameworkGeneration"),
+  t("analysis.metricCollection"),
+  t("analysis.dataAnalysis"),
+  t("analysis.reportGeneration"),
+];
+
+function analysisSteps(payload: DeepAnalysisTaskPayload | null): StepState[] {
+  if (!payload || isLoopMode(payload)) return [];
+  return dimensionStageStates(payload).map((status, i) => ({
+    name: stages[i],
+    status,
+    detail:
+      status === "active"
+        ? payload.runState.progress.label
+        : status === "stopped"
+          ? t("analysis.analysisStopped")
+          : "",
+  }));
+}
+function hasCompletedAnalysis(payload: DeepAnalysisTaskPayload | null): boolean {
+  return payload?.runState.status === "completed";
+}
+function isStoppedAnalysis(payload: DeepAnalysisTaskPayload | null): boolean {
+  return payload?.runState.status === "cancelled";
+}
+function isFailedAnalysis(payload: DeepAnalysisTaskPayload | null): boolean {
+  return payload?.runState.status === "failed";
+}
+function showStepCards(payload: DeepAnalysisTaskPayload | null): boolean {
+  return !isLoopMode(payload) && analysisSteps(payload).length > 0;
+}
 const showEmpty = computed(
   () => messages.value.length === 0 && !isLoading.value && !streamingSnapshot.value
 );
@@ -169,7 +365,7 @@ const showEmpty = computed(
 /**
  * This turn's reply body only takes this turn's own artifacts or reply; it doesn't use the task's
  * current fields to backfill the last turn, otherwise the previous turn's answer would leak into a
- * new turn that hasn't produced an answer yet.
+ * new turn that hasn't produced an answer yet. The execution turn's body is delivered by the report view.
  */
 function groupAnswer(group: TurnGroup): string {
   // The deep analysis body of a report task is delivered only in the report view; even if that run
@@ -179,70 +375,53 @@ function groupAnswer(group: TurnGroup): string {
   return group.payload?.finalAnswer || group.assistant?.content || "";
 }
 
-interface TurnOutcome {
-  tone: "completed" | "failed" | "cancelled";
-  text: string;
-  error?: string;
-  /** The report view has content for this run, so the turn can point to it. */
-  report?: boolean;
-}
-
 /**
- * How an execution turn ended, read only from its own run state. A completed turn needs no notice of
- * its own unless its report is ready; whether a report exists is the store's existing fact.
+ * Narrow display deduplication for finished regular-session turns: only when the turn has ended,
+ * the very last activity is a narrative, and its text is strictly identical to the non-empty
+ * payload.finalAnswer, omit that trailing narrative from the trajectory so the immediately
+ * following reply bubble carries it once.
  */
-function turnOutcome(group: TurnGroup): TurnOutcome | null {
-  const runState = group.payload?.runState;
-  if (!runState) return null;
-  if (runState.status === "failed")
-    return { tone: "failed", text: t("analysis.turnFailed"), error: runState.error };
-  if (runState.status === "cancelled")
-    return { tone: "cancelled", text: t("analysis.turnStopped"), error: runState.error };
-  if (runState.status === "completed" && isReportTask.value && hasReportArtifact.value)
-    return { tone: "completed", text: t("analysis.reportReadyHint"), report: true };
-  return null;
+function visibleLoopActivities(group: TurnGroup): AnalysisActivity[] {
+  const activities = loopActivities(group.payload);
+  const finalAnswer = group.payload?.finalAnswer;
+  if (
+    !isReportTask.value &&
+    !group.streaming &&
+    group.payload?.runState.status !== "running" &&
+    typeof finalAnswer === "string" &&
+    finalAnswer !== "" &&
+    activities.length > 0
+  ) {
+    const last = activities[activities.length - 1];
+    if (last.kind === "narrative" && last.narrative === finalAnswer) {
+      return activities.slice(0, -1);
+    }
+  }
+  return activities;
 }
 
-/**
- * Stable identity of a rendered turn. Message ids are rebuilt when live turns settle into history
- * and every historical run reuses the same ids, so the key comes from the task, the historical run
- * being viewed, and the turn's own acceptance sequence (or run). Legacy turns without either fall
- * back to their position in the conversation.
- */
-function turnKey(group: TurnGroup, index: number): string {
-  const view =
-    isReportTask.value && !store.isSelectedLatestRun ? `run:${store.selectedRun?.id}` : "current";
-  const turn =
-    group.requestSeq !== undefined
-      ? `seq:${group.requestSeq}`
-      : group.runId
-        ? `run:${group.runId}`
-        : `pos:${index}`;
-  return `${task.value?.id}|${view}|${turn}`;
+function showFirstTurnAcknowledgment(group: TurnGroup, index: number): boolean {
+  if (index !== 0 || !group.user) return false;
+  // Dimension orchestration keeps its baseline acknowledgment; loop mode shows it only for report tasks.
+  if (group.payload && !isLoopMode(group.payload)) return true;
+  return isReportTask.value;
 }
 
-/** Per-turn display facts, derived once per update instead of in the template. */
-const turnViews = computed(() =>
-  turnGroups.value.map((group, index) => ({
-    key: turnKey(group, index),
-    group,
-    answer: groupAnswer(group),
-    outcome: turnOutcome(group),
-    scope: executionScope(group),
-  }))
-);
+function showCompletedNotice(group: TurnGroup, index: number): boolean {
+  if (index !== turnGroups.value.length - 1 || !hasCompletedAnalysis(group.payload)) return false;
+  // Dimension orchestration keeps its exact baseline condition; loop mode prompts only for report runs with a report artifact.
+  if (!isLoopMode(group.payload)) return true;
+  return isReportTask.value && hasReportArtifact.value;
+}
 
-const OUTCOME_ICONS = {
-  completed: CheckCircle2,
-  failed: CircleX,
-  cancelled: CircleSlash,
-} as const;
+function showStoppedNotice(group: TurnGroup, index: number): boolean {
+  if (!isStoppedAnalysis(group.payload)) return false;
+  if (!isLoopMode(group.payload)) return index === turnGroups.value.length - 1;
+  return true;
+}
 
-function toggleTurnTrace(key: string) {
-  expandedTurnTraces.value = {
-    ...expandedTurnTraces.value,
-    [key]: !expandedTurnTraces.value[key],
-  };
+function showFailedNotice(group: TurnGroup): boolean {
+  return isLoopMode(group.payload) && isFailedAnalysis(group.payload);
 }
 </script>
 
@@ -256,10 +435,12 @@ function toggleTurnTrace(key: string) {
 
     <div v-else class="messages-scroll">
       <div class="messages-inner">
-        <!-- Each turn: request, work process, reply, how it ended, then its secondary tools -->
-        <template v-for="({ key, group, answer, outcome, scope }, gi) in turnViews" :key="key">
-          <div v-if="gi === followUpDividerIndex" class="follow-up-divider">
-            <span>{{ t("analysis.followUpRecord") }}</span>
+        <!-- Rendered turn by turn: each turn's user message, execution process, and reply stay in their own turn; later turns don't overwrite earlier ones -->
+        <template v-for="(group, gi) in turnGroups" :key="group.key">
+          <div v-if="gi === followUpDividerIndex" class="follow-up-section">
+            <div class="follow-up-divider">
+              <span>{{ t("analysis.followUpRecord") }}</span>
+            </div>
           </div>
 
           <div v-if="group.user" class="chat-msg user">
@@ -295,18 +476,385 @@ function toggleTurnTrace(key: string) {
             </div>
           </div>
 
-          <AnalysisTurnProcess
-            v-if="group.payload"
-            :key="key"
-            :payload="group.payload"
-            :execution-scope="scope"
-            :task-id="task?.id"
-          />
+          <!-- The first turn of a report task shows the user's topic first, then confirms the analysis start; follow-up turns and regular sessions don't repeat it. -->
+          <div
+            v-if="showFirstTurnAcknowledgment(group, gi)"
+            class="chat-msg system analysis-acknowledgment"
+          >
+            <div class="chat-bubble system">{{ t("analysis.analysisReceived") }}</div>
+          </div>
 
-          <div v-if="answer" class="chat-msg assistant">
-            <div class="chat-bubble assistant">
-              <div class="markdown-body" v-html="renderMarkdown(answer)"></div>
+          <!-- Loop execution mode: unified trajectory panel with chronological L1 stream, on-demand L2 details, and L3 worker trace -->
+          <div
+            v-if="isLoopMode(group.payload) && visibleLoopActivities(group).length > 0"
+            class="analysis-steps loop-trajectory-panel"
+          >
+            <div class="loop-panel-header">
+              <div class="step-card-header loop-header-main">
+                <div class="step-icon" :class="loopStatusClass(group.payload)">
+                  <Zap v-if="loopRunning(group.payload)" :size="12" />
+                  <CheckCircle2 v-else-if="hasCompletedAnalysis(group.payload)" :size="12" />
+                  <CircleSlash v-else :size="12" />
+                </div>
+                <span class="step-name" :class="loopStatusClass(group.payload)">
+                  {{ t("analysis.analysisProgress") }}
+                </span>
+                <span
+                  v-if="group.payload"
+                  class="loop-status-pill"
+                  :class="loopStatusClass(group.payload)"
+                >
+                  {{ activityStatusText(group.payload.runState.status) }}
+                </span>
+              </div>
+              <div class="step-detail loop-header-detail">
+                {{
+                  t("analysis.loopActivityCount", { done: loopProgress(group.payload)?.done || 0 })
+                }}
+                <template v-if="loopRunning(group.payload) && loopProgress(group.payload)?.label">
+                  ·
+                  {{
+                    t("analysis.loopCurrentActivity", {
+                      name: loopProgress(group.payload)?.label || "",
+                    })
+                  }}
+                </template>
+              </div>
             </div>
+
+            <div class="loop-timeline">
+              <div
+                v-for="activity in visibleLoopActivities(group)"
+                :key="activity.activityId"
+                class="loop-timeline-item"
+                :class="[
+                  activity.kind === 'narrative' ? 'is-narrative' : 'is-step',
+                  `status-${activity.status}`,
+                ]"
+              >
+                <div class="loop-rail" aria-hidden="true">
+                  <div
+                    v-if="activity.kind === 'narrative'"
+                    class="loop-narrative-dot"
+                    :class="{ running: activity.status === 'running' }"
+                  ></div>
+                  <div
+                    v-else
+                    class="tree-dim-icon"
+                    :class="{
+                      done: activity.status === 'completed',
+                      running: activity.status === 'running',
+                      failed: activity.status === 'failed',
+                      stopped: activity.status === 'cancelled',
+                    }"
+                  >
+                    <CheckCircle2 v-if="activity.status === 'completed'" :size="12" />
+                    <Zap v-else-if="activity.status === 'running'" :size="12" />
+                    <CircleSlash v-else :size="12" />
+                  </div>
+                </div>
+
+                <div class="loop-item-body">
+                  <template v-if="activity.kind === 'narrative'">
+                    <div
+                      v-if="loopActivityDetail(activity, t)"
+                      class="loop-narrative markdown-body"
+                      v-html="renderAgentMarkdown(loopActivityDetail(activity, t))"
+                    ></div>
+                  </template>
+
+                  <template v-else>
+                    <button
+                      type="button"
+                      class="tree-dim-header loop-activity-header"
+                      :disabled="!isLoopActivityExpandable(activity)"
+                      :aria-expanded="
+                        isLoopActivityExpandable(activity)
+                          ? isLoopActivityExpanded(group.key, activity)
+                          : undefined
+                      "
+                      @click="toggleLoopActivity(group.key, activity)"
+                    >
+                      <span class="tree-dim-name loop-step-title">
+                        {{ loopActivityLabel(activity, t) }}
+                      </span>
+                      <span
+                        v-if="activity.status !== 'completed'"
+                        class="loop-step-state"
+                        :class="activity.status"
+                      >
+                        {{ activityStatusText(activity.status) }}
+                      </span>
+                      <template v-if="isLoopActivityExpandable(activity)">
+                        <ChevronDown
+                          v-if="isLoopActivityExpanded(group.key, activity)"
+                          class="loop-expand-icon"
+                          :size="15"
+                        />
+                        <ChevronRight v-else class="loop-expand-icon" :size="15" />
+                      </template>
+                    </button>
+
+                    <div
+                      v-if="loopActivityDetail(activity, t)"
+                      class="tree-dim-reason loop-step-detail"
+                      :class="{
+                        'is-tool-meta':
+                          activity.kind === 'probe' || activity.kind === 'external_tool',
+                        'is-error': activity.status === 'failed' || !!activity.error,
+                      }"
+                    >
+                      {{ loopActivityDetail(activity, t) }}
+                    </div>
+
+                    <div
+                      v-if="
+                        activity.kind === 'evidence' &&
+                        isLoopActivityExpanded(group.key, activity) &&
+                        activity.questions?.length
+                      "
+                      class="tree-questions loop-questions-box"
+                    >
+                      <div
+                        v-for="question in activity.questions"
+                        :key="question.questionId"
+                        class="tree-question loop-question-row"
+                        :class="{
+                          done: question.status === 'completed',
+                          running: question.status === 'running',
+                          failed: question.status === 'failed',
+                          stopped: question.status === 'cancelled',
+                        }"
+                      >
+                        <div class="tree-q-status">
+                          <CheckCircle2 v-if="question.status === 'completed'" :size="11" />
+                          <Zap v-else-if="question.status === 'running'" :size="11" class="spin" />
+                          <CircleSlash v-else :size="11" />
+                        </div>
+                        <span class="tree-q-text">{{ question.question }}</span>
+                        <span
+                          class="tree-q-status-text"
+                          :class="{ error: question.status === 'failed' }"
+                        >
+                          {{ loopQuestionStatusText(question, t) }}
+                        </span>
+                        <QuestionExecution
+                          v-if="question.execution"
+                          class="loop-query-execution"
+                          :question="question"
+                          :scope="executionScope(group)"
+                        />
+                      </div>
+                    </div>
+
+                    <div
+                      v-if="
+                        activity.kind === 'dispatch' &&
+                        isLoopActivityExpanded(group.key, activity)
+                      "
+                      class="loop-dispatch-detail"
+                    >
+                      <div class="loop-detail-field">
+                        <span>{{ t("analysis.loopDispatchTopic") }}</span>
+                        <p>{{ activity.topic || "-" }}</p>
+                      </div>
+                      <div v-if="activity.workerSummary" class="loop-detail-field">
+                        <span>{{ t("analysis.loopDispatchSummary") }}</span>
+                        <div
+                          class="loop-worker-summary markdown-body"
+                          v-html="renderAgentMarkdown(activity.workerSummary)"
+                        ></div>
+                      </div>
+                      <button
+                        v-if="activity.status !== 'running' && task?.id"
+                        type="button"
+                        class="loop-trace-toggle"
+                        :aria-expanded="
+                          !!subagentTraceState(group.key, activity.activityId)?.expanded
+                        "
+                        :disabled="subagentTraceState(group.key, activity.activityId)?.loading"
+                        @click.stop="toggleSubagentTrace(group.key, activity.activityId)"
+                      >
+                        <Loader2
+                          v-if="subagentTraceState(group.key, activity.activityId)?.loading"
+                          class="spin"
+                          :size="13"
+                        />
+                        <ChevronDown
+                          v-else-if="subagentTraceState(group.key, activity.activityId)?.expanded"
+                          :size="13"
+                        />
+                        <ChevronRight v-else :size="13" />
+                        {{
+                          subagentTraceState(group.key, activity.activityId)?.expanded
+                            ? t("common.collapse")
+                            : t("common.view")
+                        }}
+                        {{ t("analysis.loopWorkerTrace") }}
+                      </button>
+                      <div
+                        v-if="subagentTraceState(group.key, activity.activityId)?.expanded"
+                        class="message-trace-list"
+                      >
+                        <div
+                          v-if="subagentTraceState(group.key, activity.activityId)?.error"
+                          class="loop-trace-error"
+                        >
+                          {{ t("analysis.loopWorkerTraceLoadFailed") }}
+                        </div>
+                        <div
+                          v-else-if="
+                            subagentTraceState(group.key, activity.activityId)?.trace?.error
+                          "
+                          class="loop-trace-error"
+                        >
+                          {{ subagentTraceState(group.key, activity.activityId)?.trace?.error }}
+                        </div>
+                        <div
+                          v-else-if="
+                            !subagentTraceState(group.key, activity.activityId)?.loading &&
+                            !subagentTraceState(group.key, activity.activityId)?.trace?.messages
+                              .length
+                          "
+                          class="loop-trace-empty"
+                        >
+                          {{ t("common.noData") }}
+                        </div>
+                        <AgentMessageTrace
+                          v-if="
+                            subagentTraceState(group.key, activity.activityId)?.trace?.messages
+                              .length
+                          "
+                          :messages="
+                            subagentTraceState(group.key, activity.activityId)?.trace?.messages ||
+                            []
+                          "
+                          variant="worker"
+                        />
+                      </div>
+                    </div>
+                  </template>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Step cards (Dimension orchestration: preserved as baseline) -->
+          <div v-if="showStepCards(group.payload)" class="analysis-steps">
+            <div v-for="(step, i) in analysisSteps(group.payload)" :key="i" class="step-card">
+              <div class="step-card-header">
+                <div class="step-icon" :class="step.status">
+                  <CheckCircle2 v-if="step.status === 'done'" :size="12" />
+                  <Zap v-else-if="step.status === 'active'" :size="12" />
+                  <CircleSlash v-else-if="step.status === 'stopped'" :size="12" />
+                  <Clock v-else :size="12" />
+                </div>
+                <span class="step-name" :class="step.status">
+                  {{ step.name }}
+                  <template v-if="step.status === 'done'">— {{ t("analysis.completed") }}</template>
+                  <template v-if="step.status === 'active'">
+                    — {{ t("common.inProgress") }}
+                  </template>
+                  <template v-if="step.status === 'stopped'">
+                    — {{ t("analysis.analysisStopped") }}
+                  </template>
+                </span>
+              </div>
+              <div class="step-detail">{{ step.detail }}</div>
+            </div>
+
+            <!-- Keep the original compact progress list while analysis is running. -->
+            <div
+              v-if="thinkingTree(group.payload).length > 0 && !hasCompletedAnalysis(group.payload)"
+              class="thinking-tree"
+            >
+              <div
+                v-for="(dim, di) in thinkingTree(group.payload)"
+                :key="dim.dimensionId || di"
+                class="tree-dimension"
+              >
+                <div class="tree-dim-header">
+                  <div
+                    class="tree-dim-icon"
+                    :class="{
+                      done: dim.status === 'completed',
+                      running: dim.status === 'running',
+                      stopped: dim.status === 'stopped',
+                    }"
+                  >
+                    <CheckCircle2 v-if="dim.status === 'completed'" :size="12" />
+                    <Zap v-else-if="dim.status === 'running'" :size="12" />
+                    <CircleSlash v-else-if="dim.status === 'stopped'" :size="12" />
+                    <Clock v-else :size="12" />
+                  </div>
+                  <span class="tree-dim-name">{{ di + 1 }}. {{ dim.dimName }}</span>
+                </div>
+                <div v-if="dim.reason" class="tree-dim-reason">{{ dim.reason }}</div>
+                <div v-if="dim.questions?.length" class="tree-questions">
+                  <div
+                    v-for="(q, qi) in dim.questions"
+                    :key="q.id || qi"
+                    class="tree-question"
+                    :class="{
+                      done: q.status === 'completed',
+                      running: q.status === 'running',
+                      failed: q.status === 'failed',
+                      stopped: q.status === 'stopped',
+                    }"
+                  >
+                    <div class="tree-q-status">
+                      <CheckCircle2 v-if="q.status === 'completed'" :size="10" />
+                      <Zap v-else-if="q.status === 'running'" :size="10" class="spin" />
+                      <CircleSlash v-else-if="q.status === 'stopped'" :size="10" />
+                      <Clock v-else :size="10" />
+                    </div>
+                    <span class="tree-q-text">{{ q.text }}</span>
+                    <span
+                      v-if="q.statusText"
+                      class="tree-q-status-text"
+                      :class="{ error: q.status === 'failed' }"
+                    >
+                      {{ q.statusText }}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <DeepAnalysisResult
+              v-if="thinkingTree(group.payload).length > 0 && hasCompletedAnalysis(group.payload)"
+              :key="task?.id || streamingSnapshot?.runId || 'analysis'"
+              class="chat-provenance-result"
+              :activities="loopActivities(group.payload)"
+              :run-state="group.payload?.runState"
+              :archived="!group.streaming"
+              :compact="true"
+              :execution-scope="executionScope(group)"
+            />
+          </div>
+
+          <div v-if="groupAnswer(group)" class="chat-msg assistant">
+            <div class="chat-bubble assistant">
+              <div class="markdown-body" v-html="renderMarkdown(groupAnswer(group))"></div>
+            </div>
+          </div>
+
+          <!-- This turn's public messages and tool results: only show egress-filtered messages, with expansion state independent per turn -->
+          <div v-if="group.trace.length" class="message-trace-list">
+            <button
+              type="button"
+              class="loop-trace-toggle"
+              :aria-expanded="!!expandedTurnTraces[group.key]"
+              @click="toggleTurnTrace(group.key)"
+            >
+              <ChevronDown v-if="expandedTurnTraces[group.key]" :size="13" />
+              <ChevronRight v-else :size="13" />
+              {{ t("harness.messagesAndTools") }}
+            </button>
+            <AgentMessageTrace
+              v-if="expandedTurnTraces[group.key]"
+              :messages="group.trace"
+              variant="turn"
+            />
           </div>
 
           <!-- Follow-up turn streaming tail: show the typing cursor while the body is still growing -->
@@ -317,55 +865,54 @@ function toggleTurnTrace(key: string) {
             </div>
           </div>
 
-          <div
-            v-if="outcome"
-            class="turn-outcome"
-            :class="`tone-${outcome.tone}`"
-            :role="outcome.tone === 'failed' ? 'alert' : undefined"
-          >
-            <component
-              :is="OUTCOME_ICONS[outcome.tone]"
-              class="outcome-icon"
-              :size="15"
-              aria-hidden="true"
-            />
-            <span class="outcome-text">
-              {{ outcome.text }}
-              <span v-if="outcome.error" class="outcome-error">{{ outcome.error }}</span>
-            </span>
-            <button
-              v-if="outcome.report"
-              type="button"
-              class="outcome-action"
-              @click="emit('openReport')"
-            >
-              <FileText :size="14" aria-hidden="true" />
-              {{ t("analysis.viewReport") }}
-            </button>
+          <!-- Completed notice: only prompt once after the last turn of a report run closes with a report artifact -->
+          <div v-if="showCompletedNotice(group, gi)" class="chat-msg system">
+            <div class="chat-bubble system completed-notice">
+              <div class="completed-icon-wrapper">
+                <CheckCircle2 :size="16" />
+              </div>
+              <span>
+                {{ t("analysis.analysisDoneHint") }}
+              </span>
+            </div>
           </div>
 
-          <!-- Secondary tools of this turn: its raw public messages and tool results, and the diagnosis entry -->
-          <div v-if="group.trace.length || group.assistant?.snapshot" class="turn-tools">
-            <button
-              v-if="group.trace.length"
-              type="button"
-              class="turn-trace-toggle"
-              :aria-expanded="!!expandedTurnTraces[key]"
-              @click="toggleTurnTrace(key)"
-            >
-              <ChevronDown v-if="expandedTurnTraces[key]" :size="13" />
-              <ChevronRight v-else :size="13" />
-              {{ t("harness.messagesAndTools") }}
-            </button>
-            <TurnDiagnoseButton
-              v-if="group.assistant?.snapshot"
-              class="ui-icon-btn turn-diagnose-btn"
-              :turn="group.assistant.snapshot"
-            />
+          <!-- Stopped notice -->
+          <div v-if="showStoppedNotice(group, gi)" class="chat-msg system">
+            <div class="chat-bubble system stopped-notice">
+              <div class="stopped-icon-wrapper">
+                <CircleSlash :size="16" />
+              </div>
+              <span>
+                {{ t("analysis.analysisStoppedHint") }}
+                <template v-if="isLoopMode(group.payload) && group.payload?.runState.error">
+                  · {{ group.payload.runState.error }}
+                </template>
+              </span>
+            </div>
           </div>
-          <div v-if="group.trace.length && expandedTurnTraces[key]" class="turn-trace">
-            <AgentMessageTrace :messages="group.trace" variant="turn" />
+
+          <!-- Failed notice for loop turns -->
+          <div v-if="showFailedNotice(group)" class="chat-msg system" role="alert">
+            <div class="chat-bubble system failed-notice">
+              <div class="failed-icon-wrapper">
+                <CircleSlash :size="16" />
+              </div>
+              <span>
+                {{ t("analysis.analysisFailed") }}
+                <template v-if="group.payload?.runState.error">
+                  · {{ group.payload.runState.error }}
+                </template>
+              </span>
+            </div>
           </div>
+
+          <!-- Diagnosis entry: a secondary tool after the turn and its closing notice, bound to this turn -->
+          <TurnDiagnoseButton
+            v-if="group.assistant?.snapshot"
+            class="ui-icon-btn turn-diagnose-btn"
+            :turn="group.assistant.snapshot"
+          />
         </template>
 
         <!-- Scheduled task notice -->
@@ -373,14 +920,18 @@ function toggleTurnTrace(key: string) {
           v-if="
             messages.length === 0 && !isLoading && !streamingSnapshot && task?.status === 'pending'
           "
-          class="scheduled-notice"
+          class="chat-msg system"
         >
-          <Clock :size="15" class="outcome-icon" aria-hidden="true" />
-          <span>
-            {{ t("analysis.scheduledTaskHint") }}
-            <br />
-            {{ t("analysis.scheduledLastResult") }}
-          </span>
+          <div class="chat-bubble system scheduled-notice">
+            <div class="scheduled-icon-wrapper">
+              <Clock :size="16" />
+            </div>
+            <span>
+              {{ t("analysis.scheduledTaskHint") }}
+              <br />
+              {{ t("analysis.scheduledLastResult") }}
+            </span>
+          </div>
         </div>
       </div>
     </div>
@@ -418,6 +969,17 @@ function toggleTurnTrace(key: string) {
   padding: 20px 24px 0;
 }
 
+.turn-diagnose-btn {
+  display: flex;
+  margin: -6px 0 16px;
+  border-radius: 10px;
+}
+
+.turn-diagnose-btn:hover {
+  background: var(--el-fill-color-light);
+  color: var(--el-text-color-primary);
+}
+
 .chat-msg {
   margin-bottom: 16px;
   animation: fadeIn 0.3s ease;
@@ -431,12 +993,6 @@ function toggleTurnTrace(key: string) {
   to {
     opacity: 1;
     transform: translateY(0);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .chat-msg {
-    animation: none;
   }
 }
 
@@ -487,26 +1043,778 @@ function toggleTurnTrace(key: string) {
   cursor: default;
 }
 
+.chat-msg.system {
+  display: flex;
+  justify-content: flex-start;
+}
+
 .chat-bubble {
   max-width: 85%;
   padding: 12px 16px;
-  border-radius: 12px;
+  border-radius: 14px;
   font-size: 13px;
   line-height: 1.6;
+}
+
+.chat-bubble.system {
+  background: var(--el-bg-color);
+  color: var(--el-text-color-primary);
+  border: 1px solid var(--el-border-color);
+  border-radius: 18px;
+  box-shadow: var(--shadow-card);
 }
 
 .chat-bubble.user {
   background: var(--el-color-primary);
   color: var(--on-primary);
-  border-radius: 12px 12px 4px 12px;
+  border-radius: 14px 14px 4px 14px;
+}
+
+.streaming-text,
+.summary-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Step Cards */
+.analysis-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.step-card {
+  background: var(--el-bg-color);
+  border-radius: 18px;
+  padding: 14px 16px;
+  border: 1px solid var(--el-border-color);
+  box-shadow: var(--shadow-card);
+  transition: all 0.3s ease;
+}
+
+.step-card:hover {
+  border-color: var(--el-border-color-dark);
+  box-shadow: var(--shadow-card-hover);
+}
+
+.step-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.step-icon {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.step-icon.done {
+  background: var(--el-color-success-light-9);
+  color: var(--el-color-success);
+}
+
+.step-icon.active {
+  background: var(--el-color-primary-light-9);
+  color: var(--el-color-primary);
+  animation: breathe 2s ease-in-out infinite;
+}
+
+.step-icon.pending {
+  background: var(--el-fill-color);
+  color: var(--el-text-color-secondary);
+}
+.step-icon.stopped {
+  background: var(--el-color-warning-light-9);
+  color: var(--el-color-warning);
+}
+.step-icon.failed {
+  background: var(--el-color-danger-light-9);
+  color: var(--el-color-danger);
+}
+
+@keyframes breathe {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+.step-name {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.step-name.done {
+  color: var(--el-color-success);
+}
+
+.step-name.active {
+  color: var(--el-color-primary);
+}
+
+.step-name.pending {
+  color: var(--el-text-color-secondary);
+}
+.step-name.stopped {
+  color: var(--el-color-warning);
+}
+.step-name.failed {
+  color: var(--el-color-danger);
+}
+
+.step-detail {
+  font-size: 12px;
+  color: var(--el-text-color-regular);
+  line-height: 1.6;
+  padding-left: 30px;
+}
+
+/* Loop Trajectory Panel: unified card container with chronological L1 stream */
+.loop-trajectory-panel {
+  gap: 0;
+  background: var(--el-bg-color);
+  border: 1px solid var(--el-border-color);
+  border-radius: 18px;
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+}
+
+.loop-panel-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 12px;
+  padding: 12px 16px;
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--el-color-primary) 4%, transparent) 0%,
+    transparent 100%
+  );
+  border-bottom: 1px solid var(--el-border-color-lighter);
+}
+
+.loop-header-main {
+  margin-bottom: 0;
+}
+
+.loop-status-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.loop-status-pill.active {
+  background: var(--el-color-primary-light-9);
+  color: var(--el-color-primary);
+}
+
+.loop-status-pill.done {
+  background: var(--el-color-success-light-9);
+  color: var(--el-color-success);
+}
+
+.loop-status-pill.stopped {
+  background: var(--el-color-warning-light-9);
+  color: var(--el-color-warning);
+}
+
+.loop-status-pill.failed {
+  background: var(--el-color-danger-light-9);
+  color: var(--el-color-danger);
+}
+
+.loop-header-detail {
+  padding-left: 0;
+  color: var(--el-text-color-secondary);
+}
+
+.loop-timeline {
+  display: flex;
+  flex-direction: column;
+  padding: 14px 16px;
+}
+
+.loop-timeline-item {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding-bottom: 14px;
+  min-width: 0;
+}
+
+.loop-timeline-item:last-child {
+  padding-bottom: 0;
+}
+
+.loop-timeline-item:not(:last-child)::before {
+  content: "";
+  position: absolute;
+  left: 9px;
+  top: 22px;
+  bottom: 0;
+  width: 2px;
+  background: var(--el-border-color-lighter);
+}
+
+.loop-rail {
+  width: 20px;
+  display: flex;
+  justify-content: center;
+  flex-shrink: 0;
+  position: relative;
+  z-index: 1;
+}
+
+.loop-narrative-dot {
+  width: 8px;
+  height: 8px;
+  margin-top: 7px;
+  border-radius: 50%;
+  background: var(--el-color-primary-light-3);
+  box-shadow: 0 0 0 3px var(--el-color-primary-light-9);
+}
+
+.loop-narrative-dot.running {
+  background: var(--el-color-primary);
+  animation: breathe 1.6s ease-in-out infinite;
+}
+
+.loop-item-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.loop-step-title {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.loop-step-state {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--el-text-color-secondary);
+  flex-shrink: 0;
+}
+
+.loop-step-state.running {
+  color: var(--el-color-primary);
+}
+
+.loop-step-state.failed {
+  color: var(--el-color-danger);
+}
+
+.loop-step-state.cancelled {
+  color: var(--el-color-warning);
+}
+
+.loop-step-detail {
+  padding-left: 0;
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--el-text-color-secondary);
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.loop-step-detail.is-tool-meta {
+  margin-top: 6px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--el-border-color-lighter);
+  background: var(--el-fill-color-extra-light);
+  color: var(--el-text-color-regular);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 11.5px;
+  line-height: 1.55;
+}
+
+.loop-step-detail.is-error {
+  color: var(--el-color-danger);
+}
+
+.loop-narrative {
+  font-size: 13.5px;
+  line-height: 1.68;
+  color: var(--el-text-color-primary);
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.loop-narrative :deep(p) {
+  margin: 0 0 6px;
+}
+
+.loop-narrative :deep(p:last-child) {
+  margin-bottom: 0;
+}
+
+.loop-narrative :deep(ul),
+.loop-narrative :deep(ol) {
+  margin: 4px 0;
+  padding-left: 20px;
+}
+
+.loop-narrative :deep(code) {
+  background: var(--el-fill-color-light);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 12.5px;
+}
+
+.loop-narrative :deep(pre) {
+  background: var(--el-fill-color-light);
+  padding: 8px 12px;
+  border-radius: 8px;
+  overflow-x: auto;
+  font-size: 12px;
+  margin: 6px 0;
+}
+
+.loop-questions-box {
+  margin-top: 8px;
+  padding-left: 0;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--el-border-color-lighter);
+  background: var(--el-fill-color-extra-light);
+}
+
+.loop-question-row {
+  padding: 5px 6px;
+}
+
+.loop-worker-summary {
+  margin-top: 4px;
+  color: var(--el-text-color-regular);
+  font-size: 12.5px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.loop-worker-summary :deep(p) {
+  margin: 0 0 6px;
+}
+
+.loop-worker-summary :deep(p:last-child) {
+  margin-bottom: 0;
+}
+
+.loop-trajectory-panel .tree-q-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Thinking Tree */
+.thinking-tree {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.chat-provenance-result {
+  margin-bottom: 16px;
+}
+
+.chat-provenance-result :deep(.thinking-header) {
+  display: none;
+}
+
+.chat-provenance-result :deep(.thinking-tree) {
+  background: transparent;
+  border: none;
+}
+
+.chat-provenance-result :deep(.tree-container) {
+  gap: 10px;
+}
+
+.tree-dimension {
+  background: var(--el-bg-color);
+  border: 1px solid var(--el-border-color);
+  border-radius: 18px;
+  padding: 12px 14px;
+  box-shadow: var(--shadow-card);
+}
+
+.tree-dim-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.loop-activity-header {
+  width: 100%;
+  padding: 2px 4px;
+  margin-left: -4px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.loop-activity-header:hover:not(:disabled) {
+  background: var(--el-fill-color-light);
+}
+
+.loop-activity-header:disabled {
+  cursor: default;
+}
+
+.loop-activity-header:focus-visible,
+.loop-trace-toggle:focus-visible {
+  outline: 2px solid var(--el-color-primary-light-3);
+  outline-offset: 2px;
+}
+
+.loop-expand-icon {
+  flex-shrink: 0;
+  margin-left: auto;
+  color: var(--el-text-color-secondary);
+}
+
+.tree-dim-icon {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.tree-dim-icon.done {
+  background: var(--el-color-success-light-9);
+  color: var(--el-color-success);
+}
+.tree-dim-icon.running {
+  background: var(--el-color-primary-light-9);
+  color: var(--el-color-primary);
+}
+.tree-dim-icon.stopped {
+  background: var(--el-color-warning-light-9);
+  color: var(--el-color-warning);
+}
+.tree-dim-icon.failed {
+  background: var(--el-color-danger-light-9);
+  color: var(--el-color-danger);
+}
+.tree-dim-icon {
+  background: var(--el-fill-color);
+  color: var(--el-text-color-secondary);
+}
+
+.tree-dim-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+}
+
+.tree-dim-reason {
+  font-size: 11px;
+  color: var(--el-text-color-secondary);
+  margin-top: 4px;
+  padding-left: 28px;
+}
+
+.tree-questions {
+  margin-top: 8px;
+  padding-left: 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.tree-question {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.loop-query-execution {
+  flex-basis: 100%;
+  min-width: 0;
+  margin: 6px 0 2px;
+}
+
+.tree-q-status {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+}
+
+.tree-q-status :deep(svg) {
+  color: var(--el-text-color-secondary);
+}
+
+.tree-question.done .tree-q-status :deep(svg) {
+  color: var(--el-color-success);
+}
+.tree-question.running .tree-q-status :deep(svg) {
+  color: var(--el-color-primary);
+}
+.tree-question.failed .tree-q-status :deep(svg) {
+  color: var(--el-color-danger);
+}
+
+.tree-q-text {
+  color: var(--el-text-color-regular);
+  flex: 1;
+}
+
+.tree-question.done .tree-q-text {
+  color: var(--el-color-success);
+}
+.tree-question.running .tree-q-text {
+  color: var(--el-color-primary);
+  font-weight: 500;
+}
+.tree-question.failed .tree-q-text {
+  color: var(--el-color-danger);
+}
+.tree-question.stopped .tree-q-status :deep(svg) {
+  color: var(--el-color-warning);
+}
+.tree-question.stopped .tree-q-text {
+  color: var(--el-color-warning);
+}
+
+.tree-q-status-text {
+  font-size: 10px;
+  color: var(--el-text-color-secondary);
+}
+
+.tree-q-status-text.error {
+  color: var(--el-color-danger);
+}
+
+.loop-dispatch-detail {
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 10px;
+  background: var(--el-fill-color-extra-light);
+}
+
+.loop-detail-field + .loop-detail-field {
+  margin-top: 8px;
+}
+
+.loop-detail-field > span {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--el-text-color-secondary);
+}
+
+.loop-detail-field > p {
+  margin: 2px 0 0;
+  color: var(--el-text-color-regular);
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.loop-trace-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 32px;
+  margin-top: 8px;
+  padding: 4px 8px;
+  border: 1px solid var(--el-border-color);
+  border-radius: 7px;
+  background: var(--el-bg-color);
+  color: var(--el-color-primary);
+  font-size: 12px;
+  cursor: pointer;
+  transition:
+    border-color 0.2s ease,
+    background-color 0.2s ease;
+}
+
+.loop-trace-toggle:hover:not(:disabled) {
+  border-color: var(--el-color-primary-light-5);
+  background: var(--el-color-primary-light-9);
+}
+
+.loop-trace-toggle:disabled {
+  cursor: wait;
+  opacity: 0.72;
+}
+
+.message-trace-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.loop-trace-error,
+.loop-trace-empty {
+  padding: 8px;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
+
+.loop-trace-error {
+  color: var(--el-color-danger);
+}
+
+.spin {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Bar chart in step */
+.step-chart {
+  margin-top: 10px;
+  margin-left: 30px;
+  background: var(--el-bg-color);
+  border-radius: 10px;
+  padding: 12px 16px;
+  border: 1px solid var(--el-border-color);
+}
+
+.bar-chart {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-around;
+  height: 120px;
+  gap: 8px;
+}
+
+.bar-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+}
+
+.bar {
+  width: 100%;
+  max-width: 40px;
+  border-radius: 6px 6px 0 0;
+  transition: height 0.6s ease;
+  min-height: 4px;
+}
+
+.bar-label {
+  font-size: 9px;
+  color: var(--el-text-color-secondary);
+  font-weight: 500;
+}
+
+.bar-value {
+  font-size: 8px;
+  color: var(--el-text-color-secondary);
+}
+
+/* Completed, stopped, and failed notices */
+.completed-notice,
+.scheduled-notice,
+.stopped-notice,
+.failed-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.completed-icon-wrapper {
+  color: var(--el-color-success);
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.stopped-icon-wrapper {
+  color: var(--el-color-warning);
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.failed-icon-wrapper {
+  color: var(--el-color-danger);
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.scheduled-icon-wrapper {
+  color: var(--el-color-warning);
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.follow-up-section {
+  margin-top: 24px;
+}
+
+.follow-up-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
+
+.follow-up-divider::before,
+.follow-up-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--el-border-color-light);
+}
+
+.follow-up-pair {
+  margin-bottom: 16px;
+}
+
+.follow-up-pair .chat-bubble.user {
+  margin-bottom: 8px;
 }
 
 .chat-bubble.assistant {
   background: var(--el-bg-color);
   color: var(--el-text-color-primary);
-  border: 1px solid var(--el-border-color-lighter);
+  border: 1px solid var(--el-border-color);
+  border-radius: 12px;
+  padding: 12px 16px;
   font-size: 14px;
   line-height: 1.7;
+  max-width: 85%;
+  align-self: flex-start;
+  box-shadow: var(--shadow-card);
 }
 
 .chat-bubble.assistant :deep(.markdown-body) {
@@ -544,7 +1852,7 @@ function toggleTurnTrace(key: string) {
 }
 
 .chat-bubble.assistant.streaming {
-  border-color: var(--el-color-primary-light-5);
+  border-color: var(--el-color-primary-light-3);
 }
 
 .typing-cursor {
@@ -564,129 +1872,43 @@ function toggleTurnTrace(key: string) {
   }
 }
 
-/* How a turn ended: a quiet status line, not another bubble */
-.turn-outcome,
-.scheduled-notice {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-start;
-  gap: 4px 8px;
-  margin-bottom: 12px;
-  color: var(--el-text-color-regular);
-  font-size: 13px;
-  line-height: 1.6;
-}
-
-.outcome-icon {
-  flex-shrink: 0;
-  margin-top: 3px;
-}
-
-.turn-outcome.tone-completed .outcome-icon {
-  color: var(--el-color-success);
-}
-
-.turn-outcome.tone-failed .outcome-icon,
-.outcome-error {
-  color: var(--el-color-danger);
-}
-
-.turn-outcome.tone-cancelled .outcome-icon,
-.scheduled-notice .outcome-icon {
-  color: var(--el-color-warning);
-}
-
-.outcome-text {
-  flex: 1;
-  min-width: 0;
-  word-break: break-word;
-}
-
-.outcome-error {
-  display: block;
-  font-size: 12px;
-}
-
-.outcome-action {
+.streaming-dots {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  min-height: 28px;
-  padding: 2px 10px;
-  border: 1px solid var(--el-color-primary-light-5);
-  border-radius: 6px;
-  background: transparent;
-  color: var(--el-color-primary);
-  font-size: 12px;
-  cursor: pointer;
+  gap: 6px;
+  padding: 4px 0;
 }
 
-.outcome-action:hover {
-  background: var(--el-color-primary-light-9);
+.streaming-dots span {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--el-color-primary) 72%, white 28%);
+  opacity: 0.24;
+  animation: streaming-glow 1.2s ease-in-out infinite;
 }
 
-/* Secondary per-turn tools */
-.turn-tools {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  margin: -6px 0 16px;
+.streaming-dots span:nth-child(2) {
+  animation-delay: 0.18s;
 }
 
-.turn-trace-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  min-height: 28px;
-  padding: 2px 6px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--el-text-color-secondary);
-  font-size: 12px;
-  cursor: pointer;
+.streaming-dots span:nth-child(3) {
+  animation-delay: 0.36s;
 }
 
-.turn-trace-toggle:hover {
-  background: var(--el-fill-color-light);
-  color: var(--el-text-color-primary);
-}
-
-.turn-diagnose-btn {
-  display: flex;
-  border-radius: 6px;
-}
-
-.turn-diagnose-btn:hover {
-  background: var(--el-fill-color-light);
-  color: var(--el-text-color-primary);
-}
-
-.turn-trace-toggle:focus-visible,
-.outcome-action:focus-visible {
-  outline: 2px solid var(--el-color-primary-light-3);
-  outline-offset: 2px;
-}
-
-.turn-trace {
-  margin: -8px 0 16px;
-}
-
-.follow-up-divider {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin: 24px 0 16px;
-  color: var(--el-text-color-secondary);
-  font-size: 12px;
-}
-
-.follow-up-divider::before,
-.follow-up-divider::after {
-  content: "";
-  flex: 1;
-  height: 1px;
-  background: var(--el-border-color-light);
+@keyframes streaming-glow {
+  0%,
+  80%,
+  100% {
+    opacity: 0.24;
+    background: color-mix(in srgb, var(--el-color-primary) 68%, white 32%);
+    box-shadow: 0 0 0 rgba(37, 99, 235, 0);
+  }
+  40% {
+    opacity: 1;
+    background: var(--el-color-primary);
+    box-shadow: 0 0 10px rgba(37, 99, 235, 0.32);
+  }
 }
 
 .messages-scroll::-webkit-scrollbar {
@@ -705,7 +1927,6 @@ function toggleTurnTrace(key: string) {
 .messages-scroll::-webkit-scrollbar-thumb:hover {
   background: var(--el-text-color-secondary);
 }
-
 @media (max-width: 700px) {
   :where(html.workbench-mobile-navigation) .messages-inner {
     padding: 12px 10px 0;
@@ -718,6 +1939,23 @@ function toggleTurnTrace(key: string) {
   }
   :where(html.workbench-mobile-navigation) .chat-bubble {
     max-width: 94%;
+    padding: 10px 12px;
+  }
+  :where(html.workbench-mobile-navigation) .chat-bubble.system {
+    border-radius: 14px;
+  }
+  :where(html.workbench-mobile-navigation) .analysis-steps {
+    gap: 8px;
+  }
+  :where(html.workbench-mobile-navigation) .step-card {
+    padding: 12px;
+    border-radius: 14px;
+  }
+  :where(html.workbench-mobile-navigation) .loop-trajectory-panel {
+    border-radius: 14px;
+  }
+  :where(html.workbench-mobile-navigation) .loop-panel-header,
+  :where(html.workbench-mobile-navigation) .loop-timeline {
     padding: 10px 12px;
   }
   :where(html.workbench-mobile-navigation) .run-switcher-row {

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { nextTick } from "vue";
 import { flushPromises, mount } from "@vue/test-utils";
 import { createI18n } from "vue-i18n";
@@ -189,12 +189,6 @@ function render(diagnosisVisible = false) {
   });
 }
 
-/** Opens every collapsed work process, as a user reviewing finished turns would. */
-async function openProcesses(wrapper: ReturnType<typeof render>) {
-  for (const header of wrapper.findAll('.process-header[aria-expanded="false"]'))
-    await header.trigger("click");
-}
-
 function occurrences(text: string, value: string): number {
   return text.split(value).length - 1;
 }
@@ -224,23 +218,31 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
-// Public surface under test: first-turn layout; observable result: the request is followed by its work process and reply,
-// with no fixed acknowledgement standing in for the agent.
-it("follows the user's question with the turn's work process, without a fixed acknowledgement", () => {
+// Public surface under test: first-turn message layout; observable result: a report task shows the user question before the system acknowledgment, while a regular loop conversation omits report-only system bubbles.
+it("shows the user's question before the analysis acknowledgment for report tasks and omits it for regular loop sessions", () => {
   seed({
+    report: true,
     messages: [
       { id: 1, role: "user", content: "user-analysis-question" },
       answerMessage(2, "analysis-answer", "analysis-activity"),
     ],
   });
 
-  const wrapper = render();
-  const children = wrapper.find(".messages-inner").element.children;
-  expect(children[0].classList).toContain("user");
-  expect(children[0].textContent).toContain("user-analysis-question");
-  expect(children[1].classList).toContain("turn-process");
-  expect(children[2].textContent).toContain("analysis-answer");
-  expect(wrapper.text()).not.toContain("deep analysis");
+  const reportRows = render().findAll(".chat-msg");
+  expect(reportRows[0].classes()).toContain("user");
+  expect(reportRows[0].text()).toContain("user-analysis-question");
+  expect(reportRows[1].classes()).toContain("analysis-acknowledgment");
+
+  seed({
+    report: false,
+    messages: [
+      { id: 1, role: "user", content: "regular-question" },
+      answerMessage(2, "regular-answer", "regular-activity"),
+    ],
+  });
+  const regularWrapper = render();
+  expect(regularWrapper.find(".analysis-acknowledgment").exists()).toBe(false);
+  expect(regularWrapper.find(".completed-notice").exists()).toBe(false);
 });
 
 it("shows the run switcher below the user's question", () => {
@@ -260,11 +262,11 @@ it("shows the run switcher below the user's question", () => {
   const children = render().find(".messages-inner").element.children;
   expect(children[0].classList).toContain("user");
   expect(children[1].classList).toContain("run-switcher-row");
-  expect(children[2].classList).toContain("turn-process");
+  expect(children[2].classList).toContain("analysis-acknowledgment");
 });
 
-// Public surface under test: execution output consumed once per turn; observable result: both Q&A turns and both activities are present, with no repeated replies.
-it("renders every turn's question, activities and reply instead of only the last turn", async () => {
+// Public surface under test: execution output consumed once per turn; observable result: both Q&A turns and both activities are present in L1 by default, with no repeated replies.
+it("renders every turn's question, L1 activities and reply without collapsing completed loop trajectories", async () => {
   seed({
     messages: [
       { id: 1, role: "user", content: "first-question" },
@@ -294,42 +296,38 @@ it("renders every turn's question, activities and reply instead of only the last
     ],
   });
   const wrapper = render();
-  await openProcesses(wrapper);
   const text = wrapper.text();
 
   expect(text).toContain("first-question");
   expect(text).toContain("second-question");
   expect(text).toContain("first-round-writing");
   expect(text).toContain("second-round-writing");
-  // Once Node fills in question.execution in /turns, the existing QueryExecutionView picks up that execution fact on demand.
-  expect(wrapper.find("query-execution-view-stub").exists()).toBe(false);
-  for (const row of wrapper.findAll("button.process-row:not([disabled])")) await row.trigger("click");
-  await wrapper.find(".question-toggle").trigger("click");
+  // Once Node fills in question.execution in /turns, clicking the L1 evidence header mounts QueryExecutionView in L2.
+  for (const header of wrapper.findAll(".loop-activity-header")) await header.trigger("click");
   expect(wrapper.find("query-execution-view-stub").exists()).toBe(true);
   expect(occurrences(text, "first-answer")).toBe(1);
   expect(occurrences(text, "second-answer")).toBe(1);
 });
 
 // Public surface under test: partial body of a cancelled turn and the streaming tail; observable result: the partial body stays without duplication and the streaming turn renders normally.
-it("keeps a cancelled turn's partial answer while the next turn streams", async () => {
+it("keeps a cancelled turn's partial answer and stopped notice while the next turn streams", () => {
   seed({
     messages: [
       { id: 1, role: "user", content: "first-question" },
-      answerMessage(2, "completed-partial-answer", "completed-round-writing", { runState: runState("cancelled", 1) }),
+      answerMessage(2, "completed-partial-answer", "completed-round-writing", {
+        runState: runState("cancelled", 1),
+      }),
       { id: 3, role: "user", content: "second-question" },
     ],
     streamingSnapshot: streamingExecution([activity("in-progress-round-writing")]),
   });
   const wrapper = render();
-  // The running turn shows its work without being opened.
-  expect(wrapper.text()).toContain("in-progress-round-writing");
-  expect(wrapper.text()).toContain("Execution stopped");
-  await openProcesses(wrapper);
   const text = wrapper.text();
 
   expect(text).toContain("completed-partial-answer");
   expect(text).toContain("completed-round-writing");
   expect(text).toContain("in-progress-round-writing");
+  expect(wrapper.find(".stopped-notice").exists()).toBe(true);
   expect(occurrences(text, "completed-partial-answer")).toBe(1);
 });
 
@@ -430,9 +428,7 @@ it("does not leak partial report text from a cancelled run into chat", async () 
   await useAnalysisStore().selectRun(0);
   expect(getRunSnapshot).toHaveBeenCalledWith("task-1", "run-cancelled");
 
-  const wrapper = render();
-  await openProcesses(wrapper);
-  const text = wrapper.text();
+  const text = render().text();
   expect(text).toContain("pre-cancel-activity");
   expect(text).not.toContain("pre-cancel-partial-report");
 });
@@ -458,7 +454,7 @@ it("keeps each turn's messages and tool results inside its own expandable trace"
     ],
   });
   const wrapper = render();
-  const toggles = wrapper.findAll(".turn-trace-toggle");
+  const toggles = wrapper.findAll(".message-trace-list .loop-trace-toggle");
 
   expect(toggles).toHaveLength(2);
   expect(wrapper.text()).not.toContain("orders-result-A");
@@ -487,7 +483,7 @@ it("keeps each turn's messages and tool results inside its own expandable trace"
 
 // Public surface under test: a regular continuous session does not switch by run history; observable result: all turns and activities stay present,
 // the unfinished turn's streaming tail is still visible, and the "can continue" flag the store gives the input is true.
-it("keeps every turn visible for a regular conversation with run history", async () => {
+it("keeps every turn visible for a regular conversation with run history", () => {
   seed({
     messages: [
       { id: 1, role: "user", content: "first-question" },
@@ -505,7 +501,6 @@ it("keeps every turn visible for a regular conversation with run history", async
   });
   const store = useAnalysisStore();
   const wrapper = render();
-  await openProcesses(wrapper);
   const text = wrapper.text();
 
   expect(text).toContain("first-question");
@@ -523,7 +518,7 @@ it("keeps every turn visible for a regular conversation with run history", async
 });
 
 // Public surface under test: one report-task execution plus a standard follow-up; observable result: the report body stays in the report view and the follow-up renders as-is.
-it("keeps one execution block plus standard follow-up turns for a report task", async () => {
+it("keeps one execution block plus standard follow-up turns for a report task", () => {
   seed({
     report: true,
     messages: [
@@ -546,7 +541,6 @@ it("keeps one execution block plus standard follow-up turns for a report task", 
     ],
   });
   const wrapper = render();
-  await openProcesses(wrapper);
   const text = wrapper.text();
 
   expect(text).toContain("report-question");
@@ -557,272 +551,303 @@ it("keeps one execution block plus standard follow-up turns for a report task", 
   expect(text).not.toContain("report-body-ABC");
 });
 
-// The turn closes with how it ended; the turn's diagnosis entry follows as a secondary tool.
-it("ends a failed turn with its failure and reason, then this turn's diagnosis entry", () => {
-  const answer = answerMessage(2, "partial-answer", "closing-activity", {
-    runState: { ...runState("failed", 1), error: "model-timeout" },
+// The report turn closes with its completion notice when a report artifact exists; the turn's diagnosis entry follows as a secondary tool.
+it("ends a completed report turn with the completion notice, then this turn's diagnosis entry", () => {
+  const answer = answerMessage(2, "final-answer", "closing-activity", {
+    sections: [{ sectionId: "report", order: 0, revision: 1, markdown: "report-markdown", status: "success" }],
   });
   answer.snapshot = { ...answer.snapshot!, threadId: "thread-1", requestSeq: 4 };
-  seed({ messages: [{ id: 1, role: "user", content: "question" }, answer] });
+  seed({
+    report: true,
+    messages: [{ id: 1, role: "user", content: "question" }, answer],
+  });
 
-  const wrapper = render(true);
-  const outcome = wrapper.find(".turn-outcome");
-  expect(outcome.text()).toContain("Execution failed");
-  expect(outcome.text()).toContain("model-timeout");
-  const html = wrapper.html();
-  expect(html.indexOf("turn-diagnose-btn")).toBeGreaterThan(html.indexOf("turn-outcome"));
+  const html = render(true).html();
+  const notice = html.indexOf("completed-notice");
+  const diagnose = html.indexOf("turn-diagnose-btn");
+  expect(notice).toBeGreaterThan(-1);
+  expect(diagnose).toBeGreaterThan(notice);
 });
 
-// ---- Work process across the three agent combinations ----
+it("does not show the report completion notice for a loop report run without report sections, and shows failure notice before diagnosis on failure", () => {
+  const emptyReport = answerMessage(2, "", "loop-activity", { sections: [] });
+  emptyReport.snapshot = { ...emptyReport.snapshot!, threadId: "thread-1", requestSeq: 1 };
+  seed({
+    report: true,
+    messages: [{ id: 1, role: "user", content: "question" }, emptyReport],
+  });
+  expect(render(true).find(".completed-notice").exists()).toBe(false);
 
-type Combination = "regular-loop" | "report-loop" | "report-dimension";
-type RunStatus = AnalysisRunState["status"];
+  const failedTurn = answerMessage(2, "", "loop-activity", {
+    runState: { ...runState("failed", 1), error: "upstream-timeout" },
+  });
+  failedTurn.snapshot = { ...failedTurn.snapshot!, threadId: "thread-1", requestSeq: 2 };
+  seed({
+    report: false,
+    messages: [{ id: 1, role: "user", content: "question" }, failedTurn],
+  });
+  const wrapper = render(true);
+  expect(wrapper.find(".failed-notice").text()).toContain("Analysis Failed");
+  expect(wrapper.find(".failed-notice").text()).toContain("upstream-timeout");
+  const html = wrapper.html();
+  expect(html.indexOf("turn-diagnose-btn")).toBeGreaterThan(html.indexOf("failed-notice"));
+});
 
-function loopStep(patch: Partial<AnalysisActivity> & Pick<AnalysisActivity, "activityId" | "kind">): AnalysisActivity {
-  return { seq: 1, revision: 1, status: "completed", startedAt: 1, ...patch };
-}
+// Public surface under test: Q2 narrow narrative deduplication; observable result: only a finished regular turn's trailing narrative identical to finalAnswer is deduplicated, while middle narrations and differing texts are kept.
+it("deduplicates only a finished regular turn's trailing narrative when identical to finalAnswer, preserving middle narrations and differing texts", () => {
+  const originalActivities: AnalysisActivity[] = [
+    {
+      activityId: "narr-middle",
+      seq: 1,
+      revision: 1,
+      kind: "narrative",
+      status: "completed",
+      startedAt: 1,
+      narrative: "middle-narration-text",
+    },
+    {
+      activityId: "probe-1",
+      seq: 2,
+      revision: 1,
+      kind: "probe",
+      status: "completed",
+      startedAt: 2,
+      probeTool: "probe_class_data",
+      probeArguments: { className: "Orders" },
+    },
+    {
+      activityId: "narr-final",
+      seq: 3,
+      revision: 1,
+      kind: "narrative",
+      status: "completed",
+      startedAt: 3,
+      narrative: "identical-final-answer",
+    },
+  ];
+  const turnSame = answerMessage(2, "identical-final-answer", "unused", {
+    activities: originalActivities,
+    finalAnswer: "identical-final-answer",
+  });
+  const turnDiff = answerMessage(4, "distinct-final-answer", "distinct-trailing-narrative");
 
-function dimensionActivities(): AnalysisActivity[] {
-  return [
-    loopStep({
-      activityId: "plan",
+  seed({
+    report: false,
+    messages: [
+      { id: 1, role: "user", content: "q1" },
+      turnSame,
+      { id: 3, role: "user", content: "q2" },
+      turnDiff,
+    ],
+  });
+
+  const wrapper = render();
+  const text = wrapper.text();
+
+  // Middle narration and probe summary are preserved; trailing duplicate narrative is carried once by the assistant bubble.
+  expect(text).toContain("middle-narration-text");
+  expect(text).toContain("probe_class_data");
+  expect(text).toContain('{"className":"Orders"}');
+  expect(occurrences(text, "identical-final-answer")).toBe(1);
+  // Underlying payload activities are not mutated.
+  expect(turnSame.snapshot?.deepAnalysis?.activities).toHaveLength(3);
+
+  // Differing trailing narrative and finalAnswer are both kept.
+  expect(text).toContain("distinct-trailing-narrative");
+  expect(occurrences(text, "distinct-final-answer")).toBe(1);
+});
+
+it("renders loop narrative and workerSummary as safe Markdown without executing raw HTML and keeps L1 tool summaries visible", async () => {
+  seed({
+    report: false,
+    messages: [
+      { id: 1, role: "user", content: "question" },
+      answerMessage(2, "final-reply", "unused", {
+        activities: [
+          {
+            activityId: "narr-md",
+            seq: 1,
+            revision: 1,
+            kind: "narrative",
+            status: "completed",
+            startedAt: 1,
+            narrative: "**Bold narrative** with <img src=x onerror=alert(1)>",
+          },
+          {
+            activityId: "ext-mcp",
+            seq: 2,
+            revision: 1,
+            kind: "external_tool",
+            status: "failed",
+            startedAt: 2,
+            serviceName: "erp-service",
+            toolName: "sync_order",
+            error: "mcp-connection-reset",
+          },
+          {
+            activityId: "disp-md",
+            seq: 3,
+            revision: 1,
+            kind: "dispatch",
+            status: "completed",
+            startedAt: 3,
+            topic: "check-channel",
+            workerSummary: "**Worker bold** with <img src=x onerror=alert(2)>",
+          },
+        ],
+      }),
+    ],
+  });
+
+  const wrapper = render();
+  expect(wrapper.find(".loop-narrative strong").text()).toBe("Bold narrative");
+  expect(wrapper.find(".loop-narrative img").exists()).toBe(false);
+  expect(wrapper.text()).toContain("erp-service");
+  expect(wrapper.text()).toContain("sync_order");
+  expect(wrapper.text()).toContain("mcp-connection-reset");
+
+  await wrapper.find(".loop-activity-header:not([disabled])").trigger("click");
+  expect(wrapper.find(".loop-worker-summary strong").text()).toBe("Worker bold");
+  expect(wrapper.find(".loop-worker-summary img").exists()).toBe(false);
+});
+
+// Public surface under test: dimension orchestration baseline structure; observable result: running shows 4 step cards + compact thinking-tree, completed shows 4 step cards + DeepAnalysisResult compact.
+it("preserves the baseline dimension orchestration structure for running and completed runs", async () => {
+  const dimActivities: AnalysisActivity[] = [
+    {
+      activityId: "plan-1",
+      seq: 1,
+      revision: 1,
       kind: "plan",
+      status: "completed",
+      startedAt: 1,
       dimensions: [
         {
           dimensionId: "d1",
-          name: "region-dimension",
-          questions: [
-            { questionId: "q1", question: "region-sales" },
-            { questionId: "q2", question: "region-growth" },
-          ],
-        },
-        {
-          dimensionId: "d2",
-          name: "channel-dimension",
-          questions: [{ questionId: "q3", question: "channel-share" }],
+          name: "Regional Sales",
+          reason: "Check regional breakdown",
+          questions: [{ questionId: "q1", question: "East region sales?" }],
         },
       ],
-    }),
-    loopStep({
-      activityId: "evidence:d1",
+    },
+    {
+      activityId: "ev-d1",
+      seq: 2,
+      revision: 1,
       kind: "evidence",
       groupId: "d1",
       status: "running",
-      questions: [
-        { questionId: "q1", question: "region-sales", status: "completed", dataCount: 3 },
-        { questionId: "q2", question: "region-growth", status: "running" },
-      ],
-    }),
-  ];
-}
-
-function payloadFor(
-  combination: Combination,
-  status: RunStatus,
-  patch: Partial<DeepAnalysisTaskPayload> = {}
-): DeepAnalysisTaskPayload {
-  const dimension = combination === "report-dimension";
-  return {
-    executionMode: dimension ? "dimension" : "loop",
-    runState: { ...runState(status, 1), error: status === "failed" ? "upstream-error" : undefined },
-    activities: dimension ? dimensionActivities() : [activity("loop-narrative")],
-    // Completed runs carry a report body, so only the delivery mode decides whether it is offered.
-    sections:
-      status === "completed"
-        ? [{ sectionId: "s1", order: 0, revision: 1, markdown: "report-body", status: "success" }]
-        : [],
-    charts: [],
-    chartDiagnostics: [],
-    ...patch,
-  };
-}
-
-function executionTurn(id: number, payload: DeepAnalysisTaskPayload, requestSeq?: number): Message {
-  return {
-    id,
-    role: "assistant",
-    content: "",
-    snapshot: {
-      mode: "deep-analysis",
-      status: "completed",
-      source: "history",
-      primaryText: "",
-      requestSeq,
-      deepAnalysis: payload,
+      startedAt: 2,
+      questions: [{ questionId: "q1", question: "East region sales?", status: "running" }],
     },
-  };
-}
+  ];
 
-function seedTurn(combination: Combination, payload: DeepAnalysisTaskPayload) {
-  const running = payload.runState.status === "running";
   seed({
-    report: combination !== "regular-loop",
-    messages: [
-      { id: 1, role: "user", content: "question" },
-      ...(running ? [] : [executionTurn(2, payload)]),
-    ],
-    streamingSnapshot: running
-      ? { mode: "deep-analysis", status: "streaming", source: "live", primaryText: "", deepAnalysis: payload }
-      : null,
+    report: true,
+    messages: [{ id: 1, role: "user", content: "dimension-topic" }],
+    streamingSnapshot: {
+      mode: "deep-analysis",
+      status: "streaming",
+      source: "live",
+      primaryText: "",
+      deepAnalysis: {
+        executionMode: "dimension",
+        runState: { status: "running", revision: 1, progress: { done: 20, total: 100, label: "Collecting metrics" } },
+        activities: dimActivities,
+        sections: [],
+        charts: [],
+        chartDiagnostics: [],
+      },
+    },
   });
-}
 
-const STATE_TEXT: Record<RunStatus, string> = {
-  running: "In progress",
-  completed: "Completed",
-  failed: "Failed",
-  cancelled: "Stopped",
-};
-
-describe.each<Combination>(["regular-loop", "report-loop", "report-dimension"])(
-  "%s turn",
-  (combination) => {
-    it.each<RunStatus>(["running", "completed", "failed", "cancelled"])(
-      "shows a %s run with its own state and ending",
-      (status) => {
-        seedTurn(combination, payloadFor(combination, status));
-        const wrapper = render();
-
-        expect(wrapper.find(".process-state").text()).toBe(STATE_TEXT[status]);
-        // Only a completed run carries a success mark.
-        expect(wrapper.find(".process-header .tone-icon.tone-completed").exists()).toBe(
-          status === "completed"
-        );
-        const outcome = wrapper.find(".turn-outcome");
-        if (status === "failed") {
-          expect(outcome.text()).toContain("Execution failed");
-          expect(outcome.text()).toContain("upstream-error");
-        } else if (status === "cancelled") {
-          expect(outcome.text()).toContain("Execution stopped");
-        } else if (status === "completed" && combination !== "regular-loop") {
-          expect(outcome.find(".outcome-action").text()).toBe("View report");
-        } else {
-          expect(outcome.exists()).toBe(false);
-        }
-        expect(wrapper.find(".outcome-action").exists()).toBe(
-          status === "completed" && combination !== "regular-loop"
-        );
-      }
-    );
-  }
-);
-
-it("offers the report only when the report view has content, and asks the host to open it", async () => {
-  seedTurn("report-loop", payloadFor("report-loop", "completed", { sections: [] }));
-  expect(render().find(".turn-outcome").exists()).toBe(false);
-
-  seedTurn("report-loop", payloadFor("report-loop", "completed"));
   const wrapper = render();
-  await wrapper.find(".outcome-action").trigger("click");
-  expect(wrapper.emitted("openReport")).toHaveLength(1);
-});
+  expect(wrapper.findAll(".step-card")).toHaveLength(4);
+  expect(wrapper.find(".thinking-tree .tree-dimension").text()).toContain("1. Regional Sales");
+  expect(wrapper.find("deep-analysis-result-stub").exists()).toBe(false);
 
-it("keeps a completed run successful while counting and explaining its failed parts", async () => {
-  seedTurn(
-    "regular-loop",
-    payloadFor("regular-loop", "completed", {
-      activities: [
-        loopStep({
-          activityId: "evidence",
-          kind: "evidence",
-          questions: [
-            { questionId: "q-ok", question: "orders", status: "completed", dataCount: 2 },
-            { questionId: "q-bad", question: "refunds", status: "failed", error: "column-missing" },
-          ],
-        }),
-        loopStep({ activityId: "chart", kind: "chart", status: "failed", error: "render-failed" }),
-      ],
-    })
-  );
-  const wrapper = render();
-  const header = wrapper.find(".process-header");
-
-  expect(wrapper.find(".process-state").text()).toBe("Completed");
-  expect(header.text()).toContain("Failed queries: 1");
-  expect(header.text()).toContain("Failed activities: 1");
-  expect(wrapper.find(".turn-outcome").exists()).toBe(false);
-
-  await header.trigger("click");
-  expect(wrapper.text()).toContain("render-failed");
-  await wrapper.find("button.process-row:not([disabled])").trigger("click");
-  expect(wrapper.text()).toContain("column-missing");
-});
-
-it("keeps the user's dimension expansion when the run completes", async () => {
-  const running = payloadFor("report-dimension", "running");
-  seedTurn("report-dimension", running);
-  const wrapper = render();
-
-  // The running dimension is open by default; the pending one is opened by the user.
-  expect(wrapper.text()).toContain("region-growth");
-  expect(wrapper.text()).not.toContain("channel-share");
-  const channel = wrapper.findAll(".dimension-row")[1];
-  await channel.trigger("click");
-  expect(wrapper.text()).toContain("channel-share");
-
+  // Transition to completed: mounts DeepAnalysisResult with compact=true and shows completed-notice.
   const session = useAnalysisStore().sessions["task-1"];
   session.streamingSnapshot = null;
   session.messages = [
-    ...session.messages,
-    executionTurn(2, { ...payloadFor("report-dimension", "completed"), activities: running.activities }),
+    { id: 1, role: "user", content: "dimension-topic" },
+    {
+      id: 2,
+      role: "assistant",
+      content: "",
+      snapshot: {
+        mode: "deep-analysis",
+        status: "completed",
+        source: "history",
+        primaryText: "",
+        deepAnalysis: {
+          executionMode: "dimension",
+          runState: { status: "completed", revision: 2, progress: { done: 100, total: 100, label: "" } },
+          activities: dimActivities,
+          sections: [{ sectionId: "summary", order: 0, revision: 1, markdown: "summary", status: "success" }],
+          charts: [],
+          chartDiagnostics: [],
+        },
+      },
+    },
   ];
   await nextTick();
 
-  expect(wrapper.find(".process-state").text()).toBe("Completed");
-  expect(wrapper.find(".process-header").attributes("aria-expanded")).toBe("true");
-  expect(wrapper.text()).toContain("channel-share");
+  expect(wrapper.findAll(".step-card")).toHaveLength(4);
+  expect(wrapper.find("deep-analysis-result-stub").exists()).toBe(true);
+  expect(wrapper.find(".completed-notice").exists()).toBe(true);
 });
 
-it("keeps raw tool facts out of the first level and shows them on demand", async () => {
-  seedTurn(
-    "regular-loop",
-    payloadFor("regular-loop", "running", {
-      activities: [
-        loopStep({
-          activityId: "probe",
-          kind: "probe",
-          probeTool: "probe_class_data",
-          probeArguments: { className: "OrdersClass" },
-        }),
-      ],
-    })
-  );
-  const wrapper = render();
-
-  expect(wrapper.text()).toContain("Data Probe");
-  expect(wrapper.text()).not.toContain("probe_class_data");
-  expect(wrapper.text()).not.toContain("OrdersClass");
-  await wrapper.find("button.process-row").trigger("click");
-  expect(wrapper.text()).toContain("probe_class_data");
-  expect(wrapper.find(".detail-field pre").text()).toContain('"className": "OrdersClass"');
-});
-
-it("reads a regular turn's deferred query facts from that turn's own request", async () => {
+it("reads a regular turn's deferred query facts from that turn's own requestSeq", async () => {
   const deferredTurn = (question: string) =>
-    payloadFor("regular-loop", "completed", {
-      activities: [
-        loopStep({
-          activityId: `evidence-${question}`,
-          kind: "evidence",
-          questions: [
-            { questionId: question, question, status: "completed", execution: {}, executionDeferred: true },
-          ],
-        }),
-      ],
-    });
+    execution([
+      {
+        activityId: `evidence-${question}`,
+        seq: 1,
+        revision: 1,
+        kind: "evidence",
+        status: "completed",
+        startedAt: 1,
+        questions: [
+          { questionId: question, question, status: "completed", execution: {}, executionDeferred: true },
+        ],
+      },
+    ]);
   seed({
     messages: [
       { id: 1, role: "user", content: "first" },
-      executionTurn(2, deferredTurn("q-first"), 3),
+      {
+        id: 2,
+        role: "assistant",
+        content: "a1",
+        snapshot: {
+          mode: "deep-analysis",
+          status: "completed",
+          source: "history",
+          primaryText: "a1",
+          requestSeq: 3,
+          deepAnalysis: deferredTurn("q-first"),
+        },
+      },
       { id: 3, role: "user", content: "second" },
-      executionTurn(4, deferredTurn("q-second"), 5),
+      {
+        id: 4,
+        role: "assistant",
+        content: "a2",
+        snapshot: {
+          mode: "deep-analysis",
+          status: "completed",
+          source: "history",
+          primaryText: "a2",
+          requestSeq: 5,
+          deepAnalysis: deferredTurn("q-second"),
+        },
+      },
     ],
   });
   const wrapper = render();
-  await openProcesses(wrapper);
-  const rows = wrapper.findAll("button.process-row:not([disabled])");
-  await rows[1].trigger("click");
-  await wrapper.find(".question-toggle").trigger("click");
+  const headers = wrapper.findAll(".loop-activity-header");
+  await headers[1].trigger("click");
 
   expect(getQuestionExecution).toHaveBeenCalledTimes(1);
   expect(getQuestionExecution).toHaveBeenCalledWith("task-1", "q-second", {
@@ -831,22 +856,19 @@ it("reads a regular turn's deferred query facts from that turn's own request", a
   });
 });
 
-// ---- Turn identity across history rebuilds and run switching ----
-
-function probeTurn(status: RunStatus): DeepAnalysisTaskPayload {
-  return payloadFor("regular-loop", status, {
-    activities: [
-      loopStep({
-        activityId: "probe",
-        kind: "probe",
-        probeTool: "probe_class_data",
-        probeArguments: { className: "OrdersClass" },
-      }),
-    ],
-  });
-}
-
-it("keeps the user's expansion when a live turn settles into history with rebuilt message ids", async () => {
+it("keeps the user's L2 expansion when a live turn settles into history with rebuilt message ids", async () => {
+  const liveActivities: AnalysisActivity[] = [
+    {
+      activityId: "dispatch-live",
+      seq: 1,
+      revision: 1,
+      kind: "dispatch",
+      status: "completed",
+      startedAt: 1,
+      topic: "live-dispatch-topic",
+      workerSummary: "live-worker-summary",
+    },
+  ];
   seed({
     messages: [{ id: 1_700_000_000_000, role: "user", content: "question" }],
     streamingSnapshot: {
@@ -855,12 +877,12 @@ it("keeps the user's expansion when a live turn settles into history with rebuil
       source: "live",
       primaryText: "",
       requestSeq: 7,
-      deepAnalysis: probeTurn("running"),
+      deepAnalysis: execution(liveActivities, { runState: runState("running", 1) }),
     },
   });
   const wrapper = render();
-  await wrapper.find("button.process-row").trigger("click");
-  expect(wrapper.text()).toContain("OrdersClass");
+  await wrapper.find(".loop-activity-header").trigger("click");
+  expect(wrapper.text()).toContain("live-worker-summary");
 
   // Turn history replaces the live ids with 1-based ids, and a later reload rebuilds them again.
   const session = useAnalysisStore().sessions["task-1"];
@@ -871,23 +893,39 @@ it("keeps the user's expansion when a live turn settles into history with rebuil
     session.streamingSnapshot = null;
     session.messages = [
       { id: ids[0], role: "user", content: "question" },
-      executionTurn(ids[1], probeTurn("completed"), 7),
+      {
+        id: ids[1],
+        role: "assistant",
+        content: "final-answer",
+        snapshot: {
+          mode: "deep-analysis",
+          status: "completed",
+          source: "history",
+          primaryText: "final-answer",
+          requestSeq: 7,
+          deepAnalysis: execution(liveActivities, { finalAnswer: "final-answer" }),
+        },
+      },
     ];
     await nextTick();
 
-    expect(wrapper.find(".process-state").text()).toBe("Completed");
-    expect(wrapper.find(".process-header").attributes("aria-expanded")).toBe("true");
-    expect(wrapper.text()).toContain("OrdersClass");
+    expect(wrapper.text()).toContain("live-worker-summary");
   }
 });
 
-it("does not carry details or worker traces between historical runs that reuse ids", async () => {
+it("does not carry L2 expansion or L3 worker traces between historical runs that reuse activity ids", async () => {
   const dispatchRun = (runId: string) =>
-    payloadFor("report-loop", "completed", {
-      activities: [
-        loopStep({ activityId: "dispatch-1", kind: "dispatch", topic: `topic-${runId}` }),
-      ],
-    });
+    execution([
+      {
+        activityId: "dispatch-1",
+        seq: 1,
+        revision: 1,
+        kind: "dispatch",
+        status: "completed",
+        startedAt: 1,
+        topic: `topic-${runId}`,
+      },
+    ]);
   getRunSnapshot.mockImplementation(async (_taskId: string, runId: string) => ({
     mode: "deep-analysis",
     status: "completed",
@@ -900,10 +938,21 @@ it("does not carry details or worker traces between historical runs that reuse i
   });
   seed({
     report: true,
-    // The current conversation reuses the historical view's message ids and activity ids.
     messages: [
       { id: 1, role: "user", content: "question" },
-      executionTurn(2, dispatchRun("run-latest"), 2),
+      {
+        id: 2,
+        role: "assistant",
+        content: "",
+        snapshot: {
+          mode: "deep-analysis",
+          status: "completed",
+          source: "history",
+          primaryText: "",
+          requestSeq: 2,
+          deepAnalysis: dispatchRun("run-latest"),
+        },
+      },
     ],
     runs: [
       { id: "run-a", status: "completed", requestSeq: 1 },
@@ -915,33 +964,27 @@ it("does not carry details or worker traces between historical runs that reuse i
   const store = useAnalysisStore();
   await store.selectRun(0);
   const wrapper = render();
-  await openProcesses(wrapper);
-  await wrapper.find("button.process-row").trigger("click");
-  await wrapper.find(".row-details .link-toggle").trigger("click");
+  await wrapper.find(".loop-activity-header").trigger("click");
+  await wrapper.find(".loop-dispatch-detail .loop-trace-toggle").trigger("click");
   await flushPromises();
   expect(wrapper.text()).toContain("topic-run-a");
   expect(wrapper.text()).toContain("worker-trace-text");
 
   await store.selectRun(1);
   await flushPromises();
-  expect(wrapper.text()).not.toContain("topic-run-a");
-  expect(wrapper.find(".process-header").attributes("aria-expanded")).toBe("false");
-  await openProcesses(wrapper);
   expect(wrapper.text()).toContain("topic-run-b");
-  expect(wrapper.find(".row-details").exists()).toBe(false);
-  await wrapper.find("button.process-row").trigger("click");
+  expect(wrapper.find(".loop-dispatch-detail").exists()).toBe(false);
   expect(wrapper.text()).not.toContain("worker-trace-text");
-  await wrapper.find(".row-details .link-toggle").trigger("click");
+
+  await wrapper.find(".loop-activity-header").trigger("click");
+  expect(wrapper.text()).not.toContain("worker-trace-text");
+  await wrapper.find(".loop-dispatch-detail .loop-trace-toggle").trigger("click");
   await flushPromises();
   expect(getLoopSubagentTrace).toHaveBeenCalledTimes(2);
 
-  // Returning to the current run renders at once, with no snapshot gap in between.
   await store.selectRun(2);
   await nextTick();
-  expect(wrapper.text()).not.toContain("topic-run-b");
-  expect(wrapper.find(".process-header").attributes("aria-expanded")).toBe("false");
-  await openProcesses(wrapper);
   expect(wrapper.text()).toContain("topic-run-latest");
-  expect(wrapper.find(".row-details").exists()).toBe(false);
+  expect(wrapper.find(".loop-dispatch-detail").exists()).toBe(false);
   expect(wrapper.text()).not.toContain("worker-trace-text");
 });

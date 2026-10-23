@@ -39,10 +39,6 @@ it("interleaved chapter activity cannot complete collection, and cancellation ma
   expect(dimensionStageStates(data)).toEqual(["done", "active", "pending", "pending"]);
   data.runState.status = "cancelled";
   expect(dimensionStageStates(data)).toEqual(["done", "stopped", "pending", "pending"]);
-  // A failed run reads as failed at the first unmet stage, not as stopped.
-  data.runState.status = "failed";
-  expect(dimensionStageStates(data)).toEqual(["done", "failed", "pending", "pending"]);
-  data.runState.status = "cancelled";
   data.activities[1] = evidence({ status: "completed", questions: [] });
   expect(dimensionStageStates(data)).toEqual(["done", "done", "done", "stopped"]);
   data.activities[2].status = "cancelled";
