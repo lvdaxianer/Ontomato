@@ -1233,7 +1233,7 @@ code {
   font-size: var(--text-sm);
 }
 .inspector-empty span {
-  max-width: 220px;
+  max-width: 100%;
   font-size: var(--text-xs);
   line-height: var(--leading-relaxed);
   white-space: normal;

@@ -335,6 +335,7 @@ onMounted(() => {
 .model-catalog {
   /* The value is supplied by the host presentation (open source: auto). */
   min-height: var(--manager-model-catalog-min-height);
+  flex-shrink: 0;
   padding: var(--spacing-xl) var(--spacing-2xl);
   background: var(--el-bg-color);
 }

@@ -193,6 +193,7 @@ onMounted(() => void loadCatalog());
 <style scoped>
 .asset-catalog {
   min-height: 100%;
+  flex-shrink: 0;
   padding: var(--spacing-xl) var(--spacing-2xl);
   background: var(--el-bg-color);
 }
