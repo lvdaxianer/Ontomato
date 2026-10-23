@@ -6,6 +6,7 @@ import {
 } from "../data-query/query-fact";
 import { createHash } from "node:crypto";
 import { t } from "../../i18n";
+import { HttpError } from "../../utils/errors";
 import { getCheckpointer } from "../../infrastructure/connection";
 import type { ExtendedPostgresSaver, ThreadReadAccess } from "../../infrastructure/checkpointer";
 import { convertRowsToCsv, sanitizeDownloadName } from "./download";
@@ -304,7 +305,7 @@ export async function getThreadDataDownload(
   const truncation = combineResultTruncation(datasets);
 
   if (!rows.length && !truncation) {
-    throw new Error(t("api.threadNoDataDownload"));
+    throw new HttpError(404, t("api.threadNoDataDownload"));
   }
 
   const baseName = await getQuestionBaseName(
@@ -341,7 +342,7 @@ export async function getThreadDslDownload(
   const dsl = queryRun ? extractDslTextFromQueryRun(queryRun) : "";
 
   if (!dsl) {
-    throw new Error(t("api.threadNoDslDownload"));
+    throw new HttpError(404, t("api.threadNoDslDownload"));
   }
 
   const baseName = await getQuestionBaseName(
