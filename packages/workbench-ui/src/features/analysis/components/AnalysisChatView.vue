@@ -612,7 +612,7 @@ function showFailedNotice(group: TurnGroup): boolean {
             >
               <div v-if="entry.kind === 'narrative'" class="chat-msg assistant">
                 <div
-                  class="chat-bubble assistant loop-content"
+                  class="chat-bubble assistant loop-content loop-bubble"
                   :class="{ streaming: entry.activity.status === 'running' }"
                 >
                   <div
@@ -983,7 +983,10 @@ function showFailedNotice(group: TurnGroup): boolean {
           </div>
 
           <div v-if="groupAnswer(group)" class="chat-msg assistant">
-            <div class="chat-bubble assistant">
+            <div
+              class="chat-bubble assistant"
+              :class="{ 'loop-bubble': isLoopMode(group.payload) }"
+            >
               <div class="markdown-body" v-html="renderMarkdown(groupAnswer(group))"></div>
             </div>
           </div>
@@ -1932,6 +1935,11 @@ function showFailedNotice(group: TurnGroup): boolean {
   max-width: 85%;
   align-self: flex-start;
   box-shadow: var(--shadow-card);
+}
+
+/* Loop-turn body text shares the process blocks' content width on every screen size. */
+.chat-bubble.assistant.loop-bubble {
+  max-width: none;
 }
 
 .chat-bubble.assistant :deep(.markdown-body) {
