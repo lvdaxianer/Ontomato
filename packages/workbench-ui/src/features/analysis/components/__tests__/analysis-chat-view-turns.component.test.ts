@@ -444,9 +444,15 @@ it("does not leak partial report text from a cancelled run into chat", async () 
   expect(text).not.toContain("pre-cancel-partial-report");
 });
 
-// Public surface under test: per-turn tool results moved into the execution process; observable result: each turn's
-// process holds only its own tool calls and results, without repeating the user question, the body or internal thinking.
-it("keeps each turn's tool calls and results inside its own collapsed process without repeating question or body", async () => {
+/** Opens every tool record detail inside opened processes. */
+async function openToolRecords(wrapper: ReturnType<typeof render>) {
+  for (const toggle of wrapper.findAll(".loop-process-body .loop-trace-toggle")) await toggle.trigger("click");
+}
+
+// Public surface under test: records saved before activities carried a call identity; observable result: their tool
+// calls and results stay once as "other tool records" in the turn's process, never in a separate bottom block, per turn,
+// without repeating the user question, the body or internal thinking.
+it("keeps legacy tool records once inside each turn's own process without repeating question or body", async () => {
   seed({
     messages: [
       { id: 1, role: "user", content: "first-question" },
@@ -466,33 +472,46 @@ it("keeps each turn's tool calls and results inside its own collapsed process wi
         { role: "assistant", content: [{ type: "text", text: "first-answer" }] },
       ]),
       { id: 3, role: "user", content: "second-question" },
-      answerMessage(4, "second-answer", "second-round-writing", {}, [
-        toolCallTrace("stock_query", { sku: "SKU42" }),
-        toolResultTrace("stock_query", "stock-result-B"),
-      ]),
+      answerMessage(
+        4,
+        "second-answer",
+        "unused",
+        {
+          // A legacy step without call identity: the record is not claimed by it.
+          activities: [
+            step("probe-legacy", 1, { kind: "probe", probeTool: "probe_classes" }),
+            narration("n-2", 2, "second-round-writing"),
+          ],
+        },
+        [toolCallTrace("stock_query", { sku: "SKU42" }), toolResultTrace("stock_query", "stock-result-B")]
+      ),
     ],
   });
   const wrapper = render();
-  const toggles = wrapper.findAll(".loop-process-toggle");
 
-  expect(toggles).toHaveLength(2);
-  // The old separate "messages and tools" entry is gone.
-  expect(wrapper.findAll(".message-trace-list")).toHaveLength(0);
+  // One process per turn here; no separate turn-level tool block.
+  expect(wrapper.findAll(".loop-process")).toHaveLength(2);
   expect(wrapper.text()).not.toContain("orders-result-A");
-  expect(wrapper.text()).not.toContain("internal-thinking-A");
 
-  await toggles[0].trigger("click");
-  const first = wrapper.findAll(".loop-process")[0];
-  expect(first.text()).toContain("orders_query");
+  await openProcesses(wrapper);
+  const [first, second] = wrapper.findAll(".loop-process");
+  expect(first.find(".loop-timeline").exists()).toBe(false);
+  expect(second.find(".loop-timeline-item .loop-trace-toggle").exists()).toBe(false);
+  await openToolRecords(wrapper);
+
+  expect(first.find(".loop-other-tools").text()).toContain("orders_query");
   expect(first.text()).toContain("north");
   expect(first.text()).toContain("orders-result-A");
-  expect(wrapper.text()).not.toContain("stock_query");
+  expect(first.text()).not.toContain("stock_query");
+  expect(second.find(".loop-other-tools").text()).toContain("stock-result-B");
   expect(wrapper.text()).not.toContain("internal-thinking-A");
   expect(wrapper.text()).not.toContain("hidden-message");
   // The user question and the assistant text stay in their own places, once.
   expect(occurrences(wrapper.text(), "first-question")).toBe(1);
   expect(occurrences(wrapper.text(), "first-round-writing")).toBe(1);
   expect(occurrences(wrapper.text(), "first-answer")).toBe(1);
+  expect(occurrences(wrapper.text(), "orders-result-A")).toBe(1);
+  expect(occurrences(wrapper.text(), "stock-result-B")).toBe(1);
   // Tool results reuse the safe renderer: Markdown links and JSON code blocks are kept and raw HTML is not executed.
   expect(first.find('.loop-trace-text a[href="https://example.com/orders"]').exists()).toBe(true);
   const codeBlock = first.find(".loop-trace-text pre code");
@@ -500,11 +519,6 @@ it("keeps each turn's tool calls and results inside its own collapsed process wi
   expect(codeBlock.text()).toContain('"sku"');
   expect(first.find(".loop-trace-text img").exists()).toBe(false);
   expect(first.text()).toContain("onerror");
-
-  await toggles[1].trigger("click");
-  expect(wrapper.findAll(".loop-process")[1].text()).toContain("stock-result-B");
-  expect(occurrences(wrapper.text(), "orders-result-A")).toBe(1);
-  expect(occurrences(wrapper.text(), "stock-result-B")).toBe(1);
 });
 
 function step(
@@ -647,6 +661,90 @@ it("keeps a live stretch open while its query advances and new stretches arrive 
   expect(processes[0].find(".loop-question-row").text()).toContain("5 rows");
   expect(processes[1].find(".loop-process-toggle").attributes("aria-expanded")).toBe("false");
   expect(occurrences(wrapper.text(), "final-reply")).toBe(1);
+});
+
+// Public surface under test: tool records follow their real call identity; observable result: each step offers its
+// own call and result inside its stretch (a parallel message is split per call), a call without a business activity
+// stays once in the first stretch's "other tool records", and every record appears exactly once.
+it("places each tool call and result under the step that made it, splitting parallel calls, with unattributed records kept once", async () => {
+  const activities = [
+    step("ev-1", 1, {
+      kind: "evidence",
+      toolCallId: "c-ev",
+      questions: [{ questionId: "q-1", question: "orders-by-region", status: "completed", execution: {} }],
+    }),
+    narration("n-1", 2, "stage-summary-one"),
+    step("probe-1", 3, { kind: "probe", toolCallId: "c-probe", probeTool: "probe_classes" }),
+    step("ext-1", 4, { kind: "external_tool", toolCallId: "c-ext", serviceName: "erp", toolName: "sync" }),
+    narration("n-2", 5, "final-reply"),
+  ];
+  const call = (id: string, name: string, args: Record<string, unknown> = {}) =>
+    ({ type: "toolCall", id, name, arguments: args }) as const;
+  const result = (id: string, toolName: string, text: string): EgressMessage => ({
+    role: "toolResult",
+    toolCallId: id,
+    toolName,
+    content: [{ type: "text", text }],
+  });
+  seed({
+    messages: [
+      { id: 1, role: "user", content: "question" },
+      answerMessage(2, "final-reply", "unused", { activities, finalAnswer: "final-reply" }, [
+        userTrace("question"),
+        { role: "assistant", content: [call("c-ev", "collect_evidence", { questions: ["orders-by-region"] })] },
+        result("c-ev", "collect_evidence", "evidence-result"),
+        {
+          role: "assistant",
+          content: [
+            { type: "text", text: "stage-summary-one" },
+            call("c-probe", "probe_classes"),
+            call("c-ext", "mcp__erp__sync", { order: "ext-arg" }),
+            call("c-skill-file", "read_skill_file", { path: "guide.md" }),
+          ],
+        },
+        // Parallel results arrive out of call order.
+        result("c-ext", "mcp__erp__sync", "ext-result"),
+        result("c-skill-file", "read_skill_file", "skill-file-result"),
+        result("c-probe", "probe_classes", "probe-result"),
+        { role: "assistant", content: [{ type: "text", text: "final-reply" }] },
+      ]),
+    ],
+  });
+  const wrapper = render();
+
+  expect(loopBlockOrder(wrapper)).toEqual(["process", "stage-summary-one", "process", "final-reply"]);
+  await openProcesses(wrapper);
+  const [first, second] = wrapper.findAll(".loop-process");
+  const stepRecords = async (stepIndex: number, segment: typeof first) => {
+    const item = segment.findAll(".loop-timeline-item")[stepIndex];
+    await item.find(".loop-trace-toggle").trigger("click");
+    return item.find(".loop-tool-trace").text();
+  };
+
+  const evidence = await stepRecords(0, first);
+  expect(evidence).toContain("collect_evidence");
+  expect(evidence).toContain("evidence-result");
+  const probe = await stepRecords(0, second);
+  expect(probe).toContain("probe-result");
+  expect(probe).not.toContain("ext-result");
+  expect(probe).not.toContain("read_skill_file");
+  const ext = await stepRecords(1, second);
+  expect(ext).toContain("ext-arg");
+  expect(ext).toContain("ext-result");
+  expect(ext).not.toContain("probe-result");
+
+  // The call with no business activity is not claimed by any step and appears only in the first stretch.
+  expect(second.find(".loop-other-tools").exists()).toBe(false);
+  await first.find(".loop-other-tools .loop-trace-toggle").trigger("click");
+  expect(first.find(".loop-other-tools").text()).toContain("skill-file-result");
+  expect(first.find(".loop-other-tools").text()).not.toContain("probe-result");
+
+  const text = wrapper.text();
+  for (const value of ["evidence-result", "probe-result", "ext-result", "skill-file-result", "stage-summary-one"]) {
+    expect(occurrences(text, value)).toBe(1);
+  }
+  expect(occurrences(text, "final-reply")).toBe(1);
+  expect(wrapper.findAll(".loop-process")).toHaveLength(2);
 });
 
 // Public surface under test: a regular continuous session does not switch by run history; observable result: all turns and activities stay present,

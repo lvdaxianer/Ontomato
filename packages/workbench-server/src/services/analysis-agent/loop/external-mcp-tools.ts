@@ -78,13 +78,14 @@ export async function loadExternalMcpTools(params: ExternalMcpToolParams): Promi
         name: toolName,
         description: tool.description || tool.title || mcpToolName,
         parameters: tool.inputSchema || { type: "object", properties: {} },
-        async execute(_toolCallId, toolArguments, signal) {
+        async execute(toolCallId, toolArguments, signal) {
           const executionSignal = signal || params.signal;
           executionSignal?.throwIfAborted();
           const activityId = params.trajectory.start("external_tool", {
             serviceName,
             toolName,
             toolArguments,
+            toolCallId,
           });
           try {
             const result = await callMcpTool(

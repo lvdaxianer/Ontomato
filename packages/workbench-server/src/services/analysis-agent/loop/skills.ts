@@ -36,11 +36,11 @@ export async function assembleLoopSkillCapability(deps: LoopSkillDeps) {
     category: SkillCategory.ANALYSIS,
     selectedSkillIds: deps.selectedSkillIds,
   });
-  const tools = availableSkills.length > 0 ? createLoopSkillTools(deps) : [];
+  const enabled = availableSkills.length > 0;
   return {
     prompt: buildLoopSkillCapabilityPrompt(availableSkills),
-    supervisorTools: tools,
-    workerTools: tools,
+    supervisorTools: enabled ? createLoopSkillTools(deps, { supervisor: true }) : [],
+    workerTools: enabled ? createLoopSkillTools(deps) : [],
   };
 }
 
@@ -90,7 +90,12 @@ export function buildLoopSkillCapabilityPrompt(skills: SkillMeta[]): string {
   ].join("\n");
 }
 
-function createLoadSkillTool(deps: LoopSkillDeps): AgentTool {
+/** Worker calls belong to the worker trace; only supervisor calls carry their call identity. */
+function callIdentity(supervisor: boolean, toolCallId: string): { toolCallId?: string } {
+  return supervisor ? { toolCallId } : {};
+}
+
+function createLoadSkillTool(deps: LoopSkillDeps, supervisor: boolean): AgentTool {
   return {
     name: "load_skill",
     description:
@@ -102,12 +107,13 @@ function createLoadSkillTool(deps: LoopSkillDeps): AgentTool {
       },
       required: ["skill_id"],
     },
-    async execute(_toolCallId: string, params: Record<string, unknown>, signal?: AbortSignal) {
+    async execute(toolCallId: string, params: Record<string, unknown>, signal?: AbortSignal) {
       const skillId = requiredString(params, "skill_id");
       if (!skillId) return textResult(tApp("analysis.loop.skills.357"));
 
       const activityId = deps.trajectory.start("skill", {
         skills: [{ skillId, action: "load", entry: "SKILL.md", status: "running" }],
+        ...callIdentity(supervisor, toolCallId),
       });
       const result = (text: string, success = false) => {
         const status = success ? "completed" : "failed";
@@ -224,7 +230,7 @@ function declaredSkillError(output: unknown): string | undefined {
   return undefined;
 }
 
-function createRunSkillTool(deps: LoopSkillDeps): AgentTool {
+function createRunSkillTool(deps: LoopSkillDeps, supervisor: boolean): AgentTool {
   return {
     name: "run_skill",
     description:
@@ -244,7 +250,7 @@ function createRunSkillTool(deps: LoopSkillDeps): AgentTool {
       },
       required: ["skill_id"],
     },
-    async execute(_toolCallId: string, params: Record<string, unknown>, signal?: AbortSignal) {
+    async execute(toolCallId: string, params: Record<string, unknown>, signal?: AbortSignal) {
       const skillId = requiredString(params, "skill_id");
       const questionId = requiredString(params, "question_id");
       const requestedEntry = requiredString(params, "entry");
@@ -257,6 +263,7 @@ function createRunSkillTool(deps: LoopSkillDeps): AgentTool {
       let entry = requestedEntry || undefined;
       const activityId = deps.trajectory.start("skill", {
         skills: [{ skillId, action: "run", entry, status: "running" }],
+        ...callIdentity(supervisor, toolCallId),
       });
       const result = (text: string, success = false) => {
         const status = success ? "completed" : "failed";
@@ -352,6 +359,14 @@ function createRunSkillTool(deps: LoopSkillDeps): AgentTool {
   };
 }
 
-export function createLoopSkillTools(deps: LoopSkillDeps): AgentTool[] {
-  return [createLoadSkillTool(deps), createReadSkillFileTool(deps), createRunSkillTool(deps)];
+export function createLoopSkillTools(
+  deps: LoopSkillDeps,
+  options: { supervisor?: boolean } = {}
+): AgentTool[] {
+  const supervisor = options.supervisor === true;
+  return [
+    createLoadSkillTool(deps, supervisor),
+    createReadSkillFileTool(deps),
+    createRunSkillTool(deps, supervisor),
+  ];
 }

@@ -595,6 +595,7 @@ export default {
     "loopProcess": "Execution process",
     "loopProcessFailures": "{n} steps with failures",
     "loopToolResults": "Tool calls and results",
+    "loopOtherToolRecords": "Other tool records in this turn",
     "loopDispatchTopic": "Assignment Topic",
     "loopDispatchSummary": "Worker Agent Summary",
     "loopWorkerTrace": "Full Worker Agent Trace",

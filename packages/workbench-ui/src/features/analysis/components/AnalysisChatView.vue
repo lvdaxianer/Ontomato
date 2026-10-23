@@ -397,6 +397,8 @@ interface LoopProcessSegment {
   steps: AnalysisActivity[];
   /** Steps that failed or carry a failed query or skill, surfaced on the collapsed header. */
   failedSteps: number;
+  /** This turn's tool records with no producing activity; held only by the turn's first stretch. */
+  otherTools: EgressMessage[];
 }
 
 /** A turn's loop activities in acceptance order: public narration shown directly, process stretches folded. */
@@ -404,13 +406,8 @@ type LoopEntry = { kind: "narrative"; activity: AnalysisActivity } | LoopProcess
 
 interface LoopTurnView {
   entries: LoopEntry[];
-  /**
-   * This turn's tool calls and results. The user message and the assistant text are dropped
-   * because they are already shown as the turn's question and body (each assistant text is
-   * recorded as a narrative activity). Activities carry no tool call identity, so these stay
-   * one turn-level detail instead of being attached to a segment.
-   */
-  toolTrace: EgressMessage[];
+  /** Tool calls and results of each step, by the step's activityId. */
+  stepTools: Map<string, EgressMessage[]>;
 }
 
 function hasFailure(activity: AnalysisActivity): boolean {
@@ -421,16 +418,38 @@ function hasFailure(activity: AnalysisActivity): boolean {
   );
 }
 
-function processToolTrace(trace: EgressMessage[]): EgressMessage[] {
-  return trace.flatMap((message): EgressMessage[] => {
-    if (message.role === "toolResult") return [message];
-    if (message.role !== "assistant") return [];
-    const calls = message.content.filter((part) => part.type === "toolCall");
-    return calls.length ? [{ ...message, content: calls }] : [];
-  });
+/**
+ * Routes this turn's public tool calls and results by their real call identity: a record whose
+ * call produced a step goes to that step, anything else (calls without a business activity,
+ * records saved before activities carried the identity) stays unattributed. The user message and
+ * assistant text are dropped because they are already the turn's question and body; an assistant
+ * message with several calls is split per call so each record lands exactly once.
+ */
+function routeToolTrace(group: TurnGroup) {
+  const owners = new Map<string, string>();
+  for (const activity of loopActivities(group.payload)) {
+    if (activity.kind !== "narrative" && activity.toolCallId && !owners.has(activity.toolCallId)) {
+      owners.set(activity.toolCallId, activity.activityId);
+    }
+  }
+  const stepTools = new Map<string, EgressMessage[]>();
+  const otherTools: EgressMessage[] = [];
+  const route = (toolCallId: string, message: EgressMessage) => {
+    const owner = owners.get(toolCallId);
+    if (!owner) otherTools.push(message);
+    else stepTools.set(owner, [...(stepTools.get(owner) || []), message]);
+  };
+  for (const message of group.trace) {
+    if (message.role === "toolResult") route(message.toolCallId, message);
+    if (message.role !== "assistant") continue;
+    for (const part of message.content) {
+      if (part.type === "toolCall") route(part.id, { ...message, content: [part] });
+    }
+  }
+  return { stepTools, otherTools };
 }
 
-function loopEntries(group: TurnGroup): LoopEntry[] {
+function loopEntries(group: TurnGroup, otherTools: EgressMessage[]): LoopEntry[] {
   const entries: LoopEntry[] = [];
   for (const activity of visibleLoopActivities(group)) {
     if (activity.kind === "narrative") {
@@ -448,20 +467,34 @@ function loopEntries(group: TurnGroup): LoopEntry[] {
       key: `${group.key}|${activity.activityId}`,
       steps: [activity],
       failedSteps: 0,
+      otherTools: [],
     });
   }
   for (const entry of entries) {
     if (entry.kind === "process") entry.failedSteps = entry.steps.filter(hasFailure).length;
   }
+  if (otherTools.length) {
+    const first = entries.find((entry) => entry.kind === "process");
+    if (first) first.otherTools = otherTools;
+    else {
+      entries.unshift({
+        kind: "process",
+        key: `${group.key}|other-tools`,
+        steps: [],
+        failedSteps: 0,
+        otherTools,
+      });
+    }
+  }
   return entries;
 }
 
 const loopViews = computed(() =>
-  turnGroups.value.map((group): LoopTurnView | null =>
-    isLoopMode(group.payload)
-      ? { entries: loopEntries(group), toolTrace: processToolTrace(group.trace) }
-      : null
-  )
+  turnGroups.value.map((group): LoopTurnView | null => {
+    if (!isLoopMode(group.payload)) return null;
+    const { stepTools, otherTools } = routeToolTrace(group);
+    return { entries: loopEntries(group, otherTools), stepTools };
+  })
 );
 
 /** Folded header state of one process segment. */
@@ -603,7 +636,7 @@ function showFailedNotice(group: TurnGroup): boolean {
                   <span class="step-name" :class="segmentStatusClass(entry)">
                     {{ t("analysis.loopProcess") }}
                   </span>
-                  <span class="loop-process-summary">
+                  <span v-if="entry.steps.length" class="loop-process-summary">
                     {{ t("analysis.loopActivityCount", { done: segmentDone(entry) }) }}
                     <template v-if="segmentRunning(entry) && loopProgress(group.payload)?.label">
                       ·
@@ -620,7 +653,7 @@ function showFailedNotice(group: TurnGroup): boolean {
                 </button>
 
                 <div v-if="expandedLoopProcesses[entry.key]" class="loop-process-body">
-                  <div class="loop-timeline">
+                  <div v-if="entry.steps.length" class="loop-timeline">
                     <div
                       v-for="activity in entry.steps"
                       :key="activity.activityId"
@@ -813,35 +846,52 @@ function showFailedNotice(group: TurnGroup): boolean {
                             />
                           </div>
                         </div>
+                        <template v-if="loopViews[gi]!.stepTools.get(activity.activityId)">
+                          <button
+                            type="button"
+                            class="loop-trace-toggle"
+                            :aria-expanded="!!expandedLoopProcesses[`${group.key}|tools|${activity.activityId}`]"
+                            @click="toggleLoopProcess(`${group.key}|tools|${activity.activityId}`)"
+                          >
+                            <ChevronDown
+                              v-if="expandedLoopProcesses[`${group.key}|tools|${activity.activityId}`]"
+                              :size="13"
+                            />
+                            <ChevronRight v-else :size="13" />
+                            {{ t("analysis.loopToolResults") }}
+                          </button>
+                          <AgentMessageTrace
+                            v-if="expandedLoopProcesses[`${group.key}|tools|${activity.activityId}`]"
+                            class="loop-tool-trace"
+                            :messages="loopViews[gi]!.stepTools.get(activity.activityId) || []"
+                            variant="turn"
+                          />
+                        </template>
                       </div>
                     </div>
+                  </div>
+                  <!-- Tool records with no producing activity: kept once here, not claimed by this stretch -->
+                  <div v-if="entry.otherTools.length" class="loop-other-tools">
+                    <button
+                      type="button"
+                      class="loop-trace-toggle"
+                      :aria-expanded="!!expandedLoopProcesses[`${entry.key}|other`]"
+                      @click="toggleLoopProcess(`${entry.key}|other`)"
+                    >
+                      <ChevronDown v-if="expandedLoopProcesses[`${entry.key}|other`]" :size="13" />
+                      <ChevronRight v-else :size="13" />
+                      {{ t("analysis.loopOtherToolRecords") }}
+                    </button>
+                    <AgentMessageTrace
+                      v-if="expandedLoopProcesses[`${entry.key}|other`]"
+                      class="loop-tool-trace"
+                      :messages="entry.otherTools"
+                      variant="turn"
+                    />
                   </div>
                 </div>
               </div>
             </template>
-
-            <!-- Tool calls and results: activities carry no tool call identity, so they stay one turn-level detail -->
-            <div v-if="loopViews[gi]!.toolTrace.length" class="loop-process">
-              <button
-                type="button"
-                class="loop-process-toggle"
-                :aria-expanded="!!expandedLoopProcesses[`${group.key}|tools`]"
-                @click="toggleLoopProcess(`${group.key}|tools`)"
-              >
-                <ChevronDown
-                  v-if="expandedLoopProcesses[`${group.key}|tools`]"
-                  class="loop-process-chevron"
-                  :size="15"
-                />
-                <ChevronRight v-else class="loop-process-chevron" :size="15" />
-                <span class="step-name">{{ t("analysis.loopToolResults") }}</span>
-              </button>
-              <div v-if="expandedLoopProcesses[`${group.key}|tools`]" class="loop-process-body">
-                <div class="loop-tool-trace">
-                  <AgentMessageTrace :messages="loopViews[gi]!.toolTrace" variant="turn" />
-                </div>
-              </div>
-            </div>
           </template>
 
           <!-- Step cards (Dimension orchestration: preserved as baseline) -->
@@ -1477,7 +1527,15 @@ function showFailedNotice(group: TurnGroup): boolean {
 }
 
 .loop-tool-trace {
-  padding: 12px 16px 14px;
+  margin-top: 8px;
+}
+
+.loop-other-tools {
+  padding: 0 16px 14px;
+}
+
+.loop-other-tools:first-child {
+  padding-top: 6px;
 }
 
 .loop-process .tree-q-text {
@@ -2022,8 +2080,8 @@ function showFailedNotice(group: TurnGroup): boolean {
   :where(html.workbench-mobile-navigation) .loop-timeline {
     padding: 10px 12px;
   }
-  :where(html.workbench-mobile-navigation) .loop-tool-trace {
-    padding: 10px 12px;
+  :where(html.workbench-mobile-navigation) .loop-other-tools {
+    padding: 0 12px 10px;
   }
   :where(html.workbench-mobile-navigation) .run-switcher-row {
     margin-right: 0;

@@ -176,10 +176,11 @@ export function assembleLoopEvidenceCapability(params: {
     createCollectEvidenceTool({
       deps,
       signal: params.signal,
-      onAccepted: (questions) =>
+      onAccepted: (questions, toolCallId) =>
         params.trajectory.start("evidence", {
           questions,
-          ...(dispatchId ? { dispatchId } : {}),
+          // Worker calls belong to the worker trace; only supervisor calls carry their call identity.
+          ...(dispatchId ? { dispatchId } : { toolCallId }),
         }),
       onThinking: (activityId, questionId, thinkingState) =>
         params.trajectory.thinking({
@@ -380,7 +381,7 @@ export function createCollectEvidenceTool(params: {
   deps: LoopEvidenceDeps;
   signal: AbortSignal;
   /** Invoked when a batch of query questions is accepted, to register the trajectory activity */
-  onAccepted: (questions: AnalysisEvidenceQuestion[]) => string;
+  onAccepted: (questions: AnalysisEvidenceQuestion[], toolCallId: string) => string;
   /** Invoked when one query question completes, to update the in-progress trajectory activity */
   onProgress: (activityId: string, questions: AnalysisEvidenceQuestion[]) => void;
   /** Invoked when a batch of query questions settles, to finalize the trajectory activity */
@@ -402,7 +403,7 @@ export function createCollectEvidenceTool(params: {
       },
       required: ["questions"],
     },
-    async execute(_toolCallId: string, toolParams: Record<string, unknown>) {
+    async execute(toolCallId: string, toolParams: Record<string, unknown>) {
       params.signal.throwIfAborted();
       const questionTexts = parseQuestions(toolParams);
       const accepted = questionTexts.map((question) => ({
@@ -410,7 +411,7 @@ export function createCollectEvidenceTool(params: {
         question,
         status: "running" as const,
       }));
-      const activityId = params.onAccepted(accepted);
+      const activityId = params.onAccepted(accepted, toolCallId);
       const results = await collectLoopEvidence(
         accepted,
         params.deps,
