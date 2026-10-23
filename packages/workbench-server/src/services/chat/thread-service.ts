@@ -23,6 +23,8 @@ import {
 import { listTurnRuns } from "../turn-run/turn-run-store";
 import { combineResultTruncation } from "../data-query/protocol";
 import { deleteThreadBusinessData, deleteThreadMetadata } from "./thread-store";
+import { getPostgresPool, qualifiedTable } from "../../infrastructure/postgres";
+import { deleteAnalysisNotebook } from "../analysis-agent/loop/notebook";
 
 type ThreadDownloadPayload = {
   fileName: string;
@@ -36,6 +38,17 @@ function requireCheckpointer(): ExtendedPostgresSaver {
     throw new Error(t("api.checkpointerNotInitialized"));
   }
   return checkpointer as unknown as ExtendedPostgresSaver;
+}
+
+export async function deleteUserThreads(userId: string): Promise<void> {
+  const { rows } = await getPostgresPool().query(
+    `SELECT thread_id, domain_id FROM ${qualifiedTable("thread_metadata")} WHERE user_id = $1 AND domain_id <> ''`, [userId]
+  );
+  for (const row of rows) {
+    const turns = await listTurnRuns(row.thread_id);
+    for (const turn of turns) await deleteAnalysisNotebook(`${row.thread_id}-${turn.requestSeq}`);
+    await deleteThread(row.thread_id, userId, row.domain_id);
+  }
 }
 
 export async function deleteThread(
