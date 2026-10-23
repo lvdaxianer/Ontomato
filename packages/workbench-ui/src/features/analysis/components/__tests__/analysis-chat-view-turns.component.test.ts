@@ -1,4 +1,4 @@
-import { beforeEach, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { nextTick } from "vue";
 import { flushPromises, mount } from "@vue/test-utils";
 import { createI18n } from "vue-i18n";
@@ -24,6 +24,7 @@ import { turnDiagnosisAccessKey } from "../../../diagnosis/access";
 const getRunSnapshot = vi.fn();
 const getLoopSubagentTrace = vi.fn();
 const getQuestionExecution = vi.fn(async (..._args: unknown[]) => ({}));
+const getTurns = vi.fn();
 
 vi.mock("../../api", () => ({
   analysisAgentApi: {},
@@ -31,6 +32,7 @@ vi.mock("../../api", () => ({
     getLoopSubagentTrace: (...args: unknown[]) => getLoopSubagentTrace(...args),
     getRunSnapshot: (...args: unknown[]) => getRunSnapshot(...args),
     getQuestionExecution: (...args: unknown[]) => getQuestionExecution(...args),
+    getTurns: (...args: unknown[]) => getTurns(...args),
   },
   analysisReportApi: {},
   streamTaskExecution: vi.fn(() => () => {}),
@@ -1272,3 +1274,52 @@ it("does not carry L2 expansion or L3 worker traces between historical runs that
   expect(wrapper.find(".loop-dispatch-detail").exists()).toBe(false);
   expect(wrapper.text()).not.toContain("worker-trace-text");
 });
+
+// Public surface under test: the conversation area's loading placeholder; observable result: it shows only while a
+// selected task's saved conversation is being read, and an idle empty view (no task, empty or failed read) stays static.
+describe("conversation loading placeholder", () => {
+  it("stays static with no task selected", () => {
+    const store = useAnalysisStore();
+    store.agents = [agent(false)];
+    store.selectedAgentId = "agent-1";
+    store.tasks = [];
+    store.currentTaskId = null;
+    store.sessions = {};
+    const wrapper = render();
+    expect(wrapper.find(".el-skeleton").exists()).toBe(false);
+    expect(wrapper.find(".messages-scroll").exists()).toBe(true);
+  });
+
+  it.each([
+    ["an empty history", (finish: Deferred) => finish.resolve([])],
+    ["a failed read", (finish: Deferred) => finish.reject(new Error("history unavailable"))],
+  ])("shows loading while the history is read and stops after %s", async (_case, settle) => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    let finish!: Deferred;
+    getTurns.mockReturnValue(
+      new Promise((resolve, reject) => {
+        finish = { resolve, reject };
+      })
+    );
+    const store = useAnalysisStore();
+    store.agents = [agent(false)];
+    store.selectedAgentId = "agent-1";
+    const empty = taskFixture({ question: "" });
+    store.tasks = [empty];
+    store.currentTaskId = empty.id;
+    const wrapper = render();
+    const opening = store.openSession(empty);
+    await nextTick();
+    expect(wrapper.find(".el-skeleton").exists()).toBe(true);
+
+    settle(finish);
+    await opening;
+    await nextTick();
+    expect(wrapper.find(".el-skeleton").exists()).toBe(false);
+  });
+});
+
+interface Deferred {
+  resolve: (value: unknown) => void;
+  reject: (reason: unknown) => void;
+}

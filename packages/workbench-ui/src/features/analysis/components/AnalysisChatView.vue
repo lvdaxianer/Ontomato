@@ -45,6 +45,7 @@ const {
   displayMessages: messages,
   displayStreamingSnapshot: streamingSnapshot,
   displayIsLoading: isLoading,
+  displayHistoryLoading: historyLoading,
 } = storeToRefs(store);
 const runCount = computed(() => taskRuns.value.length);
 const runIndex = computed(() => taskRunIndex.value);
@@ -354,8 +355,9 @@ function isFailedAnalysis(payload: DeepAnalysisTaskPayload | null): boolean {
 function showStepCards(payload: DeepAnalysisTaskPayload | null): boolean {
   return !isLoopMode(payload) && analysisSteps(payload).length > 0;
 }
-const showEmpty = computed(
-  () => messages.value.length === 0 && !isLoading.value && !streamingSnapshot.value
+/** Placeholder only while the saved conversation is being read; an empty idle view stays static. */
+const showHistoryLoading = computed(
+  () => historyLoading.value && messages.value.length === 0 && !streamingSnapshot.value
 );
 
 /**
@@ -547,7 +549,7 @@ function showFailedNotice(group: TurnGroup): boolean {
 
 <template>
   <div class="analysis-chat-view">
-    <div v-if="showEmpty" class="chat-empty">
+    <div v-if="showHistoryLoading" class="chat-empty">
       <div class="ai-skeleton">
         <el-skeleton animated :rows="10" />
       </div>

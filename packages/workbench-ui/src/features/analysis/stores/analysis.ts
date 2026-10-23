@@ -43,6 +43,8 @@ export interface TaskSession {
   messages: Message[];
   input: string;
   isLoading: boolean;
+  /** The saved conversation of this task is being read on open; nothing is known to show yet. */
+  historyLoading?: boolean;
   streamingSnapshot: ResponseSnapshot | null;
   stopRequested: boolean;
   lastTaskEventSeq?: number;
@@ -167,6 +169,13 @@ export const useAnalysisStore = defineStore("analysis", () => {
   );
   const displayIsLoading = computed(() =>
     isSelectedLatestRun.value ? (activeSession.value?.isLoading ?? false) : false
+  );
+  /** A selected task whose session is not open yet, or whose saved history is still being read. */
+  const displayHistoryLoading = computed(
+    () =>
+      isSelectedLatestRun.value &&
+      !!currentTaskId.value &&
+      (!activeSession.value || !!activeSession.value.historyLoading)
   );
   const displayTaskStatus = computed(() => selectedRun.value?.status || currentTask.value?.status);
   const showPendingTaskNotice = computed(
@@ -413,7 +422,12 @@ export const useAnalysisStore = defineStore("analysis", () => {
     const session = sessions.value[task.id];
     if (session) {
       session.messages = [];
-      await loadTaskHistory(task.id);
+      session.historyLoading = true;
+      try {
+        await loadTaskHistory(task.id);
+      } finally {
+        session.historyLoading = false;
+      }
       if (session.messages.length === 0 && task.question) {
         session.messages.push({ id: Date.now(), role: "user", content: task.question });
       }
@@ -1232,6 +1246,7 @@ export const useAnalysisStore = defineStore("analysis", () => {
     displayMessages,
     displayStreamingSnapshot,
     displayIsLoading,
+    displayHistoryLoading,
     displayTaskStatus,
     sessions,
     activeSession,
