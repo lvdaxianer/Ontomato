@@ -715,20 +715,29 @@ it("places each tool call and result under the step that made it, splitting para
   expect(loopBlockOrder(wrapper)).toEqual(["process", "stage-summary-one", "process", "final-reply"]);
   await openProcesses(wrapper);
   const [first, second] = wrapper.findAll(".loop-process");
+  // Steps have no separate tool switch: opening the step shows its details and its own records together.
+  expect(wrapper.find(".loop-timeline-item .loop-trace-toggle").exists()).toBe(false);
+  expect(wrapper.find(".loop-tool-trace").exists()).toBe(false);
   const stepRecords = async (stepIndex: number, segment: typeof first) => {
     const item = segment.findAll(".loop-timeline-item")[stepIndex];
-    await item.find(".loop-trace-toggle").trigger("click");
-    return item.find(".loop-tool-trace").text();
+    await item.find(".loop-activity-header").trigger("click");
+    return item;
   };
 
-  const evidence = await stepRecords(0, first);
+  const evidenceStep = await stepRecords(0, first);
+  expect(evidenceStep.find(".loop-question-row").text()).toContain("orders-by-region");
+  const evidence = evidenceStep.find(".loop-tool-trace").text();
   expect(evidence).toContain("collect_evidence");
   expect(evidence).toContain("evidence-result");
-  const probe = await stepRecords(0, second);
+  await evidenceStep.find(".loop-activity-header").trigger("click");
+  expect(evidenceStep.find(".loop-question-row").exists()).toBe(false);
+  expect(evidenceStep.find(".loop-tool-trace").exists()).toBe(false);
+  await evidenceStep.find(".loop-activity-header").trigger("click");
+  const probe = (await stepRecords(0, second)).find(".loop-tool-trace").text();
   expect(probe).toContain("probe-result");
   expect(probe).not.toContain("ext-result");
   expect(probe).not.toContain("read_skill_file");
-  const ext = await stepRecords(1, second);
+  const ext = (await stepRecords(1, second)).find(".loop-tool-trace").text();
   expect(ext).toContain("ext-arg");
   expect(ext).toContain("ext-result");
   expect(ext).not.toContain("probe-result");

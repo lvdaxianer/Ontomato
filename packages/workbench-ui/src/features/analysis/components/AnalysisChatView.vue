@@ -236,9 +236,12 @@ function loopActivityKey(groupKey: string, activityId: string): string {
   return `${groupKey}|${activityId}`;
 }
 
-function isLoopActivityExpandable(activity: AnalysisActivity): boolean {
+/** A step opens when it has business details or its own tool call records. */
+function isLoopActivityExpandable(activity: AnalysisActivity, tools?: EgressMessage[]): boolean {
   return (
-    activity.kind === "dispatch" || (activity.kind === "evidence" && !!activity.questions?.length)
+    activity.kind === "dispatch" ||
+    (activity.kind === "evidence" && !!activity.questions?.length) ||
+    !!tools?.length
   );
 }
 
@@ -246,8 +249,12 @@ function isLoopActivityExpanded(groupKey: string, activity: AnalysisActivity): b
   return !!expandedLoopActivities.value[loopActivityKey(groupKey, activity.activityId)];
 }
 
-function toggleLoopActivity(groupKey: string, activity: AnalysisActivity) {
-  if (!isLoopActivityExpandable(activity)) return;
+function toggleLoopActivity(
+  groupKey: string,
+  activity: AnalysisActivity,
+  tools?: EgressMessage[]
+) {
+  if (!isLoopActivityExpandable(activity, tools)) return;
   const key = loopActivityKey(groupKey, activity.activityId);
   expandedLoopActivities.value = {
     ...expandedLoopActivities.value,
@@ -680,13 +687,13 @@ function showFailedNotice(group: TurnGroup): boolean {
                         <button
                           type="button"
                           class="tree-dim-header loop-activity-header"
-                          :disabled="!isLoopActivityExpandable(activity)"
+                          :disabled="!isLoopActivityExpandable(activity, loopViews[gi]!.stepTools.get(activity.activityId))"
                           :aria-expanded="
-                            isLoopActivityExpandable(activity)
+                            isLoopActivityExpandable(activity, loopViews[gi]!.stepTools.get(activity.activityId))
                               ? isLoopActivityExpanded(group.key, activity)
                               : undefined
                           "
-                          @click="toggleLoopActivity(group.key, activity)"
+                          @click="toggleLoopActivity(group.key, activity, loopViews[gi]!.stepTools.get(activity.activityId))"
                         >
                           <span class="tree-dim-name loop-step-title">
                             {{ loopActivityLabel(activity, t) }}
@@ -698,7 +705,7 @@ function showFailedNotice(group: TurnGroup): boolean {
                           >
                             {{ activityStatusText(activity.status) }}
                           </span>
-                          <template v-if="isLoopActivityExpandable(activity)">
+                          <template v-if="isLoopActivityExpandable(activity, loopViews[gi]!.stepTools.get(activity.activityId))">
                             <ChevronDown
                               v-if="isLoopActivityExpanded(group.key, activity)"
                               class="loop-expand-icon"
@@ -846,27 +853,15 @@ function showFailedNotice(group: TurnGroup): boolean {
                             />
                           </div>
                         </div>
-                        <template v-if="loopViews[gi]!.stepTools.get(activity.activityId)">
-                          <button
-                            type="button"
-                            class="loop-trace-toggle"
-                            :aria-expanded="!!expandedLoopProcesses[`${group.key}|tools|${activity.activityId}`]"
-                            @click="toggleLoopProcess(`${group.key}|tools|${activity.activityId}`)"
-                          >
-                            <ChevronDown
-                              v-if="expandedLoopProcesses[`${group.key}|tools|${activity.activityId}`]"
-                              :size="13"
-                            />
-                            <ChevronRight v-else :size="13" />
-                            {{ t("analysis.loopToolResults") }}
-                          </button>
-                          <AgentMessageTrace
-                            v-if="expandedLoopProcesses[`${group.key}|tools|${activity.activityId}`]"
-                            class="loop-tool-trace"
-                            :messages="loopViews[gi]!.stepTools.get(activity.activityId) || []"
-                            variant="turn"
-                          />
-                        </template>
+                        <AgentMessageTrace
+                          v-if="
+                            isLoopActivityExpanded(group.key, activity) &&
+                            loopViews[gi]!.stepTools.get(activity.activityId)
+                          "
+                          class="loop-tool-trace"
+                          :messages="loopViews[gi]!.stepTools.get(activity.activityId) || []"
+                          variant="turn"
+                        />
                       </div>
                     </div>
                   </div>
