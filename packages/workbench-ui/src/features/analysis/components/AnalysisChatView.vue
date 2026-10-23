@@ -54,7 +54,8 @@ function selectRun(index: number) {
 }
 
 const expandedLoopActivities = ref<Record<string, boolean>>({});
-const expandedTurnTraces = ref<Record<string, boolean>>({});
+/** Per-turn execution process expansion; collapsed unless the user opened it. */
+const expandedLoopProcesses = ref<Record<string, boolean>>({});
 
 interface SubagentTraceState {
   expanded: boolean;
@@ -69,7 +70,7 @@ watch(
   () => task.value?.id,
   () => {
     expandedLoopActivities.value = {};
-    expandedTurnTraces.value = {};
+    expandedLoopProcesses.value = {};
     subagentTraceStates.value = {};
   }
 );
@@ -313,10 +314,10 @@ async function toggleSubagentTrace(groupKey: string, activityId: string) {
   }
 }
 
-function toggleTurnTrace(key: string) {
-  expandedTurnTraces.value = {
-    ...expandedTurnTraces.value,
-    [key]: !expandedTurnTraces.value[key],
+function toggleLoopProcess(key: string) {
+  expandedLoopProcesses.value = {
+    ...expandedLoopProcesses.value,
+    [key]: !expandedLoopProcesses.value[key],
   };
 }
 
@@ -378,7 +379,7 @@ function groupAnswer(group: TurnGroup): string {
 /**
  * Narrow display deduplication for finished regular-session turns: only when the turn has ended,
  * the very last activity is a narrative, and its text is strictly identical to the non-empty
- * payload.finalAnswer, omit that trailing narrative from the trajectory so the immediately
+ * payload.finalAnswer, omit that trailing narrative from the turn body so the immediately
  * following reply bubble carries it once.
  */
 function visibleLoopActivities(group: TurnGroup): AnalysisActivity[] {
@@ -399,6 +400,53 @@ function visibleLoopActivities(group: TurnGroup): AnalysisActivity[] {
   }
   return activities;
 }
+
+interface LoopTurnView {
+  /** Public assistant narration, shown directly as the turn body. */
+  narratives: AnalysisActivity[];
+  /** Every non-narrative activity, shown inside the collapsed execution process. */
+  steps: AnalysisActivity[];
+  /**
+   * This turn's tool calls and results. The user message and the assistant text are dropped
+   * because they are already shown as the turn's question and body (each assistant text is
+   * recorded as a narrative activity).
+   */
+  toolTrace: EgressMessage[];
+  /** Steps that failed or carry a failed query or skill, surfaced on the collapsed header. */
+  failedSteps: number;
+}
+
+function hasFailure(activity: AnalysisActivity): boolean {
+  return (
+    activity.status === "failed" ||
+    !!activity.questions?.some((question) => question.status === "failed") ||
+    !!activity.skills?.some((skill) => skill.status === "failed")
+  );
+}
+
+function processToolTrace(trace: EgressMessage[]): EgressMessage[] {
+  return trace.flatMap((message): EgressMessage[] => {
+    if (message.role === "toolResult") return [message];
+    if (message.role !== "assistant") return [];
+    const calls = message.content.filter((part) => part.type === "toolCall");
+    return calls.length ? [{ ...message, content: calls }] : [];
+  });
+}
+
+const loopViews = computed(() =>
+  turnGroups.value.map((group): LoopTurnView | null => {
+    if (!isLoopMode(group.payload)) return null;
+    const steps = loopActivities(group.payload).filter((a) => a.kind !== "narrative");
+    return {
+      narratives: visibleLoopActivities(group).filter(
+        (a) => a.kind === "narrative" && !!a.narrative?.trim()
+      ),
+      steps,
+      toolTrace: processToolTrace(group.trace),
+      failedSteps: steps.filter(hasFailure).length,
+    };
+  })
+);
 
 function showFirstTurnAcknowledgment(group: TurnGroup, index: number): boolean {
   if (index !== 0 || !group.user) return false;
@@ -484,30 +532,39 @@ function showFailedNotice(group: TurnGroup): boolean {
             <div class="chat-bubble system">{{ t("analysis.analysisReceived") }}</div>
           </div>
 
-          <!-- Loop execution mode: unified trajectory panel with chronological L1 stream, on-demand L2 details, and L3 worker trace -->
+          <!-- Loop execution mode: one collapsed execution process per turn (L1 steps, on-demand L2 details, L3 worker trace and tool results); narration is the turn body below it -->
           <div
-            v-if="isLoopMode(group.payload) && visibleLoopActivities(group).length > 0"
-            class="analysis-steps loop-trajectory-panel"
+            v-if="loopViews[gi]?.steps.length || loopViews[gi]?.toolTrace.length"
+            class="loop-process"
           >
-            <div class="loop-panel-header">
-              <div class="step-card-header loop-header-main">
-                <div class="step-icon" :class="loopStatusClass(group.payload)">
-                  <Zap v-if="loopRunning(group.payload)" :size="12" />
-                  <CheckCircle2 v-else-if="hasCompletedAnalysis(group.payload)" :size="12" />
-                  <CircleSlash v-else :size="12" />
-                </div>
-                <span class="step-name" :class="loopStatusClass(group.payload)">
-                  {{ t("analysis.analysisProgress") }}
-                </span>
-                <span
-                  v-if="group.payload"
-                  class="loop-status-pill"
-                  :class="loopStatusClass(group.payload)"
-                >
-                  {{ activityStatusText(group.payload.runState.status) }}
-                </span>
-              </div>
-              <div class="step-detail loop-header-detail">
+            <button
+              type="button"
+              class="loop-process-toggle"
+              :aria-expanded="!!expandedLoopProcesses[group.key]"
+              @click="toggleLoopProcess(group.key)"
+            >
+              <ChevronDown
+                v-if="expandedLoopProcesses[group.key]"
+                class="loop-process-chevron"
+                :size="15"
+              />
+              <ChevronRight v-else class="loop-process-chevron" :size="15" />
+              <span class="step-icon" :class="loopStatusClass(group.payload)">
+                <Zap v-if="loopRunning(group.payload)" :size="12" />
+                <CheckCircle2 v-else-if="hasCompletedAnalysis(group.payload)" :size="12" />
+                <CircleSlash v-else :size="12" />
+              </span>
+              <span class="step-name" :class="loopStatusClass(group.payload)">
+                {{ t("analysis.loopProcess") }}
+              </span>
+              <span
+                v-if="group.payload"
+                class="loop-status-pill"
+                :class="loopStatusClass(group.payload)"
+              >
+                {{ activityStatusText(group.payload.runState.status) }}
+              </span>
+              <span class="loop-process-summary">
                 {{
                   t("analysis.loopActivityCount", { done: loopProgress(group.payload)?.done || 0 })
                 }}
@@ -519,51 +576,37 @@ function showFailedNotice(group: TurnGroup): boolean {
                     })
                   }}
                 </template>
-              </div>
-            </div>
+              </span>
+              <span v-if="loopViews[gi]!.failedSteps" class="loop-process-failures">
+                {{ t("analysis.loopProcessFailures", { n: loopViews[gi]!.failedSteps }) }}
+              </span>
+            </button>
 
-            <div class="loop-timeline">
-              <div
-                v-for="activity in visibleLoopActivities(group)"
-                :key="activity.activityId"
-                class="loop-timeline-item"
-                :class="[
-                  activity.kind === 'narrative' ? 'is-narrative' : 'is-step',
-                  `status-${activity.status}`,
-                ]"
-              >
-                <div class="loop-rail" aria-hidden="true">
-                  <div
-                    v-if="activity.kind === 'narrative'"
-                    class="loop-narrative-dot"
-                    :class="{ running: activity.status === 'running' }"
-                  ></div>
-                  <div
-                    v-else
-                    class="tree-dim-icon"
-                    :class="{
-                      done: activity.status === 'completed',
-                      running: activity.status === 'running',
-                      failed: activity.status === 'failed',
-                      stopped: activity.status === 'cancelled',
-                    }"
-                  >
-                    <CheckCircle2 v-if="activity.status === 'completed'" :size="12" />
-                    <Zap v-else-if="activity.status === 'running'" :size="12" />
-                    <CircleSlash v-else :size="12" />
-                  </div>
-                </div>
-
-                <div class="loop-item-body">
-                  <template v-if="activity.kind === 'narrative'">
+            <div v-if="expandedLoopProcesses[group.key]" class="loop-process-body">
+              <div v-if="loopViews[gi]!.steps.length" class="loop-timeline">
+                <div
+                  v-for="activity in loopViews[gi]!.steps"
+                  :key="activity.activityId"
+                  class="loop-timeline-item"
+                  :class="`status-${activity.status}`"
+                >
+                  <div class="loop-rail" aria-hidden="true">
                     <div
-                      v-if="loopActivityDetail(activity, t)"
-                      class="loop-narrative markdown-body"
-                      v-html="renderAgentMarkdown(loopActivityDetail(activity, t))"
-                    ></div>
-                  </template>
+                      class="tree-dim-icon"
+                      :class="{
+                        done: activity.status === 'completed',
+                        running: activity.status === 'running',
+                        failed: activity.status === 'failed',
+                        stopped: activity.status === 'cancelled',
+                      }"
+                    >
+                      <CheckCircle2 v-if="activity.status === 'completed'" :size="12" />
+                      <Zap v-else-if="activity.status === 'running'" :size="12" />
+                      <CircleSlash v-else :size="12" />
+                    </div>
+                  </div>
 
-                  <template v-else>
+                  <div class="loop-item-body">
                     <button
                       type="button"
                       class="tree-dim-header loop-activity-header"
@@ -733,9 +776,29 @@ function showFailedNotice(group: TurnGroup): boolean {
                         />
                       </div>
                     </div>
-                  </template>
+                  </div>
                 </div>
               </div>
+
+              <div v-if="loopViews[gi]!.toolTrace.length" class="loop-tool-trace">
+                <div class="loop-tool-trace-title">{{ t("analysis.loopToolResults") }}</div>
+                <AgentMessageTrace :messages="loopViews[gi]!.toolTrace" variant="turn" />
+              </div>
+            </div>
+          </div>
+
+          <!-- Loop body: public narration shown directly as safe Markdown -->
+          <div v-if="loopViews[gi]?.narratives.length" class="chat-msg assistant">
+            <div
+              class="chat-bubble assistant loop-content"
+              :class="{ streaming: loopRunning(group.payload) }"
+            >
+              <div
+                v-for="activity in loopViews[gi]!.narratives"
+                :key="activity.activityId"
+                class="loop-narrative markdown-body"
+                v-html="renderAgentMarkdown(activity.narrative || '')"
+              ></div>
             </div>
           </div>
 
@@ -836,25 +899,6 @@ function showFailedNotice(group: TurnGroup): boolean {
             <div class="chat-bubble assistant">
               <div class="markdown-body" v-html="renderMarkdown(groupAnswer(group))"></div>
             </div>
-          </div>
-
-          <!-- This turn's public messages and tool results: only show egress-filtered messages, with expansion state independent per turn -->
-          <div v-if="group.trace.length" class="message-trace-list">
-            <button
-              type="button"
-              class="loop-trace-toggle"
-              :aria-expanded="!!expandedTurnTraces[group.key]"
-              @click="toggleTurnTrace(group.key)"
-            >
-              <ChevronDown v-if="expandedTurnTraces[group.key]" :size="13" />
-              <ChevronRight v-else :size="13" />
-              {{ t("harness.messagesAndTools") }}
-            </button>
-            <AgentMessageTrace
-              v-if="expandedTurnTraces[group.key]"
-              :messages="group.trace"
-              variant="turn"
-            />
           </div>
 
           <!-- Follow-up turn streaming tail: show the typing cursor while the body is still growing -->
@@ -1179,9 +1223,9 @@ function showFailedNotice(group: TurnGroup): boolean {
   padding-left: 30px;
 }
 
-/* Loop Trajectory Panel: unified card container with chronological L1 stream */
-.loop-trajectory-panel {
-  gap: 0;
+/* Loop execution process: one collapsed card per turn */
+.loop-process {
+  margin-bottom: 16px;
   background: var(--el-bg-color);
   border: 1px solid var(--el-border-color);
   border-radius: 18px;
@@ -1189,23 +1233,44 @@ function showFailedNotice(group: TurnGroup): boolean {
   overflow: hidden;
 }
 
-.loop-panel-header {
+.loop-process-toggle {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  justify-content: space-between;
-  gap: 6px 12px;
-  padding: 12px 16px;
-  background: linear-gradient(
-    180deg,
-    color-mix(in srgb, var(--el-color-primary) 4%, transparent) 0%,
-    transparent 100%
-  );
-  border-bottom: 1px solid var(--el-border-color-lighter);
+  gap: 6px 8px;
+  width: 100%;
+  padding: 10px 16px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
 }
 
-.loop-header-main {
-  margin-bottom: 0;
+.loop-process-toggle:hover {
+  background: var(--el-fill-color-light);
+}
+
+.loop-process-chevron {
+  flex-shrink: 0;
+  color: var(--el-text-color-secondary);
+}
+
+.loop-process-summary {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.loop-process-failures {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--el-color-danger);
+}
+
+.loop-process-body {
+  border-top: 1px solid var(--el-border-color-lighter);
 }
 
 .loop-status-pill {
@@ -1235,11 +1300,6 @@ function showFailedNotice(group: TurnGroup): boolean {
 .loop-status-pill.failed {
   background: var(--el-color-danger-light-9);
   color: var(--el-color-danger);
-}
-
-.loop-header-detail {
-  padding-left: 0;
-  color: var(--el-text-color-secondary);
 }
 
 .loop-timeline {
@@ -1278,20 +1338,6 @@ function showFailedNotice(group: TurnGroup): boolean {
   flex-shrink: 0;
   position: relative;
   z-index: 1;
-}
-
-.loop-narrative-dot {
-  width: 8px;
-  height: 8px;
-  margin-top: 7px;
-  border-radius: 50%;
-  background: var(--el-color-primary-light-3);
-  box-shadow: 0 0 0 3px var(--el-color-primary-light-9);
-}
-
-.loop-narrative-dot.running {
-  background: var(--el-color-primary);
-  animation: breathe 1.6s ease-in-out infinite;
 }
 
 .loop-item-body {
@@ -1417,7 +1463,31 @@ function showFailedNotice(group: TurnGroup): boolean {
   margin-bottom: 0;
 }
 
-.loop-trajectory-panel .tree-q-text {
+.loop-tool-trace {
+  padding: 0 16px 14px;
+}
+
+.loop-timeline + .loop-tool-trace {
+  padding-top: 12px;
+  border-top: 1px dashed var(--el-border-color-lighter);
+}
+
+.loop-tool-trace-title {
+  margin: 12px 0 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--el-text-color-secondary);
+}
+
+.loop-timeline + .loop-tool-trace .loop-tool-trace-title {
+  margin-top: 0;
+}
+
+.loop-content .loop-narrative + .loop-narrative {
+  margin-top: 8px;
+}
+
+.loop-process .tree-q-text {
   min-width: 0;
   overflow-wrap: anywhere;
 }
@@ -1482,6 +1552,7 @@ function showFailedNotice(group: TurnGroup): boolean {
   cursor: default;
 }
 
+.loop-process-toggle:focus-visible,
 .loop-activity-header:focus-visible,
 .loop-trace-toggle:focus-visible {
   outline: 2px solid var(--el-color-primary-light-3);
@@ -1951,12 +2022,15 @@ function showFailedNotice(group: TurnGroup): boolean {
     padding: 12px;
     border-radius: 14px;
   }
-  :where(html.workbench-mobile-navigation) .loop-trajectory-panel {
+  :where(html.workbench-mobile-navigation) .loop-process {
     border-radius: 14px;
   }
-  :where(html.workbench-mobile-navigation) .loop-panel-header,
+  :where(html.workbench-mobile-navigation) .loop-process-toggle,
   :where(html.workbench-mobile-navigation) .loop-timeline {
     padding: 10px 12px;
+  }
+  :where(html.workbench-mobile-navigation) .loop-tool-trace {
+    padding: 0 12px 10px;
   }
   :where(html.workbench-mobile-navigation) .run-switcher-row {
     margin-right: 0;

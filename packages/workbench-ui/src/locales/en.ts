@@ -522,8 +522,7 @@ export default {
     "loadFailed": "Conversation history is temporarily unavailable. Please retry.",
     "user": "You",
     "assistant": "Agent",
-    "toolCall": "Tool call",
-    "messagesAndTools": "View turn messages and tool results"
+    "toolCall": "Tool call"
   },
   "governance": {
     "title": "Knowledge governance",
@@ -593,6 +592,9 @@ export default {
     "analysisProgress": "Analysis Progress",
     "loopActivityCount": "{done} activities completed",
     "loopCurrentActivity": "In progress: {name}",
+    "loopProcess": "Execution process",
+    "loopProcessFailures": "{n} steps with failures",
+    "loopToolResults": "Tool calls and results",
     "loopDispatchTopic": "Assignment Topic",
     "loopDispatchSummary": "Worker Agent Summary",
     "loopWorkerTrace": "Full Worker Agent Trace",
@@ -635,9 +637,6 @@ export default {
     "queryComplete": "Query Complete",
     "querying": "Querying",
     "partiallyComplete": "Partially Completed",
-    "analysisSkillExecution": "Analysis Skill Execution",
-    "executingSkills": "Executing analysis skills...",
-    "completedSkills": "Completed {n} skills",
     "analysisFailed": "Analysis Failed",
     "taskCreateFailed": "Failed to create task",
     "deleteTaskConfirm": "Are you sure you want to delete this task? This cannot be undone.",

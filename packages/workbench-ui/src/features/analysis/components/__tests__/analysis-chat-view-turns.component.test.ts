@@ -193,6 +193,11 @@ function occurrences(text: string, value: string): number {
   return text.split(value).length - 1;
 }
 
+/** Opens every turn's execution process, which is collapsed by default. */
+async function openProcesses(wrapper: ReturnType<typeof render>) {
+  for (const toggle of wrapper.findAll(".loop-process-toggle")) await toggle.trigger("click");
+}
+
 function userTrace(text: string): EgressMessage {
   return { role: "user", content: [{ type: "text", text }] };
 }
@@ -265,8 +270,8 @@ it("shows the run switcher below the user's question", () => {
   expect(children[2].classList).toContain("analysis-acknowledgment");
 });
 
-// Public surface under test: execution output consumed once per turn; observable result: both Q&A turns and both activities are present in L1 by default, with no repeated replies.
-it("renders every turn's question, L1 activities and reply without collapsing completed loop trajectories", async () => {
+// Public surface under test: execution output consumed once per turn; observable result: narration is the visible body, L1 steps sit in a collapsed process, and replies are not repeated.
+it("renders every turn's question, narration body and reply with L1 steps inside a collapsed process", async () => {
   seed({
     messages: [
       { id: 1, role: "user", content: "first-question" },
@@ -302,6 +307,12 @@ it("renders every turn's question, L1 activities and reply without collapsing co
   expect(text).toContain("second-question");
   expect(text).toContain("first-round-writing");
   expect(text).toContain("second-round-writing");
+  expect(wrapper.find(".loop-content .loop-narrative").exists()).toBe(true);
+  // The process is collapsed by default; only the first turn has steps, so only it gets a process entry.
+  expect(wrapper.findAll(".loop-process")).toHaveLength(1);
+  expect(wrapper.find(".loop-process-toggle").attributes("aria-expanded")).toBe("false");
+  expect(wrapper.find(".loop-activity-header").exists()).toBe(false);
+  await openProcesses(wrapper);
   // Once Node fills in question.execution in /turns, clicking the L1 evidence header mounts QueryExecutionView in L2.
   for (const header of wrapper.findAll(".loop-activity-header")) await header.trigger("click");
   expect(wrapper.find("query-execution-view-stub").exists()).toBe(true);
@@ -433,18 +444,26 @@ it("does not leak partial report text from a cancelled run into chat", async () 
   expect(text).not.toContain("pre-cancel-partial-report");
 });
 
-it("keeps each turn's messages and tool results inside its own expandable trace", async () => {
+// Public surface under test: per-turn tool results moved into the execution process; observable result: each turn's
+// process holds only its own tool calls and results, without repeating the user question, the body or internal thinking.
+it("keeps each turn's tool calls and results inside its own collapsed process without repeating question or body", async () => {
   seed({
     messages: [
       { id: 1, role: "user", content: "first-question" },
       answerMessage(2, "first-answer", "first-round-writing", {}, [
         userTrace("first-question"),
-        userTrace("[Orders](https://example.com/orders) submitted"),
-        userTrace('{"sku":"SKU42","qty":3}'),
-        userTrace('<img src=x onerror="alert(1)">'),
-        toolCallTrace("orders_query", { region: "north" }),
-        toolResultTrace("orders_query", "orders-result-A"),
+        {
+          role: "assistant",
+          content: [
+            { type: "text", text: "first-round-writing" },
+            { type: "toolCall", id: "call-orders_query", name: "orders_query", arguments: { region: "north" } },
+          ],
+        },
+        toolResultTrace("orders_query", "[Orders](https://example.com/orders) orders-result-A"),
+        toolResultTrace("orders_json", '{"sku":"SKU42","qty":3}'),
+        toolResultTrace("orders_html", '<img src=x onerror="alert(1)">'),
         { ...userTrace("hidden-message"), thinking: "internal-thinking-A" } as unknown as EgressMessage,
+        { role: "assistant", content: [{ type: "text", text: "first-answer" }] },
       ]),
       { id: 3, role: "user", content: "second-question" },
       answerMessage(4, "second-answer", "second-round-writing", {}, [
@@ -454,31 +473,110 @@ it("keeps each turn's messages and tool results inside its own expandable trace"
     ],
   });
   const wrapper = render();
-  const toggles = wrapper.findAll(".message-trace-list .loop-trace-toggle");
+  const toggles = wrapper.findAll(".loop-process-toggle");
 
   expect(toggles).toHaveLength(2);
+  // The old separate "messages and tools" entry is gone.
+  expect(wrapper.findAll(".message-trace-list")).toHaveLength(0);
   expect(wrapper.text()).not.toContain("orders-result-A");
   expect(wrapper.text()).not.toContain("internal-thinking-A");
 
   await toggles[0].trigger("click");
-  expect(wrapper.text()).toContain("orders_query");
-  expect(wrapper.text()).toContain("orders-result-A");
+  const first = wrapper.findAll(".loop-process")[0];
+  expect(first.text()).toContain("orders_query");
+  expect(first.text()).toContain("north");
+  expect(first.text()).toContain("orders-result-A");
   expect(wrapper.text()).not.toContain("stock_query");
-  expect(wrapper.text()).not.toContain("stock-result-B");
   expect(wrapper.text()).not.toContain("internal-thinking-A");
-  // Per-turn public messages reuse the old safe renderer: Markdown links and JSON code blocks are kept and raw HTML is not executed.
-  expect(wrapper.find('.loop-trace-text a[href="https://example.com/orders"]').exists()).toBe(true);
-  const codeBlock = wrapper.find(".loop-trace-text pre code");
+  expect(wrapper.text()).not.toContain("hidden-message");
+  // The user question and the assistant text stay in their own places, once.
+  expect(occurrences(wrapper.text(), "first-question")).toBe(1);
+  expect(occurrences(wrapper.text(), "first-round-writing")).toBe(1);
+  expect(occurrences(wrapper.text(), "first-answer")).toBe(1);
+  // Tool results reuse the safe renderer: Markdown links and JSON code blocks are kept and raw HTML is not executed.
+  expect(first.find('.loop-trace-text a[href="https://example.com/orders"]').exists()).toBe(true);
+  const codeBlock = first.find(".loop-trace-text pre code");
   expect(codeBlock.exists()).toBe(true);
   expect(codeBlock.text()).toContain('"sku"');
-  expect(wrapper.find(".loop-trace-text img").exists()).toBe(false);
-  expect(wrapper.text()).toContain("onerror");
+  expect(first.find(".loop-trace-text img").exists()).toBe(false);
+  expect(first.text()).toContain("onerror");
 
   await toggles[1].trigger("click");
-  expect(wrapper.text()).toContain("stock_query");
-  expect(wrapper.text()).toContain("stock-result-B");
+  expect(wrapper.findAll(".loop-process")[1].text()).toContain("stock-result-B");
   expect(occurrences(wrapper.text(), "orders-result-A")).toBe(1);
   expect(occurrences(wrapper.text(), "stock-result-B")).toBe(1);
+});
+
+// Public surface under test: collapsed process header; observable result: running progress and step failures are
+// readable without opening the process, and the user's choice survives the turn settling into history.
+it("surfaces progress and failures on the collapsed process header and keeps the user's choice when the turn settles", async () => {
+  const steps: AnalysisActivity[] = [
+    {
+      activityId: "ext-1",
+      seq: 1,
+      revision: 1,
+      kind: "external_tool",
+      status: "failed",
+      startedAt: 1,
+      serviceName: "erp",
+      toolName: "sync",
+      error: "mcp-down",
+    },
+    {
+      activityId: "ev-1",
+      seq: 2,
+      revision: 1,
+      kind: "evidence",
+      status: "completed",
+      startedAt: 2,
+      questions: [{ questionId: "q-1", question: "gap-question", status: "failed", error: "no-rows" }],
+    },
+  ];
+  seed({
+    messages: [{ id: 1, role: "user", content: "question" }],
+    streamingSnapshot: {
+      mode: "deep-analysis",
+      status: "streaming",
+      source: "live",
+      primaryText: "",
+      requestSeq: 9,
+      deepAnalysis: execution([...steps, activity("live-narration")], {
+        runState: { status: "running", revision: 1, progress: { done: 2, label: "querying-orders" } },
+      }),
+    },
+  });
+  const wrapper = render();
+  const header = wrapper.find(".loop-process-toggle");
+  expect(header.attributes("aria-expanded")).toBe("false");
+  expect(header.text()).toContain("querying-orders");
+  expect(header.find(".loop-process-failures").text()).toContain("2");
+  expect(wrapper.text()).toContain("live-narration");
+  expect(wrapper.text()).not.toContain("mcp-down");
+
+  await header.trigger("click");
+  expect(wrapper.text()).toContain("mcp-down");
+
+  const session = useAnalysisStore().sessions["task-1"];
+  session.streamingSnapshot = null;
+  session.messages = [
+    { id: 1, role: "user", content: "question" },
+    {
+      id: 2,
+      role: "assistant",
+      content: "",
+      snapshot: {
+        mode: "deep-analysis",
+        status: "completed",
+        source: "history",
+        primaryText: "",
+        requestSeq: 9,
+        deepAnalysis: execution([...steps, activity("live-narration")]),
+      },
+    },
+  ];
+  await nextTick();
+  expect(wrapper.find(".loop-process-toggle").attributes("aria-expanded")).toBe("true");
+  expect(wrapper.text()).toContain("mcp-down");
 });
 
 // Public surface under test: a regular continuous session does not switch by run history; observable result: all turns and activities stay present,
@@ -594,7 +692,7 @@ it("does not show the report completion notice for a loop report run without rep
 });
 
 // Public surface under test: Q2 narrow narrative deduplication; observable result: only a finished regular turn's trailing narrative identical to finalAnswer is deduplicated, while middle narrations and differing texts are kept.
-it("deduplicates only a finished regular turn's trailing narrative when identical to finalAnswer, preserving middle narrations and differing texts", () => {
+it("deduplicates only a finished regular turn's trailing narrative when identical to finalAnswer, preserving middle narrations and differing texts", async () => {
   const originalActivities: AnalysisActivity[] = [
     {
       activityId: "narr-middle",
@@ -642,6 +740,7 @@ it("deduplicates only a finished regular turn's trailing narrative when identica
   });
 
   const wrapper = render();
+  await openProcesses(wrapper);
   const text = wrapper.text();
 
   // Middle narration and probe summary are preserved; trailing duplicate narrative is carried once by the assistant bubble.
@@ -657,7 +756,7 @@ it("deduplicates only a finished regular turn's trailing narrative when identica
   expect(occurrences(text, "distinct-final-answer")).toBe(1);
 });
 
-it("renders loop narrative and workerSummary as safe Markdown without executing raw HTML and keeps L1 tool summaries visible", async () => {
+it("renders loop narrative as the body and workerSummary as safe Markdown without executing raw HTML, with L1 tool summaries in the process", async () => {
   seed({
     report: false,
     messages: [
@@ -700,8 +799,9 @@ it("renders loop narrative and workerSummary as safe Markdown without executing 
   });
 
   const wrapper = render();
-  expect(wrapper.find(".loop-narrative strong").text()).toBe("Bold narrative");
+  expect(wrapper.find(".loop-content .loop-narrative strong").text()).toBe("Bold narrative");
   expect(wrapper.find(".loop-narrative img").exists()).toBe(false);
+  await openProcesses(wrapper);
   expect(wrapper.text()).toContain("erp-service");
   expect(wrapper.text()).toContain("sync_order");
   expect(wrapper.text()).toContain("mcp-connection-reset");
@@ -846,6 +946,7 @@ it("reads a regular turn's deferred query facts from that turn's own requestSeq"
     ],
   });
   const wrapper = render();
+  await openProcesses(wrapper);
   const headers = wrapper.findAll(".loop-activity-header");
   await headers[1].trigger("click");
 
@@ -881,6 +982,7 @@ it("keeps the user's L2 expansion when a live turn settles into history with reb
     },
   });
   const wrapper = render();
+  await openProcesses(wrapper);
   await wrapper.find(".loop-activity-header").trigger("click");
   expect(wrapper.text()).toContain("live-worker-summary");
 
@@ -964,6 +1066,7 @@ it("does not carry L2 expansion or L3 worker traces between historical runs that
   const store = useAnalysisStore();
   await store.selectRun(0);
   const wrapper = render();
+  await openProcesses(wrapper);
   await wrapper.find(".loop-activity-header").trigger("click");
   await wrapper.find(".loop-dispatch-detail .loop-trace-toggle").trigger("click");
   await flushPromises();
@@ -972,6 +1075,9 @@ it("does not carry L2 expansion or L3 worker traces between historical runs that
 
   await store.selectRun(1);
   await flushPromises();
+  // Another run starts with its own collapsed process.
+  expect(wrapper.find(".loop-process-toggle").attributes("aria-expanded")).toBe("false");
+  await openProcesses(wrapper);
   expect(wrapper.text()).toContain("topic-run-b");
   expect(wrapper.find(".loop-dispatch-detail").exists()).toBe(false);
   expect(wrapper.text()).not.toContain("worker-trace-text");
@@ -984,6 +1090,7 @@ it("does not carry L2 expansion or L3 worker traces between historical runs that
 
   await store.selectRun(2);
   await nextTick();
+  await openProcesses(wrapper);
   expect(wrapper.text()).toContain("topic-run-latest");
   expect(wrapper.find(".loop-dispatch-detail").exists()).toBe(false);
   expect(wrapper.text()).not.toContain("worker-trace-text");
