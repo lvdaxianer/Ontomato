@@ -27,8 +27,9 @@ to the host architecture. `PROMPT_LANG=en` selects the public Java prompts. Base
 image digests and pnpm versions live in the Dockerfiles. `DEBIAN_MIRROR`,
 `DEBIAN_SECURITY_MIRROR` and `PIP_INDEX_URL` remain host-level build settings.
 
-CI publishes final images. Pushes to `develop` publish the `edge` version; formal
-`v*` tags publish the stripped version plus `latest`. Pull requests run checks
+CI publishes final images. Pushes to `develop` publish the `edge` version, pushes to
+`stable` publish the `stable` version, and formal `v*` tags publish the stripped version
+plus `latest`. Pull requests run checks
 without publishing (see `.github/workflows/pr-checks.yml`).
 GitHub runners reuse the previous release's inline BuildKit
 cache through `BUILD_CACHE_REF`; this keeps unchanged dependency layers on a fresh runner.
