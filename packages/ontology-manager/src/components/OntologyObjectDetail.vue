@@ -18,6 +18,7 @@ const emit = defineEmits<{
   updated: [];
   browse: [className: string];
   relation: [relationship: string];
+  view: [className: string];
 }>();
 
 const loading = ref(false);
@@ -169,6 +170,7 @@ onMounted(() => void loadDetail());
       <el-button v-if="object" :icon="Table2" @click="emit('browse', object.className)">
         {{ ot("browseData") }}
       </el-button>
+      <el-button v-if="object" @click="emit('view', object.className)">{{ ot('ovConfigureObject') }}</el-button>
       <el-button type="primary" :icon="Save" :loading="saving" @click="save">
         {{ ot("saveChanges") }}
       </el-button>

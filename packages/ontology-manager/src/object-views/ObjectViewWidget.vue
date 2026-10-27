@@ -1,0 +1,159 @@
+<script setup lang="ts">
+import { computed, onBeforeUnmount, ref, watch } from "vue";
+import { ElButton, ElDialog, ElInput, ElTable, ElTableColumn, ElAlert } from "element-plus";
+import { readViewPath, resolveViewBinding, type ViewWidget, type ObjectReference } from "@ontomato/contracts/object-views";
+import { useManagerClient, useOntologyText } from "../context";
+const { ot } = useOntologyText();
+
+const props = defineProps<{ widget: ViewWidget; object: Record<string, unknown>; reference: ObjectReference; variables: Record<string, unknown>; refresh: number; preview?: boolean }>();
+const emit = defineEmits<{ variable: [name: string, value: unknown]; refresh: []; open: [reference: ObjectReference] }>();
+const client = useManagerClient();
+const data = ref<unknown>();
+const error = ref("");
+const loading = ref(false);
+const actionOpen = ref(false);
+const actionValues = ref<Record<string, unknown>>({});
+const actionTypes = ref<Record<string, string>>({});
+const offset = ref(0);
+const hasMore = ref(false);
+const linkTarget = ref({ className: "", primaryKey: "" });
+let request = 0;
+onBeforeUnmount(() => { request++; });
+const parameters = computed(() => Object.fromEntries(Object.entries(props.widget.parameters).map(([name, binding]) => [name, resolveViewBinding(binding, props.object, props.variables)])));
+const bindingValue = computed(() => resolveViewBinding(props.widget.binding, props.object, props.variables));
+const selectedData = computed(() => readViewPath(data.value, props.widget.resultPath));
+const rows = computed<Record<string, unknown>[]>(() => {
+  const value = props.widget.kind === "links" ? data.value : selectedData.value ?? bindingValue.value;
+  return Array.isArray(value) ? value.filter(row => row !== null && typeof row === "object") : [];
+});
+const fields = computed(() => props.widget.fields.length ? props.widget.fields : Object.keys(rows.value[0] || {}));
+const propertyFields = computed(() => props.widget.fields.length ? props.widget.fields : Object.keys(props.object));
+const points = computed(() => rows.value.map((row, index) => ({ label: String(row[props.widget.labelField] ?? index + 1), value: Number(row[props.widget.valueField]) })).filter(point => Number.isFinite(point.value)));
+const maxValue = computed(() => Math.max(1, ...points.value.map(point => Math.abs(point.value))));
+const linePoints = computed(() => points.value.map((point, index) => `${20 + index * 560 / Math.max(1, points.value.length - 1)},${150 - point.value / maxValue.value * 120}`).join(" "));
+function format(value: unknown) { return value == null ? "—" : typeof value === "object" ? JSON.stringify(value) : String(value); }
+
+async function load() {
+  const current = ++request;
+  error.value = "";
+  if (!["table", "chart", "metric", "links"].includes(props.widget.kind)) return;
+  loading.value = true;
+  data.value = undefined;
+  try {
+    if (props.widget.kind === "links") {
+      if (!props.widget.relation || !props.reference.primaryKey) return;
+      const result = await client.loadViewLinks(props.reference.className, props.reference.primaryKey, props.widget.relation, props.widget.direction, offset.value);
+      if (current !== request) return;
+      data.value = result.rows;
+      hasMore.value = result.hasMore;
+      linkTarget.value = { className: result.targetClass, primaryKey: result.targetPk };
+    } else if (props.widget.resourceId) {
+      const result = await client.executeViewMetric(props.widget.resourceId, parameters.value);
+      if (current === request) data.value = result;
+    }
+  } catch (reason) {
+    if (current === request) error.value = reason instanceof Error ? reason.message : String(reason);
+  } finally { if (current === request) loading.value = false; }
+}
+watch(() => [props.reference, props.widget, parameters.value, props.refresh], () => { offset.value = 0; void load(); }, { deep: true, immediate: true });
+function page(delta: number) { offset.value = Math.max(0, offset.value + delta); void load(); }
+function selectRow(row: Record<string, unknown>) {
+  if (props.widget.variable) emit("variable", props.widget.variable, row);
+}
+function openRow(row: Record<string, unknown>) {
+  const className = props.widget.kind === "links" ? linkTarget.value.className : props.widget.targetClass;
+  const key = props.widget.kind === "links" ? linkTarget.value.primaryKey : props.widget.valueField;
+  if (className && row[key] != null) emit("open", { className, primaryKey: String(row[key]) });
+}
+function click() {
+  if (props.widget.onClick === "refresh") emit("refresh");
+  else if (props.widget.onClick === "setVariable" && props.widget.variable) emit("variable", props.widget.variable, bindingValue.value);
+  else if (props.widget.onClick === "openObject" && props.widget.targetClass && bindingValue.value != null) emit("open", { className: props.widget.targetClass, primaryKey: String(bindingValue.value) });
+}
+async function execute() {
+  loading.value = true;
+  error.value = "";
+  try {
+    const param = Object.fromEntries(Object.entries(actionValues.value).map(([name, value]) => {
+      if (typeof value === "string" && /^(int|integer|long|double|float|number|boolean|object|array)$/i.test(actionTypes.value[name] || "")) {
+        try { return [name, JSON.parse(value)]; } catch { throw new Error(ot("ovInvalidParameter", { type: actionTypes.value[name], name })); }
+      }
+      return [name, value];
+    }));
+    await client.executeViewAction(props.widget.resourceId, param);
+    actionOpen.value = false;
+    emit("refresh");
+  } catch (reason) { error.value = reason instanceof Error ? reason.message : String(reason); }
+  finally { loading.value = false; }
+}
+async function openAction() {
+  error.value = "";
+  try {
+    const response = await client.requestSmartAsset("actions", "queryById", { id: props.widget.resourceId });
+    const parametersDefinition = response.data?.function?.parameters || [];
+    actionTypes.value = Object.fromEntries(parametersDefinition.map((parameter: { name: string; type?: string }) => [parameter.name, parameter.type || ""]));
+    actionValues.value = Object.fromEntries(parametersDefinition.map((parameter: { name: string }) => [parameter.name, parameters.value[parameter.name] ?? ""]));
+    Object.assign(actionValues.value, parameters.value);
+    actionOpen.value = true;
+  } catch (reason) { error.value = reason instanceof Error ? reason.message : String(reason); }
+}
+</script>
+<template>
+  <div class="view-widget" :aria-busy="loading">
+    <el-alert v-if="error" :title="error" type="error" :closable="false" />
+    <p v-if="loading" class="widget-state" role="status">{{ ot('ovLoading') }}</p>
+    <p v-else-if="widget.kind === 'text'" class="view-text">{{ widget.text }}{{ widget.binding ? format(bindingValue) : '' }}</p>
+    <dl v-else-if="widget.kind === 'properties'" class="properties">
+      <template v-for="field in propertyFields" :key="field"><dt>{{ field }}</dt><dd>{{ format(object[field]) }}</dd></template>
+    </dl>
+    <strong v-else-if="widget.kind === 'metric'" class="metric">{{ format(widget.resourceId ? readViewPath(Array.isArray(selectedData) ? selectedData[0] : selectedData, widget.valueField) : bindingValue) }}</strong>
+    <template v-else-if="widget.kind === 'table' || widget.kind === 'links'">
+      <el-table :data="rows" :max-height="widget.height" highlight-current-row @row-click="selectRow" @row-dblclick="openRow">
+        <el-table-column v-for="field in fields" :key="field" :prop="field" :label="field" min-width="130" show-overflow-tooltip />
+        <el-table-column v-if="widget.kind === 'links' || widget.targetClass" min-width="100"><template #default="scope"><el-button link @click.stop="openRow(scope.row)">{{ ot('ovOpen') }}</el-button></template></el-table-column>
+      </el-table>
+      <div v-if="widget.kind === 'links'" class="pages"><el-button :disabled="offset === 0" @click="page(-50)">{{ ot('ovPrevious') }}</el-button><span>{{ rows.length ? offset + 1 : 0 }}–{{ offset + rows.length }}</span><el-button :disabled="!hasMore" @click="page(50)">{{ ot('ovNext') }}</el-button></div>
+    </template>
+    <template v-else-if="widget.kind === 'chart'">
+      <svg v-if="widget.chartType === 'line' && points.length" viewBox="0 0 600 180" role="img" :aria-label="widget.title"><polyline :points="linePoints" fill="none" stroke="currentColor" stroke-width="3" /></svg>
+      <div v-else class="bars" :style="{ maxHeight: widget.height + 'px' }"><div v-for="(point, index) in points" :key="index" class="bar-row"><span class="bar-label" :title="point.label">{{ point.label }}</span><div class="bar-track"><i :style="{ width: Math.abs(point.value) / maxValue * 100 + '%' }" /></div><span class="bar-value">{{ point.value }}</span></div></div>
+      <p v-if="!points.length" class="widget-state">{{ ot('ovNoChartData') }}</p>
+    </template>
+    <el-input v-else-if="widget.kind === 'input'" :model-value="format(variables[widget.variable] ?? '')" :placeholder="widget.text" @update:model-value="emit('variable', widget.variable, $event)" />
+    <el-button v-else-if="widget.kind === 'button'" @click="click">{{ widget.text || widget.title }}</el-button>
+    <el-button v-else-if="widget.kind === 'action'" type="primary" :disabled="preview || !widget.resourceId" @click="openAction">{{ widget.text || widget.title }}</el-button>
+    <el-dialog v-model="actionOpen" class="object-action-dialog" :title="widget.title" width="min(480px, calc(100% - 32px))" :append-to-body="false">
+      <label v-for="(_, name) in actionValues" :key="name" class="action-field">{{ name }}<el-input :model-value="format(actionValues[name])" @update:model-value="actionValues[name] = $event" /></label>
+      <template #footer><el-button @click="actionOpen = false">{{ ot('ovCancel') }}</el-button><el-button type="primary" :loading="loading" @click="execute">{{ ot('ovSubmit') }}</el-button></template>
+    </el-dialog>
+  </div>
+</template>
+<style scoped>
+.view-widget { min-width: 0; font-size: 13px; line-height: 22px; }
+.view-widget :deep(.el-button + .el-button) { margin-inline-start: 0; }
+.view-widget > .el-alert { margin-bottom: 12px; overflow-wrap: anywhere; }
+.view-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.properties { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,2fr); column-gap: 16px; row-gap: 12px; margin: 0; }
+.properties dt, .properties dd { min-width: 0; overflow-wrap: anywhere; }
+.properties dt { color: var(--el-text-color-secondary); }
+.properties dd { margin: 0; white-space: pre-wrap; }
+.metric { display: block; font-size: 32px; font-weight: 600; line-height: 1.25; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.pages { display: flex; flex-wrap: wrap; gap: 8px; justify-content: space-between; align-items: center; padding-top: 12px; margin-top: 12px; border-top: 1px solid var(--el-border-color-lighter); }
+.pages span { font-size: 12px; color: var(--el-text-color-secondary); font-variant-numeric: tabular-nums; }
+.bars { display: grid; gap: 12px; overflow: auto; }
+.bar-row { display: grid; grid-template-columns: minmax(0, 100px) minmax(24px, 1fr) minmax(0, 64px); gap: 12px; align-items: center; }
+.bar-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bar-value { text-align: end; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.bar-track { background: var(--el-fill-color); height: 12px; border-radius: 2px; overflow: hidden; }
+.bar-track i { display: block; background: var(--el-color-primary); height: 100%; border-radius: inherit; }
+svg { display: block; width: 100%; color: var(--el-color-primary); }
+.action-field { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; font-size: 13px; line-height: 20px; overflow-wrap: anywhere; }
+.action-field:last-child { margin-bottom: 0; }
+.widget-state { display: grid; place-items: center; min-height: 96px; margin: 0; padding: 16px; color: var(--el-text-color-secondary); text-align: center; }
+@container view-card (max-width: 260px) {
+  .properties { grid-template-columns: minmax(0, 1fr); row-gap: 4px; }
+  .properties dd + dt { margin-top: 8px; }
+  .bar-row { grid-template-columns: minmax(0, 72px) minmax(16px, 1fr) minmax(0, 48px); gap: 8px; }
+  .metric { font-size: 26px; }
+}
+</style>

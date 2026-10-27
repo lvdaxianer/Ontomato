@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { Graph } from "@antv/g6";
+import type { ObjectReference } from "@ontomato/contracts/object-views";
 import {
   Box,
   ArrowLeft,
@@ -38,6 +39,8 @@ import {
 
 const context = useManagerContext();
 const props = defineProps<{ summaryTarget?: HTMLElement | null }>();
+const emit = defineEmits<{ open: [reference: ObjectReference]; configure: [className: string] }>();
+const selectedReference = computed<ObjectReference | null>(() => selectedNode.value ? ({ className: selectedNode.value.class, primaryKey: selectedNode.value.id.slice(selectedNode.value.class.length + 1) }) : null);
 const { message } = useManagerFeedback();
 const { ot } = useOntologyText();
 const { t } = useSharedText();
@@ -945,6 +948,7 @@ onBeforeUnmount(() => {
             <el-button :icon="GitFork" :loading="expanding" :disabled="rendering || filtersDirty || versionChanged || currentPage?.nextOffset === null" @click="expandNeighbors">{{ ot(currentPage ? 'instanceGraphMore' : 'instanceGraphExpand') }}</el-button>
           </div>
         </div>
+        <el-button v-if="selectedReference" @click="emit('open', selectedReference)">{{ ot('ovOpenView') }}</el-button>
         <div class="detail-title">
           <span class="resource-icon"><Box :size="16" /></span>
           <div class="detail-title-copy">

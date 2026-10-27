@@ -2,11 +2,13 @@
 import { computed, onMounted, ref, watch } from "vue";
 import type { ManagerAuthFailureStatus } from "./api";
 import { provideManagerContext, type ManagerHostContext } from "./context";
-import { sharedText, type SharedKey } from "./i18n";
 import { provideManagerFeedback } from "./feedback";
 import ManagerConfirmDialog from "./ManagerConfirmDialog.vue";
 import BusinessKnowledge from "./components/BusinessKnowledge.vue";
 import DataBrowser from "./data-browser/DataBrowser.vue";
+import ObjectViewBuilder from "./object-views/ObjectViewBuilder.vue";
+import ObjectViewPage from "./object-views/ObjectViewPage.vue";
+import type { ObjectReference } from "@ontomato/contracts/object-views";
 import VisualModeling from "./visual-modeling/VisualModeling.vue";
 import OntologyAssetCatalog from "./components/OntologyAssetCatalog.vue";
 import OntologyAssetDetail from "./components/OntologyAssetDetail.vue";
@@ -41,7 +43,6 @@ const { loadOntology, loadSmartAssets } = provideManagerContext(context, (status
 );
 const shell = ref<HTMLElement>();
 provideManagerFeedback(shell);
-const t = (key: SharedKey) => sharedText(context.messages, key);
 /** The host-supplied view replaces the original hash routing: the path locates the workspace and resource, the query carries from/focus/id/back. */
 const route = computed(() => {
   const [path, query = ""] = context.view.split("?");
@@ -57,6 +58,15 @@ const selectedObjectClass = ref("");
 const selectedRelation = ref("");
 const objectCreateVisible = ref(false);
 const browserObjectClass = ref("");
+const viewClass = ref("");
+const viewPrimaryKey = ref("");
+const viewEditing = ref(false);
+function openInstance(reference: ObjectReference) {
+  navigate(`/views/${encodeURIComponent(reference.className)}?key=${encodeURIComponent(reference.primaryKey)}`);
+}
+function configureView(className: string) {
+  navigate(`/views/${encodeURIComponent(className)}?edit=true${viewClass.value === className && viewPrimaryKey.value ? `&key=${encodeURIComponent(viewPrimaryKey.value)}` : ""}`);
+}
 const objectLabels = ref<Record<string, string>>({});
 
 function queryString(params: Record<string, string>) {
@@ -104,6 +114,17 @@ function applyRouteState() {
   selectedRelation.value = "";
   selectedAsset.value = null;
   isAssetCreating.value = false;
+  viewClass.value = "";
+  viewPrimaryKey.value = "";
+  viewEditing.value = false;
+
+  if (section === "views" && first) {
+    activeWorkspace.value = "browser";
+    viewClass.value = first;
+    viewPrimaryKey.value = route.value.query.get("key") || "";
+    viewEditing.value = route.value.query.get("edit") === "true";
+    return;
+  }
 
   if (section === "objects") {
     activeWorkspace.value = "model";
@@ -304,7 +325,9 @@ onMounted(() => {
       />
 
       <section class="content-area">
-        <section v-if="activeWorkspace === 'model'" class="model-surface">
+        <ObjectViewBuilder v-if="viewClass && viewEditing" :key="viewClass" :class-name="viewClass" :initial-primary-key="viewPrimaryKey" @back="viewPrimaryKey ? openInstance({ className: viewClass, primaryKey: viewPrimaryKey }) : openObjectData(viewClass)" />
+        <ObjectViewPage v-else-if="viewClass" :reference="{ className: viewClass, primaryKey: viewPrimaryKey }" @open="openInstance" @edit="configureView(viewClass)" @back="openObjectData(viewClass)" />
+        <section v-else-if="activeWorkspace === 'model'" class="model-surface">
           <OntologyModelCatalog
             v-if="!selectedObjectClass && !selectedRelation"
             :resource="activeModelResource"
@@ -319,6 +342,7 @@ onMounted(() => {
             @updated="loadResourceCounts"
             @browse="openObjectData"
             @relation="editObjectRelation"
+            @view="configureView"
           />
           <OntologyRelationDetail
             v-else-if="selectedRelation"
@@ -329,7 +353,7 @@ onMounted(() => {
           />
         </section>
         <section v-else-if="activeWorkspace === 'browser'" class="legacy-surface">
-          <DataBrowser :initial-class="browserObjectClass" />
+          <DataBrowser :initial-class="browserObjectClass" @open="openInstance" @configure="configureView" />
         </section>
         <section v-else-if="activeWorkspace === 'assets'" class="asset-surface">
           <OntologyAssetCatalog

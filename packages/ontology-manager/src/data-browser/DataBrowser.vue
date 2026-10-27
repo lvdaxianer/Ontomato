@@ -23,12 +23,21 @@ import { useManagerFeedback } from "../feedback";
 import { Filter, Download, Plus, Trash2, Search } from "lucide-vue-next";
 import { useManagerClient, useOntologyText, useSharedText } from "../context";
 import InstanceGraph from "./InstanceGraph.vue";
+import ObjectViewPage from "../object-views/ObjectViewPage.vue";
+import type { ObjectReference } from "@ontomato/contracts/object-views";
 
 const { t } = useSharedText();
 const { ot } = useOntologyText();
 const { message } = useManagerFeedback();
 const { getMetas, loadObjectData } = useManagerClient();
 const props = defineProps<{ initialClass?: string }>();
+const emit = defineEmits<{ open: [reference: ObjectReference]; configure: [className: string] }>();
+const inspectedObject = ref<ObjectReference | null>(null);
+const primaryKeys = ref<Record<string, string>>({});
+function inspectRow(row: DataItem) {
+  const key = primaryKeys.value[selectedClass.value];
+  if (key && row[key] != null) inspectedObject.value = { className: selectedClass.value, primaryKey: String(row[key]) };
+}
 const graphSummaryTarget = ref<HTMLElement | null>(null);
 
 interface ClassDef {
@@ -227,6 +236,7 @@ function applyFilters() {
 async function loadClassList() {
   try {
     const res = await getMetas();
+    primaryKeys.value = Object.fromEntries((res.data?.classDef || []).map((cls: any) => [cls.className, cls.attrs?.find((attr: any) => attr.primaryKey === true || attr.primary_key === true)?.name]));
     classList.value = (res.data?.classDef || []).map((cls: any) => ({
       className: cls.className,
       showName: cls.showName || cls.classDesc || cls.className,
@@ -378,6 +388,7 @@ watch(
       />
 
       <div class="toolbar-actions">
+        <el-button @click="emit('configure', selectedClass)">{{ ot('ovConfigure') }}</el-button>
         <el-button
           class="toolbar-action"
           :icon="Filter"
@@ -422,8 +433,10 @@ watch(
       class="admin-table"
       style="width: 100%"
       max-height="600"
+      @row-dblclick="inspectRow"
     >
       <el-table-column type="index" width="50" />
+      <el-table-column :label="ot('ovTitle')" min-width="120"><template #default="scope"><el-button link :disabled="!primaryKeys[selectedClass]" @click="inspectRow(scope.row)">{{ ot('ovOpen') }}</el-button></template></el-table-column>
       <el-table-column
         v-for="attr in visibleAttrs"
         :key="attr.name"
@@ -517,7 +530,10 @@ watch(
       </template>
       </el-drawer>
     </template>
-    <InstanceGraph v-else :summary-target="graphSummaryTarget" />
+    <InstanceGraph v-else :summary-target="graphSummaryTarget" @open="emit('open', $event)" @configure="emit('configure', $event)" />
+    <el-drawer :model-value="!!inspectedObject" class="object-view-drawer" :title="ot('ovTitle')" size="min(560px, 100%)" :lock-scroll="false" @close="inspectedObject = null">
+      <ObjectViewPage v-if="inspectedObject" :reference="inspectedObject" panel @open="inspectedObject = $event" @full="emit('open', inspectedObject!)" @edit="emit('configure', inspectedObject!.className)" />
+    </el-drawer>
   </div>
 </template>
 
@@ -681,5 +697,9 @@ watch(
 /* The value is supplied by the host presentation (open source: square corners). */
 :global(.ontology-manager .el-drawer.data-browser-filter-drawer) {
   border-radius: var(--manager-filter-drawer-radius) !important;
+}
+
+:global(.ontology-manager .el-drawer.object-view-drawer) {
+  border-radius: 0 !important;
 }
 </style>

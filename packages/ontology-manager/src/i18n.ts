@@ -1,6 +1,7 @@
 import en from "element-plus/es/locale/lang/en";
 import type { Language as ElementLocale } from "element-plus/es/locale";
 import sharedEn from "./locales/en";
+import { objectViewEn } from "./object-views/messages";
 
 export type TextParams = Record<string, string | number>;
 
@@ -14,6 +15,7 @@ function interpolate(value: string, params?: TextParams) {
 
 /** The Manager's own English messages; other languages are supplied by the host. */
 const ontologyEn = {
+  ...objectViewEn,
   browseObjectData: "Browse Object Data",
   ontologyGraphDesc:
     "Search and inspect objects, properties, and relations in the current Ontology.",
