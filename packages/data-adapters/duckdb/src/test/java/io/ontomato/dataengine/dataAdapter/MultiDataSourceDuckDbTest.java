@@ -93,7 +93,7 @@ class MultiDataSourceDuckDbTest {
 
 	private DataAdapterConnection connection(String url) {
 		DataAdapterConnection connection = new DataAdapterConnection();
-		connection.setUrl(url);
+		connection.put("url", url);
 		return connection;
 	}
 

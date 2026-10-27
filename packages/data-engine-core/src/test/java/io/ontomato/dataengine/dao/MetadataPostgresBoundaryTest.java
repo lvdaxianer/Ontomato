@@ -28,9 +28,9 @@ class MetadataPostgresBoundaryTest extends PostgresTestDatabase {
         String current = "{\"models\":[],\"dataAdapter\":\"postgresql\",\"dataAdapterConnections\":{}}";
         jdbc.update("INSERT INTO business_config VALUES (?, ?), (?, ?)", "d1", old, "d2", current);
         var migrated = dao.query("d1").getDataAdapterConnections().get("mysql");
-        assertEquals("jdbc:mysql", migrated.getUrl());
-        assertEquals("u", migrated.getUser());
-        assertEquals("p", migrated.getPassword());
+        assertEquals("jdbc:mysql", migrated.get("url"));
+        assertEquals("u", migrated.get("user"));
+        assertEquals("p", migrated.get("password"));
         var stored = jdbc.queryForObject("SELECT content FROM business_config WHERE id = 'd1'", String.class);
         assertFalse(JSON.parseObject(stored).containsKey("mysqlDataAdapterProperties"));
         assertEquals(migrated, wire(new BusinessConfigDao()).query("d1").getDataAdapterConnections().get("mysql"));

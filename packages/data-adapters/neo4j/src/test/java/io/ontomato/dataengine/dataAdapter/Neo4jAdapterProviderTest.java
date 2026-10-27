@@ -27,7 +27,7 @@ class Neo4jAdapterProviderTest {
 	@Test
 	void createsAnAdapterForTheGivenConnection() {
 		DataAdapterConnection connection = new DataAdapterConnection();
-		connection.setUrl("bolt://host:7687");
+		connection.put("url", "bolt://host:7687");
 		DataAdapter adapter = provider.create(connection, new DataRagConfig(), Map.of("classDef", List.of()));
 		assertEquals(Neo4jAdapter.class, adapter.getClass());
 	}

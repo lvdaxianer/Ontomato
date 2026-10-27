@@ -56,7 +56,7 @@ class BusinessConfigControllerMultiDataSourceTest {
 		context.refresh();
 		new SpringBeanUtil().setApplicationContext(context);
 
-		singleSource.setUrl("jdbc:postgresql://single/db");
+		singleSource.put("url", "jdbc:postgresql://single/db");
 		businessConfig.setDataAdapter("postgresql");
 		businessConfig.getDataAdapterConnections().put("postgresql", singleSource);
 		when(businessConfigService.get("d1")).thenReturn(businessConfig);
@@ -109,9 +109,9 @@ class BusinessConfigControllerMultiDataSourceTest {
 		verify(businessConfigService).set(businessConfig, "d1");
 		assertEquals("multi", businessConfig.getDataAdapter());
 		List<DataSourceEntry> sources = businessConfig.getMultiDataSource().getDataSources();
-		assertEquals("jdbc:postgresql://crm/db", sources.get(0).getConnection().getUrl());
-		assertNull(sources.get(0).getConnection().getCompany(), "an undeclared connection field is not kept");
-		assertNull(sources.get(1).getConnection().getUser(), "an undeclared connection field is not kept");
+		assertEquals("jdbc:postgresql://crm/db", sources.get(0).getConnection().get("url"));
+		assertNull(sources.get(0).getConnection().get("company"), "an undeclared connection field is not kept");
+		assertNull(sources.get(1).getConnection().get("user"), "an undeclared connection field is not kept");
 		assertEquals(Map.of("postgresql", singleSource), businessConfig.getDataAdapterConnections(),
 				"the single-source connections are left untouched");
 	}

@@ -282,7 +282,7 @@ class EsAdapterHttpTest {
 
 	private DataAdapterConnection connection() {
 		DataAdapterConnection connection = new DataAdapterConnection();
-		connection.setUrl(serverUrl);
+		connection.put("url", serverUrl);
 		return connection;
 	}
 

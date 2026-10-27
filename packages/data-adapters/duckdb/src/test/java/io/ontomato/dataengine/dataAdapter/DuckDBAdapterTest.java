@@ -49,7 +49,7 @@ class DuckDBAdapterTest extends AbstractDataAdapterTest {
 	@Override
 	protected DataAdapter newAdapter(JSONObject jsonRule) {
 		DataAdapterConnection connection = new DataAdapterConnection();
-		connection.setUrl(url);
+		connection.put("url", url);
 		return new DuckDBAdapter(connection, jsonRule);
 	}
 

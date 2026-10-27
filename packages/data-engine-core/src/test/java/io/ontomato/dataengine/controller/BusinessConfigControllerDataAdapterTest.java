@@ -63,9 +63,9 @@ class BusinessConfigControllerDataAdapterTest {
 	@Test
 	void dataAdaptersGivesTheDomainsCurrentTypeAndTheInstalledOnesByLabelWithoutConnections() {
 		DataAdapterConnection saved = new DataAdapterConnection();
-		saved.setUrl("jdbc:postgresql://db.internal:5432/prod");
-		saved.setUser("prod-user");
-		saved.setPassword("SECRET-DB-PASSWORD");
+		saved.put("url", "jdbc:postgresql://db.internal:5432/prod");
+		saved.put("user", "prod-user");
+		saved.put("password", "SECRET-DB-PASSWORD");
 		businessConfig.getDataAdapterConnections().put("postgresql", saved);
 
 		JSONObject ret = controller.dataAdapters();
@@ -108,9 +108,9 @@ class BusinessConfigControllerDataAdapterTest {
 		assertTrue(ret.getBooleanValue("success"), ret.toJSONString());
 		assertEquals("duckdb", businessConfig.getDataAdapter());
 		DataAdapterConnection connection = businessConfig.getDataAdapterConnections().get("duckdb");
-		assertEquals("jdbc:duckdb:/data/a.db", connection.getUrl());
-		assertNull(connection.getUser());
-		assertNull(connection.getPassword());
+		assertEquals("jdbc:duckdb:/data/a.db", connection.get("url"));
+		assertNull(connection.get("user"));
+		assertNull(connection.get("password"));
 		verify(businessConfigService).set(businessConfig, "d1");
 	}
 
@@ -123,10 +123,10 @@ class BusinessConfigControllerDataAdapterTest {
 		assertTrue(ret.getBooleanValue("success"), ret.toJSONString());
 		assertEquals("m3", businessConfig.getDataAdapter());
 		DataAdapterConnection connection = businessConfig.getDataAdapterConnections().get("m3");
-		assertEquals("m3.test:8080", connection.getUrl());
-		assertEquals("acme", connection.getCompany());
-		assertEquals("admin", connection.getUser());
-		assertEquals("pw", connection.getPassword());
+		assertEquals("m3.test:8080", connection.get("url"));
+		assertEquals("acme", connection.get("company"));
+		assertEquals("admin", connection.get("user"));
+		assertEquals("pw", connection.get("password"));
 	}
 
 	@Test

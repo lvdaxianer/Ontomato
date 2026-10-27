@@ -235,9 +235,9 @@ class MultiDataSourceAdapterTest {
 
 		@Override
 		public DataAdapter create(DataAdapterConnection connection, DataRagConfig dataRagConfig, Map<String, Object> jsonRule) {
-			RecordingAdapter adapter = byUrl.get(connection.getUrl());
+			RecordingAdapter adapter = byUrl.get(connection.get("url"));
 			if (adapter == null) {
-				throw new IllegalArgumentException("no stub adapter for url " + connection.getUrl());
+				throw new IllegalArgumentException("no stub adapter for url " + connection.get("url"));
 			}
 			adapter.jsonRule = jsonRule;
 			return adapter;
@@ -343,7 +343,7 @@ class MultiDataSourceAdapterTest {
 
 	private static DataAdapterConnection connection(String url) {
 		DataAdapterConnection connection = new DataAdapterConnection();
-		connection.setUrl(url);
+		connection.put("url", url);
 		return connection;
 	}
 

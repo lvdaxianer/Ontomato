@@ -149,9 +149,9 @@ class MultiDataSourceNeo4jTest {
 
 	private static DataAdapterConnection connection() {
 		DataAdapterConnection connection = new DataAdapterConnection();
-		connection.setUrl(url);
-		connection.setUser(user);
-		connection.setPassword(password);
+		connection.put("url", url);
+		connection.put("user", user);
+		connection.put("password", password);
 		return connection;
 	}
 

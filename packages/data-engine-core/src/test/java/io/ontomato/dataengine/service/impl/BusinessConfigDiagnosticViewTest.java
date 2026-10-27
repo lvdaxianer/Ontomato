@@ -83,8 +83,8 @@ class BusinessConfigDiagnosticViewTest {
         embedding.setCustomHeaders(Map.of("X-Key", "SECRET-EMBEDDING-HEADER"));
         config.setEmbeddingModelProperties(embedding);
         DataAdapterConnection connection = new DataAdapterConnection();
-        connection.setUrl("jdbc:postgresql://db/x?password=SECRET-URL");
-        connection.setPassword("SECRET-DB-PASSWORD");
+        connection.put("url", "jdbc:postgresql://db/x?password=SECRET-URL");
+        connection.put("password", "SECRET-DB-PASSWORD");
         config.getDataAdapterConnections().put("postgresql", connection);
         config.setKnowledgeMaxResult(7);
         config.setToolAndPythonRetry(1);

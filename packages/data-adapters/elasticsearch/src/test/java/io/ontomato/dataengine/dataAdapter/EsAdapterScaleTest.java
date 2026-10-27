@@ -296,9 +296,9 @@ class EsAdapterScaleTest {
 
 	private EsAdapter adapter(JSONObject rule) {
 		DataAdapterConnection connection = new DataAdapterConnection();
-		connection.setUrl(url);
-		connection.setUser(user);
-		connection.setPassword(password);
+		connection.put("url", url);
+		connection.put("user", user);
+		connection.put("password", password);
 		return new EsAdapter(connection, rule, DIALECT);
 	}
 

@@ -29,7 +29,7 @@ class DuckDBConnectionTest {
 
 	private DuckDBAdapter adapterFor(String url) {
 		DataAdapterConnection connection = new DataAdapterConnection();
-		connection.setUrl(url);
+		connection.put("url", url);
 		return new DuckDBAdapter(connection, null);
 	}
 

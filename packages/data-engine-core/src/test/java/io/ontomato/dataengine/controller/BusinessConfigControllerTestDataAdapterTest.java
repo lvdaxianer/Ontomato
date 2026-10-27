@@ -77,9 +77,9 @@ class BusinessConfigControllerTestDataAdapterTest {
 
 		assertTrue(ret.getBooleanValue("success"), ret.toJSONString());
 		assertEquals(data, ret.getJSONObject("data"));
-		assertEquals("jdbc:duckdb:/data/a.db", duckdb.lastConnection.getUrl());
-		assertNull(duckdb.lastConnection.getUser());
-		assertNull(duckdb.lastConnection.getPassword());
+		assertEquals("jdbc:duckdb:/data/a.db", duckdb.lastConnection.get("url"));
+		assertNull(duckdb.lastConnection.get("user"));
+		assertNull(duckdb.lastConnection.get("password"));
 		assertEquals("postgresql", businessConfig.getDataAdapter());
 		assertTrue(businessConfig.getDataAdapterConnections().isEmpty());
 		verify(businessConfigService, never()).set(any(), anyString());
@@ -106,10 +106,10 @@ class BusinessConfigControllerTestDataAdapterTest {
 
 		// Design 5: M3 is tested through the same endpoint with the values on the page.
 		assertTrue(ret.getBooleanValue("success"), ret.toJSONString());
-		assertEquals("m3.test:8080", m3.lastConnection.getUrl());
-		assertEquals("acme", m3.lastConnection.getCompany());
-		assertEquals("admin", m3.lastConnection.getUser());
-		assertEquals("pw", m3.lastConnection.getPassword());
+		assertEquals("m3.test:8080", m3.lastConnection.get("url"));
+		assertEquals("acme", m3.lastConnection.get("company"));
+		assertEquals("admin", m3.lastConnection.get("user"));
+		assertEquals("pw", m3.lastConnection.get("password"));
 		verify(businessConfigService, never()).set(any(), anyString());
 	}
 
@@ -125,7 +125,7 @@ class BusinessConfigControllerTestDataAdapterTest {
 		assertTrue(ret.getString("message").contains("Connection refused"), ret.getString("message"));
 		assertTrue(ret.getString("message").contains("08001"), ret.getString("message"));
 		assertTrue(ret.getString("message").contains("101"), ret.getString("message"));
-		assertEquals("u", postgresql.lastConnection.getUser());
+		assertEquals("u", postgresql.lastConnection.get("user"));
 		verify(businessConfigService, never()).set(any(), anyString());
 	}
 

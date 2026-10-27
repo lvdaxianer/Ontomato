@@ -31,7 +31,7 @@ final class DuckDbGraphFixture {
     DuckDbGraphFixture(Path file, String namespace) throws Exception {
         url = "jdbc:duckdb:" + file;
         DataAdapterConnection connection = new DataAdapterConnection();
-        connection.setUrl(url);
+        connection.put("url", url);
         config.setDataAdapter("duckdb");
         config.setDataAdapterConnections(Map.of("duckdb", connection));
         execute("CREATE TABLE " + namespace + "pump (code VARCHAR PRIMARY KEY, name VARCHAR, tank_code VARCHAR)");

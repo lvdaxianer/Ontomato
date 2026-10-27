@@ -13,9 +13,8 @@ import java.util.LinkedHashMap;
  * ({@code {"url":...,"user":...,"account":...}}), so existing saved configs
  * remain readable without a migration.</p>
  *
- * <p>The four legacy accessors below are compile-compatibility shims for
- * modules outside this repository; they are not used by the shared
- * controller/UI path, which reads and writes names generically.</p>
+ * <p>Every shared path — controller, settings form and adapter — reads and
+ * writes values by name; there is no per-adapter field list here.</p>
  */
 public class DataAdapterConnection extends LinkedHashMap<String, String> {
 
@@ -27,43 +26,4 @@ public class DataAdapterConnection extends LinkedHashMap<String, String> {
 		put(name, value);
 	}
 
-	@Deprecated
-	public String getUrl() {
-		return get("url");
-	}
-
-	@Deprecated
-	public void setUrl(String url) {
-		put("url", url);
-	}
-
-	@Deprecated
-	public String getCompany() {
-		return get("company");
-	}
-
-	@Deprecated
-	public void setCompany(String company) {
-		put("company", company);
-	}
-
-	@Deprecated
-	public String getUser() {
-		return get("user");
-	}
-
-	@Deprecated
-	public void setUser(String user) {
-		put("user", user);
-	}
-
-	@Deprecated
-	public String getPassword() {
-		return get("password");
-	}
-
-	@Deprecated
-	public void setPassword(String password) {
-		put("password", password);
-	}
 }

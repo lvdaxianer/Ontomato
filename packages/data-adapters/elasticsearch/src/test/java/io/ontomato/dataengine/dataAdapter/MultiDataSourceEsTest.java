@@ -130,7 +130,7 @@ class MultiDataSourceEsTest {
 
 	private static DataAdapterConnection connection() {
 		DataAdapterConnection connection = new DataAdapterConnection();
-		connection.setUrl(url);
+		connection.put("url", url);
 		return connection;
 	}
 

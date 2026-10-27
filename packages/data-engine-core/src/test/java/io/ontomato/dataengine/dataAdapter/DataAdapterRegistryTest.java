@@ -61,7 +61,7 @@ class DataAdapterRegistryTest {
 		DataAdapterRegistry registry = new DataAdapterRegistry(List.of(postgresql, mysql), dataRagConfig);
 		BusinessConfig businessConfig = new BusinessConfig();
 		DataAdapterConnection pg = new DataAdapterConnection();
-		pg.setUrl("jdbc:postgresql://pg");
+		pg.put("url", "jdbc:postgresql://pg");
 		businessConfig.getDataAdapterConnections().put("postgresql", pg);
 		businessConfig.getDataAdapterConnections().put("mysql", new DataAdapterConnection());
 		businessConfig.setDataAdapter("postgresql");
@@ -92,7 +92,7 @@ class DataAdapterRegistryTest {
 		DataRagConfig dataRagConfig = new DataRagConfig();
 		DataAdapterRegistry registry = new DataAdapterRegistry(List.of(postgresql), dataRagConfig);
 		DataAdapterConnection candidate = new DataAdapterConnection();
-		candidate.setUrl("jdbc:postgresql://candidate");
+		candidate.put("url", "jdbc:postgresql://candidate");
 
 		registry.createForTest("postgresql", candidate);
 

@@ -87,9 +87,9 @@ class SqlServerAdapterTest extends AbstractDataAdapterTest {
 	@Override
 	protected DataAdapter newAdapter(JSONObject jsonRule) {
 		DataAdapterConnection connection = new DataAdapterConnection();
-		connection.setUrl(url);
-		connection.setUser(user);
-		connection.setPassword(password);
+		connection.put("url", url);
+		connection.put("user", user);
+		connection.put("password", password);
 		return new SqlServerAdapter(connection, jsonRule);
 	}
 
