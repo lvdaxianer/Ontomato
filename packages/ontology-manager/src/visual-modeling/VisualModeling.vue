@@ -1254,7 +1254,7 @@ async function onRelayout() {
       updateEdgeAnchors();
     });
     await fitRelayoutToContainer(target);
-    saveLayout();
+    scheduleLayoutSave();
   } catch (error) {
     if (graph === target) message.error(error instanceof Error ? error.message : String(error));
   } finally {

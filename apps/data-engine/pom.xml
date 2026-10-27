@@ -36,8 +36,6 @@
         </dependency>
         <dependency>
             <groupId>io.ontomato</groupId>
-        <dependency>
-            <groupId>io.ontomato</groupId>
             <artifactId>data-adapter-doris</artifactId>
             <version>${project.version}</version>
         </dependency>

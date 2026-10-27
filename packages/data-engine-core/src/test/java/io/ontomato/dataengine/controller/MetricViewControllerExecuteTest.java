@@ -17,6 +17,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 
 import com.alibaba.fastjson2.JSONArray;
 import com.alibaba.fastjson2.JSONObject;
+import io.ontomato.dataengine.bean.PythonExecuteResult;
 import io.ontomato.dataengine.bean.metricView.MetricView;
 import io.ontomato.dataengine.config.BusinessConfig;
 import io.ontomato.dataengine.core.bean.User;
@@ -62,7 +63,7 @@ class MetricViewControllerExecuteTest {
         JSONArray results = new JSONArray();
         results.add(result);
         when(metricViewService.execute(eq("metric-1"), any(JSONObject.class), eq("zh-CN"), same(user),
-                same(permission), anyInt())).thenReturn(results);
+                same(permission), anyInt())).thenReturn(executeResult(results));
 
         JSONObject response = controller.execute("zh-CN", request());
 
@@ -77,7 +78,7 @@ class MetricViewControllerExecuteTest {
         results.add(new JSONObject().fluentPut("name", "first"));
         results.add(new JSONObject().fluentPut("name", "second"));
         when(metricViewService.execute(eq("metric-1"), any(JSONObject.class), eq("zh-CN"), same(user),
-                same(permission), anyInt())).thenReturn(results);
+                same(permission), anyInt())).thenReturn(executeResult(results));
 
         JSONObject response = controller.execute("zh-CN", request());
 
@@ -90,7 +91,7 @@ class MetricViewControllerExecuteTest {
     void executePreservesAnEmptyMetricResultAsAnArray() throws Exception {
         JSONArray results = new JSONArray();
         when(metricViewService.execute(eq("metric-1"), any(JSONObject.class), eq("zh-CN"), same(user),
-                same(permission), anyInt())).thenReturn(results);
+                same(permission), anyInt())).thenReturn(executeResult(results));
 
         JSONObject response = controller.execute("zh-CN", request());
 
@@ -104,7 +105,7 @@ class MetricViewControllerExecuteTest {
         JSONArray results = new JSONArray();
         results.add(new JSONObject().fluentPut("name", "first"));
         when(metricViewService.testExecute(any(MetricView.class), any(JSONObject.class), eq("zh-CN"), same(user),
-                same(permission), anyInt())).thenReturn(results);
+                same(permission), anyInt())).thenReturn(executeResult(results));
 
         JSONObject request = new JSONObject()
                 .fluentPut("metricView", new JSONObject())
@@ -120,5 +121,9 @@ class MetricViewControllerExecuteTest {
         return new JSONObject()
                 .fluentPut("id", "metric-1")
                 .fluentPut("param", new JSONObject());
+    }
+
+    private static Object[] executeResult(JSONArray results) {
+        return new Object[] { results, new PythonExecuteResult() };
     }
 }

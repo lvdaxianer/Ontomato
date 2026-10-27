@@ -12,6 +12,8 @@ import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import io.ontomato.dataengine.config.BusinessConfig;
+import io.ontomato.dataengine.dao.VectorRebuildState;
+import io.ontomato.dataengine.dao.VectorRebuildStateDao;
 import io.ontomato.dataengine.service.BusinessConfigService;
 import io.ontomato.dataengine.service.LangService;
 
@@ -22,12 +24,14 @@ import io.ontomato.dataengine.service.LangService;
 class VectorRetrievalGateTest {
 
     private final BusinessConfigService businessConfigService = mock(BusinessConfigService.class);
+    private final VectorRebuildStateDao stateDao = mock(VectorRebuildStateDao.class);
     private final VectorRebuildTracker rebuildTracker = new VectorRebuildTracker();
     private final LangService langService = mock(LangService.class);
     private final VectorRetrievalGate gate = new VectorRetrievalGate();
 
     VectorRetrievalGateTest() {
         ReflectionTestUtils.setField(gate, "businessConfigService", businessConfigService);
+        ReflectionTestUtils.setField(gate, "stateDao", stateDao);
         ReflectionTestUtils.setField(gate, "rebuildTracker", rebuildTracker);
         ReflectionTestUtils.setField(gate, "langService", langService);
     }
@@ -100,6 +104,8 @@ class VectorRetrievalGateTest {
     void retrievalFailsWhenARebuildIsNeededAndNoneRuns() {
         BusinessConfig businessConfig = config("http://emb/v1", "m1", 2048, 1024);
         when(businessConfigService.get("d1")).thenReturn(businessConfig);
+        when(stateDao.find("d1")).thenReturn(VectorRebuildState.of(
+                businessConfig.getEmbeddingModelProperties(), VectorRebuildState.Status.PENDING, false));
         when(langService.get(eq(null), eq("Vector.rebuildRequired"))).thenReturn("vectors need rebuilding");
 
         IllegalStateException error = assertThrows(IllegalStateException.class,
@@ -108,20 +114,25 @@ class VectorRetrievalGateTest {
     }
 
     @Test
-    void retrievalPassesWhileARebuildRuns() {
+    void retrievalRemainsBlockedWhileARebuildRuns() {
         BusinessConfig businessConfig = config("http://emb/v1", "m1", 2048, 1024);
         when(businessConfigService.get("d1")).thenReturn(businessConfig);
+        when(stateDao.find("d1")).thenReturn(VectorRebuildState.of(
+                businessConfig.getEmbeddingModelProperties(), VectorRebuildState.Status.PENDING, false));
+        when(langService.get(eq(null), eq("Vector.rebuildRequired"))).thenReturn("vectors need rebuilding");
         rebuildTracker.tryStart("d1");
 
-        gate.requireRetrievable("d1");
-
-        verifyNoInteractions(langService);
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> gate.requireRetrievable("d1"));
+        assertTrue(error.getMessage().contains("need rebuilding"), error.getMessage());
     }
 
     @Test
     void retrievalPassesWhenNoRebuildIsNeeded() {
         BusinessConfig businessConfig = config("http://emb/v1", "m1", 2048, 2048);
         when(businessConfigService.get("d1")).thenReturn(businessConfig);
+        when(stateDao.find("d1")).thenReturn(VectorRebuildState.of(
+                businessConfig.getEmbeddingModelProperties(), VectorRebuildState.Status.READY, true));
 
         gate.requireRetrievable("d1");
 
