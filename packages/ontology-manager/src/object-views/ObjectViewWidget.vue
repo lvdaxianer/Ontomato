@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from "vue";
+import { Eye } from "lucide-vue-next";
 import { ElButton, ElDialog, ElInput, ElTable, ElTableColumn, ElAlert } from "element-plus";
 import { readViewPath, resolveViewBinding, type ViewWidget, type ObjectReference } from "@ontomato/contracts/object-views";
 import { useManagerClient, useOntologyText } from "../context";
@@ -110,7 +111,7 @@ async function openAction() {
     <template v-else-if="widget.kind === 'table' || widget.kind === 'links'">
       <el-table :data="rows" :max-height="widget.height" highlight-current-row @row-click="selectRow" @row-dblclick="openRow">
         <el-table-column v-for="field in fields" :key="field" :prop="field" :label="field" min-width="130" show-overflow-tooltip />
-        <el-table-column v-if="widget.kind === 'links' || widget.targetClass" min-width="100"><template #default="scope"><el-button link @click.stop="openRow(scope.row)">{{ ot('ovOpen') }}</el-button></template></el-table-column>
+        <el-table-column v-if="widget.kind === 'links' || widget.targetClass" width="48" align="center"><template #default="scope"><el-button class="object-view-row-action" text :icon="Eye" :title="ot('ovOpenView')" :aria-label="ot('ovOpenView')" @click.stop="openRow(scope.row)" /></template></el-table-column>
       </el-table>
       <div v-if="widget.kind === 'links'" class="pages"><el-button :disabled="offset === 0" @click="page(-50)">{{ ot('ovPrevious') }}</el-button><span>{{ rows.length ? offset + 1 : 0 }}–{{ offset + rows.length }}</span><el-button :disabled="!hasMore" @click="page(50)">{{ ot('ovNext') }}</el-button></div>
     </template>
@@ -130,6 +131,8 @@ async function openAction() {
 </template>
 <style scoped>
 .view-widget { min-width: 0; font-size: 13px; line-height: 22px; }
+.object-view-row-action { width: 28px; height: 28px; padding: 0; color: var(--el-text-color-secondary); }
+.object-view-row-action:hover { color: var(--el-color-primary); }
 .view-widget :deep(.el-button + .el-button) { margin-inline-start: 0; }
 .view-widget > .el-alert { margin-bottom: 12px; overflow-wrap: anywhere; }
 .view-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }

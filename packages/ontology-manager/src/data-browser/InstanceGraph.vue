@@ -3,6 +3,7 @@ import { Graph } from "@antv/g6";
 import type { ObjectReference } from "@ontomato/contracts/object-views";
 import {
   Box,
+  Eye,
   ArrowLeft,
   Settings2,
   Download,
@@ -921,6 +922,18 @@ onBeforeUnmount(() => {
         </div>
       </div>
       <div v-if="selectedNode" class="detail-content">
+        <div class="selected-object-header">
+          <div class="detail-title">
+            <span class="resource-icon"><Box :size="16" /></span>
+            <div class="detail-title-copy">
+              <h2>{{ selectedNode.name || selectedNode.id }}</h2>
+              <code :title="selectedNode.id">{{ selectedNode.id }}</code>
+            </div>
+          </div>
+          <el-button v-if="selectedReference" class="open-object-view" :icon="Eye" @click="emit('open', selectedReference)">
+            <span>{{ ot('ovOpenView') }}</span>
+          </el-button>
+        </div>
         <div class="neighbor-filters">
           <div class="neighbor-field neighbor-field-wide">
           <span class="neighbor-label">{{ ot('instanceGraphNeighbor') }}</span>
@@ -946,14 +959,6 @@ onBeforeUnmount(() => {
             <el-checkbox v-model="fitAfterExpand">{{ ot('instanceGraphKeepView') }}</el-checkbox>
             <el-button :icon="SlidersHorizontal" type="primary" :loading="expanding" :disabled="expanding || rendering" @click="applyNeighborhoodFilters">{{ ot('instanceGraphApply') }}</el-button>
             <el-button :icon="GitFork" :loading="expanding" :disabled="rendering || filtersDirty || versionChanged || currentPage?.nextOffset === null" @click="expandNeighbors">{{ ot(currentPage ? 'instanceGraphMore' : 'instanceGraphExpand') }}</el-button>
-          </div>
-        </div>
-        <el-button v-if="selectedReference" @click="emit('open', selectedReference)">{{ ot('ovOpenView') }}</el-button>
-        <div class="detail-title">
-          <span class="resource-icon"><Box :size="16" /></span>
-          <div class="detail-title-copy">
-            <h2>{{ selectedNode.name || selectedNode.id }}</h2>
-            <code>{{ selectedNode.id }}</code>
           </div>
         </div>
         <div class="detail-section">
@@ -1303,8 +1308,27 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: flex-start;
   gap: 10px;
-  padding-bottom: 8px;
+}
+.selected-object-header {
+  display: grid;
+  gap: 12px;
+  padding-bottom: var(--spacing-md);
+  margin-bottom: var(--spacing-md);
   border-bottom: 1px solid var(--el-border-color-light);
+}
+.open-object-view {
+  width: 100%;
+  min-width: 0;
+  height: auto;
+  min-height: 32px;
+  margin: 0;
+  padding: 8px 12px;
+  white-space: normal;
+}
+.open-object-view span {
+  min-width: 0;
+  line-height: 18px;
+  overflow-wrap: anywhere;
 }
 .resource-icon {
   display: grid;

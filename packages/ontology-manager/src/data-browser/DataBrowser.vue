@@ -38,6 +38,10 @@ function inspectRow(row: DataItem) {
   const key = primaryKeys.value[selectedClass.value];
   if (key && row[key] != null) inspectedObject.value = { className: selectedClass.value, primaryKey: String(row[key]) };
 }
+function openRow(row: DataItem) {
+  const key = primaryKeys.value[selectedClass.value];
+  if (key && row[key] != null) emit("open", { className: selectedClass.value, primaryKey: String(row[key]) });
+}
 const graphSummaryTarget = ref<HTMLElement | null>(null);
 
 interface ClassDef {
@@ -51,6 +55,7 @@ interface AttrDef {
   name: string;
   showName: string;
   type: string;
+  businessKey?: boolean;
 }
 
 interface DataItem {
@@ -81,6 +86,12 @@ const viewModeOptions = computed(() => [
 const currentClassAttrs = computed(() => {
   const cls = classList.value.find((c) => c.className === selectedClass.value);
   return cls?.attrs || [];
+});
+const titleAttribute = computed(() => {
+  const attributes = currentClassAttrs.value;
+  const primaryKey = primaryKeys.value[selectedClass.value];
+  return attributes.find(attr => attr.businessKey && attr.name !== primaryKey && /^(varchar|text|string)$/i.test(attr.type))
+    || attributes.find(attr => attr.name === primaryKey);
 });
 
 const filterDrawerVisible = ref(false);
@@ -245,6 +256,7 @@ async function loadClassList() {
         name: a.name,
         showName: a.showName || a.name,
         type: a.type || "",
+        businessKey: a.bizzkey === true || a.bizzKey === true || a.bizzkeyBool === true,
       })),
     }));
     if (classList.value.length > 0) {
@@ -433,12 +445,16 @@ watch(
       class="admin-table"
       style="width: 100%"
       max-height="600"
-      @row-dblclick="inspectRow"
+      highlight-current-row
+      @row-click="inspectRow"
     >
-      <el-table-column type="index" width="50" />
-      <el-table-column :label="ot('ovTitle')" min-width="120"><template #default="scope"><el-button link :disabled="!primaryKeys[selectedClass]" @click="inspectRow(scope.row)">{{ ot('ovOpen') }}</el-button></template></el-table-column>
+      <el-table-column v-if="titleAttribute" :label="titleAttribute.showName" :prop="titleAttribute.name" min-width="200" fixed="left">
+        <template #default="scope">
+          <button class="object-title-link" :title="ot('ovOpenView')" :disabled="!primaryKeys[selectedClass] || scope.row[primaryKeys[selectedClass]] == null" @click.stop="openRow(scope.row)">{{ scope.row[titleAttribute.name] ?? scope.row[primaryKeys[selectedClass]] ?? '—' }}</button>
+        </template>
+      </el-table-column>
       <el-table-column
-        v-for="attr in visibleAttrs"
+        v-for="attr in visibleAttrs.filter(item => item.name !== titleAttribute?.name)"
         :key="attr.name"
         :prop="attr.name"
         :label="attr.showName"
@@ -702,4 +718,21 @@ watch(
 :global(.ontology-manager .el-drawer.object-view-drawer) {
   border-radius: 0 !important;
 }
+.object-title-link {
+  display: block;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--el-color-primary);
+  font: inherit;
+  font-weight: 500;
+  line-height: 24px;
+  text-align: start;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.object-title-link:not(:disabled):hover { text-decoration: underline; text-underline-offset: 3px; }
+.object-title-link:disabled { color: var(--el-text-color-secondary); }
 </style>
