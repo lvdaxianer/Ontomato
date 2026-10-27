@@ -21,11 +21,28 @@ public interface DataAdapterProvider {
 	/** Whether relations name the source and target join fields (fromField/toField) this adapter joins on. */
 	boolean requiresJoinFields();
 
-	/** Connection fields the adapter reads, each one of "url", "company", "user", "password". */
+	/** Connection field names this adapter reads; any key, not just the original four. */
 	List<String> connectionFields();
 
 	/** Input hints shown for connection fields, field name to example value; fields without a hint are absent. */
 	Map<String, String> connectionExamples();
+
+	/**
+	 * The same fields with the presentation metadata the settings form needs.
+	 *
+	 * <p>The default keeps every existing provider source-compatible: it derives
+	 * one descriptor per {@link #connectionFields()} entry and marks names that
+	 * look secret (password/token/private key) so a read API can mask them. A
+	 * provider that needs labels, required flags or a full-width field overrides
+	 * this method instead of adding adapter-specific code to the controller or
+	 * the Vue component.</p>
+	 */
+	default List<DataAdapterConnectionField> connectionFieldDefinitions() {
+		Map<String, String> examples = connectionExamples();
+		return connectionFields().stream()
+				.map(name -> DataAdapterConnectionField.of(name, examples.get(name)))
+				.toList();
+	}
 
 	/** jsonRule may be null for operations that do not translate DSL. */
 	DataAdapter create(DataAdapterConnection connection, DataRagConfig dataRagConfig, Map<String, Object> jsonRule);

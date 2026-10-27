@@ -32,6 +32,7 @@ import io.ontomato.dataengine.config.multisource.MultiDataSourceDefinition;
 import io.ontomato.dataengine.dataAdapter.ConfigurationProblem;
 import io.ontomato.dataengine.dataAdapter.DataAdapter;
 import io.ontomato.dataengine.dataAdapter.DataAdapterConnection;
+import io.ontomato.dataengine.dataAdapter.DataAdapterConnectionField;
 import io.ontomato.dataengine.dataAdapter.DataAdapterConnectionTester;
 import io.ontomato.dataengine.dataAdapter.DataAdapterProvider;
 import io.ontomato.dataengine.dataAdapter.DataAdapterRegistry;
@@ -479,6 +480,18 @@ public class BusinessConfigController {
 			item.put("requiresJoinFields", provider.requiresJoinFields());
     		item.put("fields", provider.connectionFields());
     		item.put("examples", provider.connectionExamples());
+			JSONArray fieldInfos = new JSONArray();
+			for (DataAdapterConnectionField field : provider.connectionFieldDefinitions()) {
+				JSONObject info = new JSONObject();
+				info.put("name", field.name());
+				info.put("label", field.label());
+				info.put("required", field.required());
+				info.put("secret", field.secret());
+				info.put("example", field.example());
+				info.put("fullWidth", field.fullWidth());
+				fieldInfos.add(info);
+			}
+			item.put("fieldInfos", fieldInfos);
 			adapters.add(item);
     	}
 		// The current domain's adapter type without its saved connections: what non-management readers need.
@@ -576,23 +589,41 @@ public class BusinessConfigController {
 		return ret;
 	}
 
-	/** The request values of the fields this provider declares; undeclared fields are ignored. */
+	/**
+	 * The request values of the fields this provider declares; undeclared fields are ignored.
+	 *
+	 * <p>Every declared field is copied by name into the flat connection map, so the shared
+	 * controller has no knowledge of url/user/password or of any other adapter's vocabulary.
+	 * A value may be sent flat (the normal wire shape) or under {@code properties} (kept as a
+	 * compatibility path for clients that already build the nested shape).</p>
+	 */
 	private static DataAdapterConnection connectionOf(DataAdapterProvider provider, JSONObject input) {
-		List<String> fields = provider.connectionFields();
 		DataAdapterConnection connection = new DataAdapterConnection();
-		if (fields.contains("url")) {
-			connection.setUrl(input.getString("url"));
+		JSONObject nested = input.getJSONObject("properties");
+		for (String field : provider.connectionFields()) {
+			String value = input.getString(field);
+			if (value == null && nested != null) {
+				value = nested.getString(field);
+			}
+			if (value != null) {
+				connection.put(field, value);
+			}
 		}
-		if (fields.contains("company")) {
-			connection.setCompany(input.getString("company"));
-		}
-		if (fields.contains("user")) {
-			connection.setUser(input.getString("user"));
-		}
-		if (fields.contains("password")) {
-			connection.setPassword(input.getString("password"));
-		}
+		validateConnection(provider, connection);
 		return connection;
+	}
+
+	private static void validateConnection(DataAdapterProvider provider, DataAdapterConnection connection) {
+		for (DataAdapterConnectionField field : provider.connectionFieldDefinitions()) {
+			if (!field.required()) {
+				continue;
+			}
+			String value = connection.get(field.name());
+			if (value == null || value.isBlank()) {
+				throw new IllegalArgumentException(
+						"Connection field '" + field.name() + "' is required");
+			}
+		}
 	}
 	
 	@GetMapping("/businessConfig/getConfig")

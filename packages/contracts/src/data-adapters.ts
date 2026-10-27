@@ -1,10 +1,25 @@
 import { z } from "zod";
 
-/** Fields a data adapter connection can have; which ones each adapter needs comes from its fields. */
-export type DataAdapterField = "url" | "company" | "user" | "password";
+/**
+ * A connection field name. The vocabulary belongs to each adapter provider:
+ * the server returns the fields that provider declared, and the settings form
+ * renders exactly those. A new adapter can add account/warehouse/role/... with
+ * no frontend change.
+ */
+export type DataAdapterField = string;
 
-/** Values of the connection fields an adapter type declares; the single-source connections and each data source of a multi-source definition hold one. */
+/** Values of the connection fields an adapter type declares, keyed by field name. */
 export type DataAdapterConnection = Partial<Record<DataAdapterField, string>>;
+
+/** Presentation metadata one adapter provider declares for a connection field. */
+export interface DataAdapterFieldInfo {
+  name: string;
+  label?: string | null;
+  required?: boolean;
+  secret?: boolean;
+  example?: string | null;
+  fullWidth?: boolean;
+}
 
 /** Body of POST /businessConfig/useDataAdapter and /businessConfig/testDataAdapter: an adapter type and its connection field values. */
 export type DataAdapterRequest = { type: string } & DataAdapterConnection;
@@ -62,6 +77,8 @@ export interface DataAdapterInfo {
   fields: DataAdapterField[];
   /** Input examples (only for fields that have one), declared by the adapter module. */
   examples: Partial<Record<DataAdapterField, string>>;
+  /** Field presentation metadata; when absent the form derives it from fields/examples. */
+  fieldInfos?: DataAdapterFieldInfo[];
 }
 
 /** `data` of GET /businessConfig/dataAdapters: the current domain's adapter type and the installed adapters, without saved connections. */

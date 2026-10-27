@@ -80,11 +80,23 @@ class BusinessConfigControllerDataAdapterTest {
 		assertFalse(body.contains("prod-user"), body);
 		assertEquals(JSON.parseArray("["
 				+ "{\"type\":\"duckdb\",\"label\":\"DuckDB\",\"requiresJoinFields\":true,\"fields\":[\"url\"],"
-				+ "\"examples\":{\"url\":\"jdbc:duckdb:/data/example.duckdb\"}},"
+				+ "\"examples\":{\"url\":\"jdbc:duckdb:/data/example.duckdb\"},"
+				+ "\"fieldInfos\":[{\"name\":\"url\",\"required\":false,\"secret\":false,"
+				+ "\"example\":\"jdbc:duckdb:/data/example.duckdb\",\"fullWidth\":false}]},"
 				+ "{\"type\":\"m3\",\"label\":\"M3\",\"requiresJoinFields\":false,\"fields\":[\"url\",\"company\",\"user\",\"password\"],"
-				+ "\"examples\":{\"url\":\"192.0.2.72:8080\"}},"
+				+ "\"examples\":{\"url\":\"192.0.2.72:8080\"},"
+				+ "\"fieldInfos\":[{\"name\":\"url\",\"required\":false,\"secret\":false,"
+				+ "\"example\":\"192.0.2.72:8080\",\"fullWidth\":false},"
+				+ "{\"name\":\"company\",\"required\":false,\"secret\":false,\"fullWidth\":false},"
+				+ "{\"name\":\"user\",\"required\":false,\"secret\":false,\"fullWidth\":false},"
+				+ "{\"name\":\"password\",\"required\":false,\"secret\":true,\"fullWidth\":false}]},"
 				+ "{\"type\":\"postgresql\",\"label\":\"PostgreSQL\",\"requiresJoinFields\":true,\"fields\":[\"url\",\"user\",\"password\"],"
-				+ "\"examples\":{\"url\":\"jdbc:postgresql://host:port/db\",\"user\":\"postgres\"}}]"),
+				+ "\"examples\":{\"url\":\"jdbc:postgresql://host:port/db\",\"user\":\"postgres\"},"
+				+ "\"fieldInfos\":[{\"name\":\"url\",\"required\":false,\"secret\":false,"
+				+ "\"example\":\"jdbc:postgresql://host:port/db\",\"fullWidth\":false},"
+				+ "{\"name\":\"user\",\"required\":false,\"secret\":false,"
+				+ "\"example\":\"postgres\",\"fullWidth\":false},"
+				+ "{\"name\":\"password\",\"required\":false,\"secret\":true,\"fullWidth\":false}]}]"),
 				JSON.parseArray(JSON.toJSONString(data.get("adapters"))));
 	}
 

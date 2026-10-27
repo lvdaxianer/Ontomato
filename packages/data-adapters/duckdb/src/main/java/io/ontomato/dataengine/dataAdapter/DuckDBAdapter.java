@@ -52,7 +52,7 @@ public class DuckDBAdapter implements DataAdapter {
 
 	@Override
 	public Connection openConnection() throws SQLException {
-		return DriverManager.getConnection(connection.getUrl());
+		return DriverManager.getConnection(connection.get("url"));
 	}
 
 	/**
@@ -62,7 +62,7 @@ public class DuckDBAdapter implements DataAdapter {
 	 */
 	@Override
 	public JSONObject testConnection() throws Exception {
-		String url = connection.getUrl();
+		String url = connection.get("url");
 		if (url == null || url.isBlank()) {
 			throw new IllegalStateException("DuckDB database URL is missing");
 		}

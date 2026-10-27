@@ -2129,7 +2129,7 @@ public class EsAdapter implements DataAdapter {
 	}
 
 	private String clusterKey() {
-		String url = connection == null || connection.getUrl() == null ? "" : connection.getUrl().trim();
+		String url = connection == null || connection.get("url") == null ? "" : connection.get("url").trim();
 		return url + "\u0000" + dialect.type();
 	}
 

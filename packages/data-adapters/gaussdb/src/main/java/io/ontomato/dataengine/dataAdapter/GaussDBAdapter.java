@@ -607,15 +607,15 @@ public class GaussDBAdapter implements DataAdapter {
 	}
 
 	SimpleDriverDataSource createDataSource(DataAdapterConnection props) {
-		String url = props.getUrl();
+		String url = props.get("url");
 		if (url != null && url.startsWith("jdbc:postgresql:")) {
 			url = "jdbc:opengauss:" + url.substring("jdbc:postgresql:".length());
 		}
 		return new SimpleDriverDataSource(
 				new org.opengauss.Driver(),
 				url,
-				props.getUser(),
-				props.getPassword());
+				props.get("user"),
+				props.get("password"));
 	}
 
 	@Override

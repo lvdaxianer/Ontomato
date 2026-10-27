@@ -67,7 +67,7 @@ public class Neo4jAdapter implements DataAdapter {
 	}
 
 	private Driver driver() {
-		return GraphDatabase.driver(connection.getUrl(), AuthTokens.basic(connection.getUser(), connection.getPassword()));
+		return GraphDatabase.driver(connection.get("url"), AuthTokens.basic(connection.get("user"), connection.get("password")));
 	}
 
 	/** Every operation runs in a fresh driver+session, closed on exit, so no connection pool outlives the adapter. */

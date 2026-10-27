@@ -51,9 +51,9 @@ public class PostgreAdapter implements DataAdapter {
 	@Override
 	public Connection openConnection() throws SQLException {
 		return DriverManager.getConnection(
-				connection.getUrl(),
-				connection.getUser(),
-				connection.getPassword());
+				connection.get("url"),
+				connection.get("user"),
+				connection.get("password"));
 	}
 
 	@Override

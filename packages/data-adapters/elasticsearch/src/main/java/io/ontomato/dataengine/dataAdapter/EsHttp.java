@@ -26,7 +26,7 @@ public class EsHttp implements AutoCloseable {
 	private final RestClient client;
 
 	public EsHttp(DataAdapterConnection connection) {
-		String url = connection == null ? null : connection.getUrl();
+		String url = connection == null ? null : connection.get("url");
 		if (url == null || url.isBlank()) {
 			throw new IllegalArgumentException("The data source URL is required");
 		}
@@ -42,8 +42,8 @@ public class EsHttp implements AutoCloseable {
 			throw new IllegalArgumentException("The data source URL has no host: " + url);
 		}
 		int port = uri.getPort() >= 0 ? uri.getPort() : ("https".equalsIgnoreCase(scheme) ? 443 : 9200);
-		String user = connection.getUser();
-		String password = connection.getPassword();
+		String user = connection.get("user");
+		String password = connection.get("password");
 		this.client = RestClient.builder(new org.apache.http.HttpHost(host, port, scheme))
 				.setHttpClientConfigCallback(httpClient -> {
 					if (user != null && !user.isBlank()) {

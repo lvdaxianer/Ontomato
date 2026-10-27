@@ -241,6 +241,78 @@ describe("the data adapter card renders from the backend list", () => {
     expect(vi.mocked(adminApi.useDataAdapter)).toHaveBeenCalledTimes(1);
   });
 
+  it("renders every field metadata an adapter declares, beyond the original four names", async () => {
+    const snowflake: DataAdapterInfo = {
+      type: "snowflake",
+      label: "Snowflake",
+      requiresJoinFields: true,
+      fields: [
+        "url",
+        "account",
+        "warehouse",
+        "role",
+        "database",
+        "schema",
+        "user",
+        "password",
+      ],
+      examples: { url: "jdbc:snowflake://acct.snowflakecomputing.com" },
+      fieldInfos: [
+        {
+          name: "url",
+          label: "Connection URL",
+          required: true,
+          example: "jdbc:snowflake://acct.snowflakecomputing.com",
+        },
+        { name: "account", label: "Account", required: true },
+        { name: "warehouse", label: "Warehouse", required: true },
+        { name: "role", label: "Role" },
+        { name: "database", label: "Database", required: true },
+        { name: "schema", label: "Schema", required: true },
+        { name: "user", label: "Username", required: true },
+        { name: "password", label: "Password", required: true, secret: true },
+      ],
+    };
+    const connection = {
+      url: "jdbc:snowflake://acct.snowflakecomputing.com",
+      account: "acct",
+      warehouse: "WH",
+      role: "ANALYST",
+      database: "ANALYTICS",
+      schema: "PUBLIC",
+      user: "svc",
+      password: "pw",
+    };
+    const card = await mountCard([snowflake], "snowflake", { snowflake: connection });
+
+    expect(formLabels(card)).toEqual([
+      t("admin.adapterMode"),
+      "Connection URL",
+      "Account",
+      "Warehouse",
+      "Role",
+      "Database",
+      "Schema",
+      "Username",
+      "Password",
+    ]);
+    const inputs = card.findAll("input.el-input__inner");
+    expect(
+      inputs.map((input) => (input.element as HTMLInputElement).value)
+    ).toEqual([
+      connection.url,
+      connection.account,
+      connection.warehouse,
+      connection.role,
+      connection.database,
+      connection.schema,
+      connection.user,
+      connection.password,
+    ]);
+    expect(inputs[7].attributes("type")).toBe("password");
+    expect(inputs[7].attributes("placeholder")).toBe("******");
+  });
+
   it("DuckDB has only url: the form shows only the URL with the module example as placeholder and saves only that type's fields", async () => {
     const card = await mountCard(enterpriseAdapters, "m3", {
       mysql: { url: "jdbc:mysql://other", user: "root", password: "x" },
