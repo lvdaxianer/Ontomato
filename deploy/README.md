@@ -15,14 +15,14 @@ docker compose up -d --wait --wait-timeout 600
 ```
 
 CI publishes a shared `<version>-ci<run>.<attempt>-g<commit>` tag for all three images,
-as well as `edge`, release and `latest` aliases. Use the full build tag above so
+as well as `edge`, `stable`, release and `latest` aliases. Use the full build tag above so
 `docker ps` shows the deployed build. Update `ONTOMATO_VERSION`, then repeat pull
 and up. Images come from GHCR. Build
 and publication happen before deployment; Compose has no build step.
 
 ### Automatic updates (optional)
 
-A development or test deployment that should always follow a tag, usually `edge`, can add
+A development or test deployment that should always follow a tag, usually `edge` or `stable`, can add
 `docker-compose.autoupdate.yml` to the end of `COMPOSE_FILE` and run `docker compose up -d`:
 
 ```bash
