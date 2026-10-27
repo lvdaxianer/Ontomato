@@ -199,11 +199,11 @@ onBeforeUnmount(() => { generation++; sampleRequest++; window.removeEventListene
 <template>
   <div class="view-builder">
     <header class="builder-header">
-      <div class="builder-heading"><el-button @click="back">{{ ot('ovBack') }}</el-button><div class="builder-title"><strong>{{ ot('ovTitle') }}</strong><span :title="objectType?.showName || className">{{ objectType?.showName || className }}</span></div>
+      <div class="builder-heading"><el-button text @click="back">{{ ot('ovBack') }}</el-button><div class="builder-title"><strong>{{ ot('ovTitle') }}</strong><span :title="objectType?.showName || className">{{ objectType?.showName || className }}</span></div>
         <el-select :model-value="form" class="form-select" :disabled="busy" @update:model-value="changeForm"><el-option :label="ot('ovFull')" value="full" /><el-option :label="ot('ovPanel')" value="panel" /></el-select>
       </div>
       <div class="builder-actions"><span class="version-status">v{{ state.revision }} · {{ ot('ovPublished') }} {{ state.publishedRevision ?? '—' }} {{ dirty ? '· ' + ot('ovUnsaved') : '' }}</span>
-        <el-switch v-model="preview" :active-text="ot('ovPreview')" /><el-button :disabled="!loaded" :loading="busy" @click="save()">{{ ot('ovSaveDraft') }}</el-button><el-button type="primary" :disabled="!loaded" :loading="busy" @click="save(true)">{{ ot('ovSavePublish') }}</el-button>
+        <el-switch v-model="preview" :active-text="ot('ovPreview')" /><el-button type="primary" plain :disabled="!loaded" :loading="busy" @click="save()">{{ ot('ovSaveDraft') }}</el-button><el-button type="primary" :disabled="!loaded" :loading="busy" @click="save(true)">{{ ot('ovSavePublish') }}</el-button>
       </div>
     </header>
     <el-alert v-if="error" type="error" :title="error" :closable="false" />
@@ -217,7 +217,7 @@ onBeforeUnmount(() => { generation++; sampleRequest++; window.removeEventListene
         <el-input v-model="variableName" :placeholder="ot('ovVariableName')" /><el-input v-model="variableValue" :placeholder="ot('ovDefaultValue')" /><el-button @click="addVariable">{{ ot('ovAddVariable') }}</el-button>
         <h3>{{ ot('ovVersions') }}</h3><el-input v-model="description" :placeholder="ot('ovVersionDescription')" />
         <el-select v-model="historyRevision" :placeholder="ot('ovChooseVersion')"><el-option v-for="version in state.versions" :key="version.revision" :value="version.revision" :label="`v${version.revision} · ${version.description || version.author}`" /></el-select>
-        <el-button :disabled="!historyRevision || busy" @click="restoreVersion">{{ ot('ovLoadVersion') }}</el-button><el-button :disabled="!historyRevision || busy" @click="publishVersion">{{ ot('ovPublishVersion') }}</el-button>
+        <el-button :disabled="!historyRevision || busy" @click="restoreVersion">{{ ot('ovLoadVersion') }}</el-button><el-button type="primary" plain :disabled="!historyRevision || busy" @click="publishVersion">{{ ot('ovPublishVersion') }}</el-button>
       </aside>
       <main :class="['canvas', { 'panel-canvas': form === 'panel' }]">
         <ObjectViewRuntime v-if="preview" :document="document" :object="previewObject" :reference="reference" :panel="form === 'panel'" preview @refresh="sample" @open="emit('open', $event)" />
@@ -236,7 +236,7 @@ onBeforeUnmount(() => { generation++; sampleRequest++; window.removeEventListene
         </template>
       </main>
       <aside class="inspector">
-        <h3>{{ ot('ovViewSettings') }}</h3><label>{{ ot('ovName') }}<el-input v-model="document.title" /></label><label>{{ ot('ovTitleProperty') }}<el-select v-model="document.titleField" clearable><el-option v-for="attr in objectType?.attrs" :key="attr.name" :value="attr.name" :label="attr.showName" /></el-select></label>
+        <h3>{{ ot('ovViewSettings') }}</h3><label>{{ ot('ovName') }}<el-input v-model="document.title" /></label><label>{{ ot('ovTitleProperty') }}<el-select v-model="document.titleField" clearable><el-option v-for="attr in objectType?.attrs.filter(item => item.enable !== false && item.bizzkeyBool)" :key="attr.name" :value="attr.name" :label="attr.showName" /></el-select></label>
         <template v-if="widget && !preview">
           <h3>{{ ot('ovWidgetSettings', { kind: ot(widgetMessageKeys[widget.kind]) }) }}</h3><label>{{ ot('ovName') }}<el-input v-model="widget.title" /></label><label>{{ ot('ovWidth') }}<el-input-number v-model="widget.span" :min="1" :max="12" /></label><label>{{ ot('ovHeight') }}<el-input-number v-model="widget.height" :min="80" :max="1200" /></label>
           <label v-if="['properties', 'table', 'links'].includes(widget.kind)">{{ ot('ovFields') }}<el-select v-if="widget.kind === 'properties'" v-model="widget.fields" multiple clearable><el-option v-for="attr in objectType?.attrs" :key="attr.name" :value="attr.name" :label="attr.showName" /></el-select><el-input v-else :model-value="widget.fields.join(', ')" :placeholder="ot('ovFieldNames')" @update:model-value="widget.fields = $event.split(',').map(value => value.trim()).filter(Boolean)" /></label>
@@ -257,7 +257,7 @@ onBeforeUnmount(() => { generation++; sampleRequest++; window.removeEventListene
           <label v-if="['table','button'].includes(widget.kind)">{{ ot('ovTargetType') }}<el-input v-model="widget.targetClass" /></label>
           <div class="visibility-heading"><h4>{{ ot('ovVisibility') }}</h4><el-switch :model-value="!!widget.visibleWhen" @update:model-value="widget.visibleWhen = $event ? { binding: { source: 'object', path: '' }, operator: 'present', value: '' } : undefined" /></div>
           <div v-if="widget.visibleWhen" class="condition-fields"><ViewBindingEditor v-model="widget.visibleWhen.binding" /><el-select v-model="widget.visibleWhen.operator"><el-option v-for="operator in (['eq','ne','present','empty'] as const)" :key="operator" :value="operator" :label="ot(({ eq: 'ovEqual', ne: 'ovNotEqual', present: 'ovPresent', empty: 'ovEmpty' } as const)[operator])" /></el-select><el-input v-if="['eq','ne'].includes(widget.visibleWhen.operator)" v-model="widget.visibleWhen.value" /></div>
-          <el-button type="danger" @click="removeWidget">{{ ot('ovDeleteComponent') }}</el-button>
+          <el-button type="danger" plain @click="removeWidget">{{ ot('ovDeleteComponent') }}</el-button>
         </template>
         <p v-else-if="!preview" class="inspector-hint">{{ ot('ovInspectorHint') }}</p>
       </aside>

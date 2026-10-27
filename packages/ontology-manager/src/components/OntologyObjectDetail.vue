@@ -167,10 +167,10 @@ onMounted(() => void loadDetail());
       >
         {{ ot("delete") }}
       </el-button>
-      <el-button v-if="object" :icon="Table2" @click="emit('browse', object.className)">
+      <el-button v-if="object" text :icon="Table2" @click="emit('browse', object.className)">
         {{ ot("browseData") }}
       </el-button>
-      <el-button v-if="object" @click="emit('view', object.className)">{{ ot('ovConfigureObject') }}</el-button>
+      <el-button v-if="object" type="primary" plain @click="emit('view', object.className)">{{ ot('ovConfigureObject') }}</el-button>
       <el-button type="primary" :icon="Save" :loading="saving" @click="save">
         {{ ot("saveChanges") }}
       </el-button>

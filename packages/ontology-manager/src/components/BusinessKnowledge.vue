@@ -308,11 +308,11 @@ onMounted(load);
         <div class="knowledge-list-head">
           <template v-if="checked.length">
             <span class="knowledge-checked">{{ ot("knowledgeChecked", { n: checked.length }) }}</span>
-            <el-button v-if="checkedPending.length" size="small" @click="approveChecked">
+            <el-button v-if="checkedPending.length" type="primary" plain size="small" @click="approveChecked">
               <Check :size="14" />
               {{ ot("knowledgeBatchApprove") }}
             </el-button>
-            <el-button size="small" @click="removeChecked">
+            <el-button type="danger" plain size="small" @click="removeChecked">
               <Trash2 :size="14" />
               {{ ot("knowledgeBatchDelete") }}
             </el-button>
@@ -430,11 +430,11 @@ onMounted(load);
             </template>
           </div>
           <div class="knowledge-detail-actions">
-            <el-button v-if="selected.status !== 1" type="success" @click="approve(selected)">
+            <el-button v-if="selected.status !== 1" type="primary" plain @click="approve(selected)">
               <Check :size="16" />
               {{ ot("knowledgeApprove") }}
             </el-button>
-            <el-button @click="openEdit(selected)">
+            <el-button type="primary" plain @click="openEdit(selected)">
               <Pencil :size="16" />
               {{ t("common.edit") }}
             </el-button>

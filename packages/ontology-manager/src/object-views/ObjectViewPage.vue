@@ -5,6 +5,8 @@ import { createObjectView, objectViewDocumentSchema, type ObjectReference, type 
 import { useManagerClient, useOntologyText } from "../context";
 const { ot } = useOntologyText();
 import ObjectViewRuntime from "./ObjectViewRuntime.vue";
+import { computed } from "vue";
+import { instanceName, type InstanceNameAttribute } from "./instance-name";
 const props = defineProps<{ reference: ObjectReference; panel?: boolean }>();
 const emit = defineEmits<{ open: [reference: ObjectReference]; edit: []; full: []; back: [] }>();
 const client = useManagerClient();
@@ -12,6 +14,11 @@ const document = ref<ObjectViewDocument>();
 const object = ref<Record<string, unknown>>({});
 const error = ref("");
 const loading = ref(false);
+const nameAttributes = ref<InstanceNameAttribute[]>([]);
+const displayName = computed(() => {
+  const configured = nameAttributes.value.find(attr => attr.name === document.value?.titleField && attr.enable !== false && (attr.businessKey || attr.bizzkeyBool || attr.bizzkey || attr.bizzKey));
+  return instanceName(configured ? [configured] : nameAttributes.value, object.value);
+});
 let request = 0;
 onBeforeUnmount(() => { request++; });
 async function load() {
@@ -29,6 +36,7 @@ async function load() {
     document.value = state.versions[0] ? objectViewDocumentSchema.parse(state.versions[0].document) : createObjectView(props.reference.className);
     if (!state.versions[0]) document.value.tabs[0].sections[0].widgets[0].title = ot('ovKindProperties');
     object.value = (result.data || {}) as Record<string, unknown>;
+    nameAttributes.value = (result.classDef as { attrs?: InstanceNameAttribute[] } | undefined)?.attrs || [];
   } catch (reason) { if (current === request) error.value = reason instanceof Error ? reason.message : String(reason); }
   finally { if (current === request) loading.value = false; }
 }
@@ -44,8 +52,8 @@ watch(() => JSON.stringify([props.reference.className, props.reference.primaryKe
 <template>
   <section :class="['object-view-page', { 'is-panel': panel }]">
     <header class="object-header">
-      <div class="object-heading"><el-button v-if="!panel" @click="emit('back')">{{ ot('ovBack') }}</el-button><div class="object-title"><small>{{ document?.title || reference.className }}</small><h2>{{ (document?.titleField && object[document.titleField]) || reference.primaryKey }}</h2></div></div>
-      <div class="object-actions"><el-button v-if="panel" @click="emit('full')">{{ ot('ovFull') }}</el-button><el-button @click="emit('edit')">{{ ot('ovConfigure') }}</el-button><el-button @click="load">{{ ot('ovRefresh') }}</el-button></div>
+      <div class="object-heading"><el-button v-if="!panel" text @click="emit('back')">{{ ot('ovBack') }}</el-button><div class="object-title"><small>{{ document?.title || reference.className }}</small><h2>{{ displayName }}</h2></div></div>
+      <div class="object-actions"><el-button v-if="panel" type="primary" plain @click="emit('full')">{{ ot('ovFull') }}</el-button><el-button text @click="emit('edit')">{{ ot('ovConfigure') }}</el-button><el-button text @click="load">{{ ot('ovRefresh') }}</el-button></div>
     </header>
     <el-alert v-if="error" type="error" :title="error" :closable="false" /><p v-if="loading">{{ ot('ovLoading') }}</p>
     <ObjectViewRuntime v-else-if="document" :document="document" :object="object" :reference="reference" :panel="panel" @open="emit('open', $event)" @refresh="refreshObject" />

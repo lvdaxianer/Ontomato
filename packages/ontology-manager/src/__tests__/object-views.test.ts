@@ -3,9 +3,17 @@ import { createObjectView, createViewWidget, objectViewDocumentSchema, readViewP
 import { createManagerClient } from "../api";
 import { englishMessages } from "../i18n";
 import { parseActionValue } from "../object-views/action-values";
+import { instanceName } from "../object-views/instance-name";
 
 afterEach(() => { vi.unstubAllGlobals(); });
 describe("object view bindings and documents", () => {
+  it("uses enabled business keys for names and never falls back to technical identifiers", () => {
+    const attrs = [{ name: "id" }, { name: "code", bizzkey: true }, { name: "org_name", bizzkey: true }];
+    expect(instanceName(attrs, { id: "internal-1", code: "business-code", org_name: "Business name" })).toBe("Business name");
+    expect(instanceName([{ name: "id" }], { id: "internal-1" })).toBe("—");
+    expect(instanceName(attrs, { id: "internal-1", code: "business-code", org_name: null })).toBe("—");
+    expect(instanceName([{ name: "name", bizzkey: true, enable: false }], { name: "Hidden" })).toBe("—");
+  });
   it("converts engine parameter types without changing textual identifiers", () => {
     expect(parseActionValue("00123", "TYPE_STRING")).toBe("00123");
     expect(parseActionValue("12.5", "TYPE_NUMBER")).toBe(12.5);

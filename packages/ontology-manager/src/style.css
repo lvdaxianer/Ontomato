@@ -72,6 +72,17 @@
   box-shadow: none !important;
 }
 
+/* Button variants express action priority; labels and icons share one spacing rule. */
+.ontology-manager-shell .el-button > span {
+  gap: var(--spacing-sm);
+}
+.ontology-manager-shell .el-button.is-text:not(.is-disabled):not(.el-button--danger):not(.el-button--primary) {
+  color: var(--el-text-color-secondary);
+}
+.ontology-manager-shell .el-button.is-text:not(.is-disabled):hover {
+  background-color: var(--el-fill-color-light);
+}
+
 .ontology-manager-shell .el-dialog {
   width: min(720px, calc(100cqw - 32px));
   max-width: calc(100cqw - 32px);

@@ -25,6 +25,7 @@ import { useManagerClient, useOntologyText, useSharedText } from "../context";
 import InstanceGraph from "./InstanceGraph.vue";
 import ObjectViewPage from "../object-views/ObjectViewPage.vue";
 import type { ObjectReference } from "@ontomato/contracts/object-views";
+import { businessNameAttribute, instanceName } from "../object-views/instance-name";
 
 const { t } = useSharedText();
 const { ot } = useOntologyText();
@@ -56,6 +57,7 @@ interface AttrDef {
   showName: string;
   type: string;
   businessKey?: boolean;
+  enable?: boolean;
 }
 
 interface DataItem {
@@ -88,10 +90,7 @@ const currentClassAttrs = computed(() => {
   return cls?.attrs || [];
 });
 const titleAttribute = computed(() => {
-  const attributes = currentClassAttrs.value;
-  const primaryKey = primaryKeys.value[selectedClass.value];
-  return attributes.find(attr => attr.businessKey && attr.name !== primaryKey && /^(varchar|text|string)$/i.test(attr.type))
-    || attributes.find(attr => attr.name === primaryKey);
+  return businessNameAttribute(currentClassAttrs.value);
 });
 
 const filterDrawerVisible = ref(false);
@@ -257,6 +256,7 @@ async function loadClassList() {
         showName: a.showName || a.name,
         type: a.type || "",
         businessKey: a.bizzkey === true || a.bizzKey === true || a.bizzkeyBool === true,
+        enable: a.enable !== false,
       })),
     }));
     if (classList.value.length > 0) {
@@ -400,7 +400,7 @@ watch(
       />
 
       <div class="toolbar-actions">
-        <el-button @click="emit('configure', selectedClass)">{{ ot('ovConfigure') }}</el-button>
+        <el-button text @click="emit('configure', selectedClass)">{{ ot('ovConfigure') }}</el-button>
         <el-button
           class="toolbar-action"
           :icon="Filter"
@@ -448,9 +448,9 @@ watch(
       highlight-current-row
       @row-click="inspectRow"
     >
-      <el-table-column v-if="titleAttribute" :label="titleAttribute.showName" :prop="titleAttribute.name" min-width="200" fixed="left">
+      <el-table-column :label="currentClassAttrs.find(attr => attr.name === titleAttribute?.name)?.showName || ot('ovTitle')" :prop="titleAttribute?.name" min-width="200" fixed="left">
         <template #default="scope">
-          <button class="object-title-link" :title="ot('ovOpenView')" :disabled="!primaryKeys[selectedClass] || scope.row[primaryKeys[selectedClass]] == null" @click.stop="openRow(scope.row)">{{ scope.row[titleAttribute.name] ?? scope.row[primaryKeys[selectedClass]] ?? '—' }}</button>
+          <button class="object-title-link" :title="ot('ovOpenView')" :disabled="!primaryKeys[selectedClass] || scope.row[primaryKeys[selectedClass]] == null" @click.stop="openRow(scope.row)">{{ instanceName(currentClassAttrs, scope.row) }}</button>
         </template>
       </el-table-column>
       <el-table-column
@@ -494,7 +494,7 @@ watch(
 
       <div class="filter-section">
         <div class="filter-title">{{ t("dataBrowser.filterConditions") }}</div>
-        <el-button type="primary" size="small" :icon="Plus" @click="addFilterCondition">
+        <el-button type="primary" plain size="small" :icon="Plus" @click="addFilterCondition">
           {{ t("dataBrowser.addCondition") }}
         </el-button>
 
@@ -541,7 +541,7 @@ watch(
       </div>
 
       <template #footer>
-        <el-button @click="clearAllFilters">{{ t("dataBrowser.clearAll") }}</el-button>
+        <el-button text @click="clearAllFilters">{{ t("dataBrowser.clearAll") }}</el-button>
         <el-button type="primary" @click="applyFilters">{{ t("dataBrowser.apply") }}</el-button>
       </template>
       </el-drawer>
