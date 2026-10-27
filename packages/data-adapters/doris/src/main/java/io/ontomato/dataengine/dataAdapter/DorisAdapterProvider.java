@@ -27,7 +27,7 @@ public class DorisAdapterProvider implements DataAdapterProvider {
 	}
 
 	@Override
-	public boolean sql() {
+	public boolean requiresJoinFields() {
 		return true;
 	}
 

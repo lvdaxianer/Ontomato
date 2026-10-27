@@ -130,9 +130,12 @@ public class DorisAdapter implements DataAdapter {
 		List<Map<String, Object>> classDefs = classDefinitions();
 		String normalized = DslUtil.normalizeClassNames(
 				JSON.toJSONString(JSONArray.of(dsl), Feature.WriteMapNullValue), classDefs);
-		String dslJson = dataRagConfig == null ? normalized
-				: DslUtil.setConditionTimeColumnToCorrectFormat(normalized,
-						dataRagConfig.getDslMightTimeFormats(), classDefs);
+		String dslJson = normalized;
+		if (dataRagConfig != null) {
+			dslJson = DslUtil.setConditionTimeColumnToCorrectFormat(normalized,
+					dataRagConfig.getDslMightTimeFormats(), classDefs,
+					timeConditionsAsEpochMillis(), timeConditionZone());
+		}
 		return HttpRequestUtil.executeDsl(dataRagConfig, this, dslJson, null, true, jsonRule,
 				vectorResourceDao, new UserDataPermission(), DslExecutionMode.OPTIMIZED, domainId)[1];
 	}

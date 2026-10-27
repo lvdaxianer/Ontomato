@@ -19,7 +19,7 @@ class DorisAdapterProviderTest {
 	void advertisesDorisFeConnectionContract() {
 		assertEquals("doris", provider.type());
 		assertEquals("Doris", provider.label());
-		assertTrue(provider.sql());
+		assertTrue(provider.requiresJoinFields());
 		assertEquals(List.of("url", "user", "password"), provider.connectionFields());
 		assertEquals("jdbc:mysql://host:9030/db?useSSL=false", provider.connectionExamples().get("url"));
 	}
