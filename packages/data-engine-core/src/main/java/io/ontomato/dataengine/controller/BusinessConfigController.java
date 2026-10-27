@@ -35,6 +35,7 @@ import io.ontomato.dataengine.dataAdapter.DataAdapterConnection;
 import io.ontomato.dataengine.dataAdapter.DataAdapterConnectionField;
 import io.ontomato.dataengine.dataAdapter.DataAdapterConnectionTester;
 import io.ontomato.dataengine.dataAdapter.DataAdapterProvider;
+import io.ontomato.dataengine.dataAdapter.ConnectionSecretCodec;
 import io.ontomato.dataengine.dataAdapter.DataAdapterRegistry;
 import io.ontomato.dataengine.dataAdapter.MultiDataSourceValidator;
 import io.ontomato.dataengine.service.AdminService;
@@ -68,6 +69,10 @@ public class BusinessConfigController {
 
 	@Autowired
 	private VectorRebuildService vectorRebuildService;
+
+	/** Optional in unit tests that construct the controller directly; Spring injects it in the app. */
+	@Autowired(required = false)
+	private ConnectionSecretCodec connectionSecretCodec;
 	
 	@Autowired
 	private DataAdapterRegistry dataAdapterRegistry;
@@ -515,7 +520,12 @@ public class BusinessConfigController {
     			throw new IllegalArgumentException("The multi data adapter is saved through /businessConfig/useMultiDataSource");
     		}
     		BusinessConfig businessConfig = businessConfigService.get(user.getDomainId());
-    		businessConfig.getDataAdapterConnections().put(provider.type(), connectionOf(provider, input));
+    		DataAdapterConnection connection = connectionOf(provider, input);
+    		if (connectionSecretCodec != null) {
+    			connectionSecretCodec.keepMasked(provider.type(),
+    					businessConfig.getDataAdapterConnections().get(provider.type()), connection);
+    		}
+    		businessConfig.getDataAdapterConnections().put(provider.type(), connection);
     		businessConfig.setDataAdapter(provider.type());
     		businessConfigService.set(businessConfig, user.getDomainId());
     		ret.put("success", true);
@@ -549,6 +559,9 @@ public class BusinessConfigController {
     						given == null ? new JSONObject() : JSONObject.from(given)));
     			}
     			BusinessConfig businessConfig = businessConfigService.get(user.getDomainId());
+    			if (connectionSecretCodec != null) {
+    				connectionSecretCodec.keepMaskedMulti(businessConfig, definition);
+    			}
     			businessConfig.setMultiDataSource(definition);
     			businessConfig.setDataAdapter(MULTI);
     			Map<String, Object> jsonRule = adminService.getJSONRule(user.getDomainId());
@@ -577,8 +590,14 @@ public class BusinessConfigController {
     	JSONObject ret = new JSONObject();
     	try {
     		DataAdapterProvider provider = dataAdapterRegistry.provider(input.getString("type"));
-    		// The candidate values are tested as given; nothing saved is read or written.
-    		DataAdapter adapter = dataAdapterRegistry.createForTest(provider.type(), connectionOf(provider, input));
+    		// A masked secret is resolved from the saved connection for this type; nothing is written.
+    		DataAdapterConnection candidate = connectionOf(provider, input);
+    		if (connectionSecretCodec != null) {
+    			BusinessConfig stored = businessConfigService.get(SystemUtils.getCurUser().getDomainId());
+    			connectionSecretCodec.keepMasked(provider.type(),
+    					stored.getDataAdapterConnections().get(provider.type()), candidate);
+    		}
+    		DataAdapter adapter = dataAdapterRegistry.createForTest(provider.type(), candidate);
     		ret.put("data", adapter.testConnection());
     		ret.put("success", true);
     	} catch (Exception e) {
@@ -632,7 +651,10 @@ public class BusinessConfigController {
     	JSONObject ret = new JSONObject();
     	try {
     		User user = SystemUtils.getCurUser();
-			ret.put("data", businessConfigService.get(user.getDomainId()));
+			BusinessConfig businessConfig = businessConfigService.get(user.getDomainId());
+			ret.put("data", connectionSecretCodec == null
+					? businessConfig
+					: connectionSecretCodec.maskedCopy(businessConfig));
     		ret.put("success", true);
     	} catch (Exception e) {
     		log.error(e.getMessage(), e);
