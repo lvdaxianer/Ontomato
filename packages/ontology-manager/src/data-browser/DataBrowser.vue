@@ -31,7 +31,7 @@ const { ot } = useOntologyText();
 const { message } = useManagerFeedback();
 const { getMetas, loadObjectData } = useManagerClient();
 const props = defineProps<{ initialClass?: string }>();
-const emit = defineEmits<{ open: [reference: ObjectReference]; configure: [className: string] }>();
+const emit = defineEmits<{ open: [reference: ObjectReference]; configure: [className: string, form?: "full" | "panel", primaryKey?: string] }>();
 const inspectedObject = ref<ObjectReference | null>(null);
 const primaryKeys = ref<Record<string, string>>({});
 function inspectRow(row: DataItem) {
@@ -548,7 +548,7 @@ watch(
     </template>
     <InstanceGraph v-else :summary-target="graphSummaryTarget" @open="emit('open', $event)" @configure="emit('configure', $event)" />
     <el-drawer :model-value="!!inspectedObject" class="object-view-drawer" :title="ot('ovTitle')" size="min(560px, 100%)" :lock-scroll="false" @close="inspectedObject = null">
-      <ObjectViewPage v-if="inspectedObject" :reference="inspectedObject" panel @open="inspectedObject = $event" @full="emit('open', inspectedObject!)" @edit="emit('configure', inspectedObject!.className)" />
+      <ObjectViewPage v-if="inspectedObject" :reference="inspectedObject" panel @open="inspectedObject = $event" @full="emit('open', inspectedObject!)" @edit="emit('configure', inspectedObject!.className, 'panel', inspectedObject!.primaryKey)" />
     </el-drawer>
   </div>
 </template>

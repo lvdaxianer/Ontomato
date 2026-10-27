@@ -40,7 +40,7 @@ export const objectViewDocumentSchema = z.object({
   className: z.string().min(1).max(200),
   title: z.string().max(200),
   titleField: z.string().max(200).default(""),
-  variables: z.record(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/).max(100), z.union([z.string(), z.number(), z.boolean(), z.null()])).default({}),
+  variables: z.record(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/).max(100).refine(value => !["__proto__", "constructor", "prototype"].includes(value)), z.union([z.string(), z.number(), z.boolean(), z.null()])).default({}),
   tabs: z.array(z.object({
     id: z.string().min(1).max(100),
     title: z.string().max(200),

@@ -39,7 +39,7 @@ async function refreshObject() {
     if (current === request) object.value = (result.data || {}) as Record<string, unknown>;
   } catch (reason) { if (current === request) error.value = reason instanceof Error ? reason.message : String(reason); }
 }
-watch(() => [props.reference, props.panel], () => void load(), { deep: true, immediate: true });
+watch(() => JSON.stringify([props.reference.className, props.reference.primaryKey, props.panel]), () => void load(), { immediate: true });
 </script>
 <template>
   <section :class="['object-view-page', { 'is-panel': panel }]">

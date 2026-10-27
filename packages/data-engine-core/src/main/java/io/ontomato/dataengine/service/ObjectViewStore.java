@@ -9,6 +9,7 @@ import java.util.Set;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.annotation.Isolation;
 
 /** Domain-scoped immutable revisions with optimistic editing and an explicit published pointer. */
 @Service
@@ -49,6 +50,7 @@ public class ObjectViewStore {
             throw new IllegalArgumentException("Invalid object view key");
     }
 
+    @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
     public JSONObject read(String domain, String className, String form, boolean editing) {
         checkKey(className, form);
         var heads = jdbc.queryForList("SELECT revision, published_revision FROM object_view WHERE domain_id=? AND class_name=? AND form=?", domain, className, form);
@@ -66,6 +68,7 @@ public class ObjectViewStore {
     public JSONObject save(String domain, String author, String className, String form, int expectedRevision, JSONObject document, String description) {
         checkKey(className, form);
         validateDocument(className, document);
+        if (expectedRevision < 0) throw new IllegalArgumentException("Invalid expected revision");
         if (description == null || description.length() > 2000) throw new IllegalArgumentException("Invalid version description");
         jdbc.update("INSERT INTO object_view(domain_id,class_name,form) VALUES (?,?,?) ON CONFLICT DO NOTHING", domain, className, form);
         int changed = jdbc.update("UPDATE object_view SET revision=revision+1 WHERE domain_id=? AND class_name=? AND form=? AND revision=?", domain, className, form, expectedRevision);
@@ -78,6 +81,7 @@ public class ObjectViewStore {
     @Transactional
     public JSONObject publish(String domain, String className, String form, int revision, int expectedRevision) {
         checkKey(className, form);
+        if (revision < 1 || expectedRevision < revision) throw new IllegalArgumentException("Invalid revision");
         Integer exists = jdbc.queryForObject("SELECT COUNT(*) FROM object_view_version WHERE domain_id=? AND class_name=? AND form=? AND revision=?", Integer.class, domain, className, form, revision);
         if (exists == null || exists != 1) throw new IllegalArgumentException("Object view revision does not exist");
         int changed = jdbc.update("UPDATE object_view SET published_revision=? WHERE domain_id=? AND class_name=? AND form=? AND revision=?", revision, domain, className, form, expectedRevision);
@@ -112,7 +116,7 @@ public class ObjectViewStore {
                 for (int w = 0; w < widgets.size(); w++) {
                     JSONObject widget = widgets.getJSONObject(w);
                     checkId(widget, ids);
-                    if (!Set.of("text", "properties", "metric", "table", "chart", "links", "input", "action", "button").contains(widget.getString("kind"))
+                    if (widget.getString("kind") == null || !Set.of("text", "properties", "metric", "table", "chart", "links", "input", "action", "button").contains(widget.getString("kind"))
                             || widget.getIntValue("span") < 1 || widget.getIntValue("span") > 12)
                         throw new IllegalArgumentException("Invalid widget");
                     for (String key : Set.of("title", "resourceId", "resultPath", "valueField", "labelField", "relation", "targetClass")) checkText(widget, key, 200);
@@ -166,7 +170,7 @@ public class ObjectViewStore {
     private static void checkBinding(JSONObject binding) {
         if (binding == null) return;
         String source = binding.getString("source");
-        if (!Set.of("literal", "object", "variable").contains(source)) throw new IllegalArgumentException("Invalid binding source");
+        if (source == null || !Set.of("literal", "object", "variable").contains(source)) throw new IllegalArgumentException("Invalid binding source");
         if (!"literal".equals(source)) {
             String path = binding.getString("path");
             if (path == null || path.length() > 200 || java.util.Arrays.stream(path.split("\\.")).anyMatch(part -> Set.of("__proto__", "constructor", "prototype").contains(part))) throw new IllegalArgumentException("Invalid binding path");

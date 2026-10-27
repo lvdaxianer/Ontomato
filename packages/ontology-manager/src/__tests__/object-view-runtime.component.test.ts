@@ -3,6 +3,7 @@ import { createApp, defineComponent, h, nextTick, reactive, type App } from "vue
 import { createObjectView, createViewWidget } from "@ontomato/contracts/object-views";
 import ObjectViewRuntime from "../object-views/ObjectViewRuntime.vue";
 import ObjectViewBuilder from "../object-views/ObjectViewBuilder.vue";
+import ObjectViewPage from "../object-views/ObjectViewPage.vue";
 import { provideManagerContext, type ManagerHostContext } from "../context";
 import { provideManagerFeedback } from "../feedback";
 import { englishMessages } from "../i18n";
@@ -66,5 +67,69 @@ describe("configured object view interaction", () => {
     expect(save?.body.document.tabs[0].sections[0].widgets.map((widget: { kind: string }) => widget.kind)).toEqual(["properties", "text"]);
     expect(calls.find(call => call.url.endsWith("/publish"))?.body).toMatchObject({ revision: 1, expectedRevision: 1, form: "full" });
     expect(element.textContent).toContain("Published 1");
+  });
+  it("preserves input state when the host recreates an identical object reference", async () => {
+    const view = createObjectView("Order");
+    const input = createViewWidget("input"); input.variable = "filter";
+    const metric = createViewWidget("metric"); metric.binding = { source: "variable", path: "filter" };
+    view.variables.filter = "initial";
+    view.tabs[0].sections[0].widgets = [input, metric];
+    const version = ref(0);
+    const element = mount(() => h(ObjectViewRuntime, { document: view, object: { id: "1", version: version.value }, reference: { className: "Order", primaryKey: "1" } }));
+    await settle();
+    const field = element.querySelector("input")!;
+    field.value = "changed"; field.dispatchEvent(new Event("input", { bubbles: true })); await settle();
+    version.value++; await settle();
+    expect(element.querySelector(".metric")?.textContent).toBe("changed");
+  });
+  it("opens the panel editor using the requested form", async () => {
+    const forms: string[] = [];
+    vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body));
+      if (url.endsWith("/edit")) forms.push(body.form);
+      return new Response(JSON.stringify({ success: true, data: url.endsWith("/edit") ? { revision: 0, publishedRevision: null, versions: [] } : url.endsWith("getMetas") ? { classDef: [] } : [] }));
+    });
+    mount(() => h(ObjectViewBuilder, { className: "Order", initialForm: "panel" }));
+    await settle();
+    expect(forms).toEqual(["panel"]);
+  });
+  it("does not reload published configuration when runtime variables or object data change", async () => {
+    const view = createObjectView("Order");
+    const input = createViewWidget("input"); input.variable = "filter";
+    const metric = createViewWidget("metric"); metric.binding = { source: "variable", path: "filter" };
+    view.variables.filter = "initial";
+    view.tabs[0].sections[0].widgets = [input, metric];
+    let reads = 0;
+    vi.stubGlobal("fetch", async (url: string) => {
+      if (url.endsWith("/read")) reads++;
+      return new Response(JSON.stringify({ success: true, data: url.endsWith("/read") ? { revision: 1, publishedRevision: 1, versions: [{ document: view }] } : { data: { id: "1" } } }));
+    });
+    const version = ref(0);
+    const element = mount(() => { void version.value; return h(ObjectViewPage, { reference: { className: "Order", primaryKey: "1" } }); });
+    await settle();
+    const field = element.querySelector("input")!;
+    field.value = "changed"; field.dispatchEvent(new Event("input", { bubbles: true })); await settle();
+    version.value++; await settle();
+    expect(element.querySelector(".metric")?.textContent).toBe("changed");
+    expect(reads).toBe(1);
+  });
+  it("queries a bound MetricView once for each changed parameter", async () => {
+    const view = createObjectView("Order");
+    view.variables.filter = "initial";
+    const input = createViewWidget("input"); input.variable = "filter";
+    const metric = createViewWidget("metric"); metric.resourceId = "metric-1"; metric.valueField = "value";
+    metric.parameters.filter = { source: "variable", path: "filter" };
+    view.tabs[0].sections[0].widgets = [input, metric];
+    const values: string[] = [];
+    vi.stubGlobal("fetch", async (_url: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body)); values.push(body.param.filter);
+      return new Response(JSON.stringify({ success: true, data: [{ value: body.param.filter }] }));
+    });
+    const element = mount(() => h(ObjectViewRuntime, { document: view, object: { id: "1" }, reference: { className: "Order", primaryKey: "1" } }));
+    await settle();
+    const field = element.querySelector("input")!;
+    field.value = "changed"; field.dispatchEvent(new Event("input", { bubbles: true })); await settle();
+    expect(values).toEqual(["initial", "changed"]);
+    expect(element.querySelector(".metric")?.textContent).toBe("changed");
   });
 });

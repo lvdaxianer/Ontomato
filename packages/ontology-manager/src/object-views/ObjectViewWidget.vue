@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { Eye } from "lucide-vue-next";
+import { parseActionValue } from "./action-values";
 import { ElButton, ElDialog, ElInput, ElTable, ElTableColumn, ElAlert } from "element-plus";
 import { readViewPath, resolveViewBinding, type ViewWidget, type ObjectReference } from "@ontomato/contracts/object-views";
 import { useManagerClient, useOntologyText } from "../context";
@@ -19,7 +20,13 @@ const offset = ref(0);
 const hasMore = ref(false);
 const linkTarget = ref({ className: "", primaryKey: "" });
 let request = 0;
-onBeforeUnmount(() => { request++; });
+let actionRequest = 0;
+onBeforeUnmount(() => { request++; actionRequest++; });
+watch(() => JSON.stringify([props.reference.className, props.reference.primaryKey, props.widget.resourceId]), () => {
+  actionRequest++;
+  actionOpen.value = false;
+  actionValues.value = {};
+});
 const parameters = computed(() => Object.fromEntries(Object.entries(props.widget.parameters).map(([name, binding]) => [name, resolveViewBinding(binding, props.object, props.variables)])));
 const bindingValue = computed(() => resolveViewBinding(props.widget.binding, props.object, props.variables));
 const selectedData = computed(() => readViewPath(data.value, props.widget.resultPath));
@@ -37,7 +44,7 @@ function format(value: unknown) { return value == null ? "—" : typeof value ==
 async function load() {
   const current = ++request;
   error.value = "";
-  if (!["table", "chart", "metric", "links"].includes(props.widget.kind)) return;
+  if (!["table", "chart", "metric", "links"].includes(props.widget.kind)) { loading.value = false; return; }
   loading.value = true;
   data.value = undefined;
   try {
@@ -56,7 +63,7 @@ async function load() {
     if (current === request) error.value = reason instanceof Error ? reason.message : String(reason);
   } finally { if (current === request) loading.value = false; }
 }
-watch(() => [props.reference, props.widget, parameters.value, props.refresh], () => { offset.value = 0; void load(); }, { deep: true, immediate: true });
+watch(() => JSON.stringify([props.reference.className, props.reference.primaryKey, props.widget, parameters.value, props.refresh]), () => { offset.value = 0; void load(); }, { immediate: true });
 function page(delta: number) { offset.value = Math.max(0, offset.value + delta); void load(); }
 function selectRow(row: Record<string, unknown>) {
   if (props.widget.variable) emit("variable", props.widget.variable, row);
@@ -72,31 +79,34 @@ function click() {
   else if (props.widget.onClick === "openObject" && props.widget.targetClass && bindingValue.value != null) emit("open", { className: props.widget.targetClass, primaryKey: String(bindingValue.value) });
 }
 async function execute() {
+  if (loading.value || props.preview) return;
+  const current = ++actionRequest;
   loading.value = true;
   error.value = "";
   try {
     const param = Object.fromEntries(Object.entries(actionValues.value).map(([name, value]) => {
-      if (typeof value === "string" && /^(int|integer|long|double|float|number|boolean|object|array)$/i.test(actionTypes.value[name] || "")) {
-        try { return [name, JSON.parse(value)]; } catch { throw new Error(ot("ovInvalidParameter", { type: actionTypes.value[name], name })); }
-      }
-      return [name, value];
+      try { return [name, parseActionValue(value, actionTypes.value[name] || "")]; }
+      catch { throw new Error(ot("ovInvalidParameter", { type: actionTypes.value[name], name })); }
     }));
     await client.executeViewAction(props.widget.resourceId, param);
+    if (current !== actionRequest) return;
     actionOpen.value = false;
     emit("refresh");
-  } catch (reason) { error.value = reason instanceof Error ? reason.message : String(reason); }
-  finally { loading.value = false; }
+  } catch (reason) { if (current === actionRequest) error.value = reason instanceof Error ? reason.message : String(reason); }
+  finally { if (current === actionRequest) loading.value = false; }
 }
 async function openAction() {
+  if (loading.value || props.preview) return;
+  const current = ++actionRequest;
   error.value = "";
   try {
     const response = await client.requestSmartAsset("actions", "queryById", { id: props.widget.resourceId });
+    if (current !== actionRequest) return;
     const parametersDefinition = response.data?.function?.parameters || [];
     actionTypes.value = Object.fromEntries(parametersDefinition.map((parameter: { name: string; type?: string }) => [parameter.name, parameter.type || ""]));
     actionValues.value = Object.fromEntries(parametersDefinition.map((parameter: { name: string }) => [parameter.name, parameters.value[parameter.name] ?? ""]));
-    Object.assign(actionValues.value, parameters.value);
     actionOpen.value = true;
-  } catch (reason) { error.value = reason instanceof Error ? reason.message : String(reason); }
+  } catch (reason) { if (current === actionRequest) error.value = reason instanceof Error ? reason.message : String(reason); }
 }
 </script>
 <template>
@@ -124,6 +134,7 @@ async function openAction() {
     <el-button v-else-if="widget.kind === 'button'" @click="click">{{ widget.text || widget.title }}</el-button>
     <el-button v-else-if="widget.kind === 'action'" type="primary" :disabled="preview || !widget.resourceId" @click="openAction">{{ widget.text || widget.title }}</el-button>
     <el-dialog v-model="actionOpen" class="object-action-dialog" :title="widget.title" width="min(480px, calc(100% - 32px))" :append-to-body="false">
+      <el-alert v-if="error" :title="error" type="error" :closable="false" />
       <label v-for="(_, name) in actionValues" :key="name" class="action-field">{{ name }}<el-input :model-value="format(actionValues[name])" @update:model-value="actionValues[name] = $event" /></label>
       <template #footer><el-button @click="actionOpen = false">{{ ot('ovCancel') }}</el-button><el-button type="primary" :loading="loading" @click="execute">{{ ot('ovSubmit') }}</el-button></template>
     </el-dialog>

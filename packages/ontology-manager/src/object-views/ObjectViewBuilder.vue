@@ -9,12 +9,12 @@ import type { OntologyObject, OntologyRelation, SmartAsset } from "../api";
 import ObjectViewRuntime from "./ObjectViewRuntime.vue";
 import ViewBindingEditor from "./ViewBindingEditor.vue";
 
-const props = defineProps<{ className: string; initialPrimaryKey?: string }>();
-const emit = defineEmits<{ back: [] }>();
+const props = defineProps<{ className: string; initialPrimaryKey?: string; initialForm?: "full" | "panel" }>();
+const emit = defineEmits<{ back: []; open: [reference: ObjectReference] }>();
 const client = useManagerClient();
 const { ot } = useOntologyText();
 const { confirm } = useManagerFeedback();
-const form = ref<"full" | "panel">("full");
+const form = ref<"full" | "panel">(props.initialForm || "full");
 const document = ref<ObjectViewDocument>(createObjectView(props.className));
 const saved = ref("");
 const dirty = computed(() => JSON.stringify(document.value) !== saved.value);
@@ -24,11 +24,13 @@ const relations = ref<OntologyRelation[]>([]);
 const metrics = ref<SmartAsset[]>([]);
 const actions = ref<SmartAsset[]>([]);
 const busy = ref(false);
+const loaded = ref(false);
 const error = ref("");
 const preview = ref(false);
 const mobilePane = ref<"components" | "canvas" | "settings">("canvas");
 const previewKey = ref(props.initialPrimaryKey || "");
 const previewObject = ref<Record<string, unknown>>({});
+const previewReference = ref<ObjectReference>({ className: props.className, primaryKey: "" });
 const selectedTab = ref("");
 const selectedSection = ref("");
 const selectedWidget = ref("");
@@ -39,16 +41,18 @@ const variableName = ref("");
 const variableValue = ref("");
 const tab = computed(() => document.value.tabs.find(item => item.id === selectedTab.value) || document.value.tabs[0]);
 const section = computed(() => tab.value?.sections.find(item => item.id === selectedSection.value) || tab.value?.sections[0]);
-const widget = computed(() => document.value.tabs.flatMap(item => item.sections).flatMap(item => item.widgets).find(item => item.id === selectedWidget.value));
+const widget = computed(() => section.value?.widgets.find(item => item.id === selectedWidget.value));
 const kinds: ViewWidget["kind"][] = ["text", "properties", "metric", "table", "chart", "links", "input", "action", "button"];
-const reference = computed<ObjectReference>(() => ({ className: props.className, primaryKey: previewKey.value }));
+const reference = computed(() => previewReference.value);
 const relationOptions = computed(() => relations.value.filter(item => (widget.value?.direction === "incoming" ? item.toclass : item.fromclass) === props.className));
 let generation = 0;
 let dragging = "";
+let sampleRequest = 0;
 
 async function load() {
   const current = ++generation;
   busy.value = true;
+  loaded.value = false;
   error.value = "";
   try {
     const [result, ontology, metricAssets, actionAssets] = await Promise.all([
@@ -67,29 +71,37 @@ async function load() {
     selectedSection.value = document.value.tabs[0].sections[0].id;
     selectedWidget.value = "";
     historyRevision.value = undefined;
+    loaded.value = true;
   } catch (reason) { if (current === generation) error.value = reason instanceof Error ? reason.message : String(reason); }
   finally { if (current === generation) busy.value = false; }
 }
-watch(() => props.className, () => { previewKey.value = props.initialPrimaryKey || ""; previewObject.value = {}; void load(); }, { immediate: true });
+watch(() => props.className, () => { sampleRequest++; previewKey.value = props.initialPrimaryKey || ""; previewObject.value = {}; previewReference.value = { className: props.className, primaryKey: "" }; void load(); }, { immediate: true });
 async function changeForm(value: "full" | "panel") {
   if (dirty.value) { try { await confirm(ot("ovDiscard"), ot("ovChangeView")); } catch { return; } }
   form.value = value;
   await load();
 }
 async function sample() {
+  const current = ++sampleRequest;
+  const className = props.className;
+  let primaryKey = previewKey.value;
   error.value = "";
   try {
-    if (!previewKey.value) {
-      const result = await client.loadObjectData(props.className, 1, 1);
+    if (!primaryKey) {
+      const result = await client.loadObjectData(className, 1, 1);
       const key = objectType.value?.attrs.find(attr => attr.primaryKey)?.name;
       if (!key || result.rows[0]?.[key] == null) throw new Error(ot("ovNoPreview"));
-      previewKey.value = String(result.rows[0][key]);
+      primaryKey = String(result.rows[0][key]);
     }
-    const result = await client.queryInstanceInfo(`${props.className}:${previewKey.value}`, props.className);
+    const result = await client.queryInstanceInfo(`${className}:${primaryKey}`, className);
+    if (current !== sampleRequest || className !== props.className) return;
+    previewKey.value = primaryKey;
     previewObject.value = (result.data || {}) as Record<string, unknown>;
-  } catch (reason) { error.value = reason instanceof Error ? reason.message : String(reason); }
+    previewReference.value = { className, primaryKey };
+  } catch (reason) { if (current === sampleRequest) error.value = reason instanceof Error ? reason.message : String(reason); }
 }
 async function save(publish = false) {
+  if (busy.value || !loaded.value) return;
   busy.value = true;
   error.value = "";
   try {
@@ -102,7 +114,8 @@ async function save(publish = false) {
   finally { busy.value = false; }
 }
 async function publishVersion() {
-  if (!historyRevision.value) return;
+  if (!historyRevision.value || busy.value || !loaded.value) return;
+  error.value = "";
   busy.value = true;
   try { state.value = await client.objectViewRequest("publish", props.className, form.value, { revision: historyRevision.value, expectedRevision: state.value.revision }); }
   catch (reason) { error.value = reason instanceof Error ? reason.message : String(reason); }
@@ -130,11 +143,13 @@ function addTab() {
   document.value.tabs.push(item);
   selectedTab.value = item.id;
   selectedSection.value = item.sections[0].id;
+  selectedWidget.value = "";
 }
 function addSection() {
   const item = { id: crypto.randomUUID(), title: ot("ovNewSection"), widgets: [] };
   tab.value.sections.push(item);
   selectedSection.value = item.id;
+  selectedWidget.value = "";
 }
 function moveWidget(id: string, targetSection: string, index: number) {
   const sections = document.value.tabs.flatMap(item => item.sections);
@@ -144,6 +159,14 @@ function moveWidget(id: string, targetSection: string, index: number) {
   const from = origin.widgets.findIndex(item => item.id === id);
   const [item] = origin.widgets.splice(from, 1);
   target.widgets.splice(Math.max(0, Math.min(index, target.widgets.length)), 0, item);
+  selectedSection.value = target.id;
+  selectedWidget.value = item.id;
+}
+function removeWidget() {
+  if (!section.value || !widget.value) return;
+  const index = section.value.widgets.findIndex(item => item.id === widget.value?.id);
+  if (index >= 0) section.value.widgets.splice(index, 1);
+  selectedWidget.value = "";
 }
 function drop(target: string, index: number) { moveWidget(dragging, target, index); dragging = ""; }
 function addParameter() {
@@ -160,12 +183,18 @@ function addVariable() {
   variableValue.value = "";
 }
 async function back() {
-  if (dirty.value) { try { await confirm(ot("ovDiscard"), ot("ovLeaveEditor")); } catch { return; } }
+  if (!await canLeave()) return;
   emit("back");
 }
+async function canLeave() {
+  if (busy.value) return false;
+  if (loaded.value && dirty.value) { try { await confirm(ot("ovDiscard"), ot("ovLeaveEditor")); } catch { return false; } }
+  return true;
+}
+defineExpose({ canLeave });
 function beforeUnload(event: BeforeUnloadEvent) { if (dirty.value) { event.preventDefault(); event.returnValue = ""; } }
 window.addEventListener("beforeunload", beforeUnload);
-onBeforeUnmount(() => { generation++; window.removeEventListener("beforeunload", beforeUnload); });
+onBeforeUnmount(() => { generation++; sampleRequest++; window.removeEventListener("beforeunload", beforeUnload); });
 </script>
 <template>
   <div class="view-builder">
@@ -174,12 +203,12 @@ onBeforeUnmount(() => { generation++; window.removeEventListener("beforeunload",
         <el-select :model-value="form" class="form-select" :disabled="busy" @update:model-value="changeForm"><el-option :label="ot('ovFull')" value="full" /><el-option :label="ot('ovPanel')" value="panel" /></el-select>
       </div>
       <div class="builder-actions"><span class="version-status">v{{ state.revision }} · {{ ot('ovPublished') }} {{ state.publishedRevision ?? '—' }} {{ dirty ? '· ' + ot('ovUnsaved') : '' }}</span>
-        <el-switch v-model="preview" :active-text="ot('ovPreview')" /><el-button :loading="busy" @click="save()">{{ ot('ovSaveDraft') }}</el-button><el-button type="primary" :loading="busy" @click="save(true)">{{ ot('ovSavePublish') }}</el-button>
+        <el-switch v-model="preview" :active-text="ot('ovPreview')" /><el-button :disabled="!loaded" :loading="busy" @click="save()">{{ ot('ovSaveDraft') }}</el-button><el-button type="primary" :disabled="!loaded" :loading="busy" @click="save(true)">{{ ot('ovSavePublish') }}</el-button>
       </div>
     </header>
     <el-alert v-if="error" type="error" :title="error" :closable="false" />
     <nav class="pane-navigation" :aria-label="ot('ovEditorPanels')"><el-button v-for="pane in (['components', 'canvas', 'settings'] as const)" :key="pane" :type="mobilePane === pane ? 'primary' : 'default'" :aria-pressed="mobilePane === pane" @click="mobilePane = pane">{{ ot(({ components: 'ovComponents', canvas: 'ovCanvas', settings: 'ovSettings' } as const)[pane]) }}</el-button></nav>
-    <div class="builder-body" :data-pane="mobilePane">
+    <div class="builder-body" :data-pane="mobilePane" :inert="busy || !loaded">
       <aside class="palette">
         <h3>{{ ot('ovComponents') }}</h3><el-button v-for="kind in kinds" :key="kind" :disabled="busy || preview" @click="addWidget(kind)">{{ ot(widgetMessageKeys[kind]) }}</el-button>
         <h3>{{ ot('ovObjectPreview') }}</h3><el-input v-model="previewKey" :placeholder="ot('ovPrimaryKey')" /><el-button :disabled="busy" @click="sample">{{ ot('ovLoadObject') }}</el-button>
@@ -191,7 +220,7 @@ onBeforeUnmount(() => { generation++; window.removeEventListener("beforeunload",
         <el-button :disabled="!historyRevision || busy" @click="restoreVersion">{{ ot('ovLoadVersion') }}</el-button><el-button :disabled="!historyRevision || busy" @click="publishVersion">{{ ot('ovPublishVersion') }}</el-button>
       </aside>
       <main :class="['canvas', { 'panel-canvas': form === 'panel' }]">
-        <ObjectViewRuntime v-if="preview" :document="document" :object="previewObject" :reference="reference" :panel="form === 'panel'" preview @refresh="sample" />
+        <ObjectViewRuntime v-if="preview" :document="document" :object="previewObject" :reference="reference" :panel="form === 'panel'" preview @refresh="sample" @open="emit('open', $event)" />
         <template v-else>
           <div class="tab-bar"><el-button v-for="item in document.tabs" :key="item.id" :type="item.id === tab.id ? 'primary' : 'default'" @click="selectedTab = item.id; selectedSection = item.sections[0].id">{{ item.title }}</el-button><el-button @click="addTab">{{ ot('ovAddTab') }}</el-button></div>
           <div class="layout-controls"><el-input v-model="tab.title" :placeholder="ot('ovTabTitle')" /><el-button :disabled="document.tabs.length === 1" @click="document.tabs.splice(document.tabs.indexOf(tab), 1)">{{ ot('ovDeleteTab') }}</el-button><el-button @click="addSection">{{ ot('ovAddSection') }}</el-button></div>
@@ -228,7 +257,7 @@ onBeforeUnmount(() => { generation++; window.removeEventListener("beforeunload",
           <label v-if="['table','button'].includes(widget.kind)">{{ ot('ovTargetType') }}<el-input v-model="widget.targetClass" /></label>
           <div class="visibility-heading"><h4>{{ ot('ovVisibility') }}</h4><el-switch :model-value="!!widget.visibleWhen" @update:model-value="widget.visibleWhen = $event ? { binding: { source: 'object', path: '' }, operator: 'present', value: '' } : undefined" /></div>
           <div v-if="widget.visibleWhen" class="condition-fields"><ViewBindingEditor v-model="widget.visibleWhen.binding" /><el-select v-model="widget.visibleWhen.operator"><el-option v-for="operator in (['eq','ne','present','empty'] as const)" :key="operator" :value="operator" :label="ot(({ eq: 'ovEqual', ne: 'ovNotEqual', present: 'ovPresent', empty: 'ovEmpty' } as const)[operator])" /></el-select><el-input v-if="['eq','ne'].includes(widget.visibleWhen.operator)" v-model="widget.visibleWhen.value" /></div>
-          <el-button type="danger" @click="section.widgets.splice(section.widgets.findIndex(item => item.id === widget!.id), 1); selectedWidget = ''">{{ ot('ovDeleteComponent') }}</el-button>
+          <el-button type="danger" @click="removeWidget">{{ ot('ovDeleteComponent') }}</el-button>
         </template>
         <p v-else-if="!preview" class="inspector-hint">{{ ot('ovInspectorHint') }}</p>
       </aside>

@@ -537,9 +537,9 @@ export function createManagerClient(
       headers: { ...credentialHeaders(context.credential), "Accept-Language": context.locale, "X-Requested-With": "XMLHttpRequest" },
     });
     if (response.status === 401 || response.status === 402) onAuthFailure(response.status);
-    const result = await response.json();
+    const result = await response.json().catch(() => null);
     if (disposed || source !== hostSource(context)) throw stale();
-    if (!response.ok || result.success === false) throw new Error(result.message || `Request failed (${response.status})`);
+    if (!response.ok || !result || result.success === false) throw new Error(result?.message || ontologyText(context.messages, "requestFailedStatus", { status: response.status }));
     return result.data;
   }
 
@@ -562,7 +562,7 @@ export function createManagerClient(
         relationship: [{ from: direction === "outgoing" ? 0 : 1, to: direction === "outgoing" ? 1 : 0, type: [relationship] }],
       }] },
       output: { to_user: true, fields: target.attrs.filter(attr => attr.enable !== false).map(attr => ({ variable: "target", field: attr.name, as: attr.name })),
-        sort: { fields: [{ field: targetPk, order: "asc" }] }, limit: { count: 51, offset } },
+        sort: { fields: [{ variable: "target", field: targetPk, order: "asc" }] }, limit: { count: 51, offset } },
     }] } });
     if (response.error) throw new Error(String(response.error));
     const result = response.data?.[0]?.answer;

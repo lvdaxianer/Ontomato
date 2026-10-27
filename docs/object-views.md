@@ -56,6 +56,10 @@ provides an Open Object View entry. Manager paths use
 `/views/<encoded-class-name>?key=<encoded-primary-key>` and `&edit=true` for editing;
 the host remains responsible for exposing that path through its navigation.
 Without a published configuration, the runtime generates a property-list view.
+Panel configuration opens the panel editor with the current object available for
+preview. Preview identity changes only after the requested object finishes loading.
+Navigation through the Manager checks for unsaved editor changes. Runtime variable
+state survives object-data refreshes and is reset when the actual object changes.
 
 ## Implementation boundaries
 

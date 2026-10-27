@@ -12,7 +12,7 @@ watch(() => props.document, document => {
   variables.value = { ...document.variables };
   if (!document.tabs.some(tab => tab.id === activeTab.value)) activeTab.value = document.tabs[0]?.id || "";
 }, { immediate: true });
-watch(() => props.reference, () => { variables.value = { ...props.document.variables }; }, { deep: true });
+watch(() => JSON.stringify([props.reference.className, props.reference.primaryKey]), () => { variables.value = { ...props.document.variables }; });
 function reload() { refresh.value++; emit("refresh"); }
 </script>
 <template>
