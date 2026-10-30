@@ -324,11 +324,7 @@ public class MetricViewController {
 			}
 			Object[] o = metricViewService.execute(id, p, lang, user, curUserDataPermission, timeoutMinutes);
 			ret.put("success", true);
-			Object resultData = o[0];
-			if (resultData instanceof JSONArray data && data.size() == 1) {
-				resultData = data.get(0);
-			}
-			ret.put("data", resultData);
+			putMetricViewData(ret, o[0]);
 			((PythonExecuteResult)o[1]).markCompleteness(ret);
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
@@ -354,7 +350,7 @@ public class MetricViewController {
 			}
 			Object[] o = metricViewService.testExecute(metricView, p, lang, user, curUserDataPermission, timeoutMinutes);
 			ret.put("success", true);
-			ret.put("data", o[0]);
+			putMetricViewData(ret, o[0]);
 			((PythonExecuteResult)o[1]).markCompleteness(ret);
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
@@ -362,6 +358,26 @@ public class MetricViewController {
 			ret.put("message", e.getMessage());
 		}
 		return ret;
+	}
+
+	/**
+	 * Normalizes metric view results according to their result cardinality.
+	 *
+	 * @param response response object to receive the normalized data
+	 * @param resultData raw service result payload
+	 * @author lvdaxianer@yeah.net
+	 * @date 2026-10-30
+	 */
+	private void putMetricViewData(JSONObject response, Object resultData) {
+		if (!(resultData instanceof JSONArray data)) {
+			if (resultData != null) {
+				response.put("data", resultData);
+			}
+			return;
+		}
+		if (!data.isEmpty()) {
+			response.put("data", data.size() == 1 ? data.get(0) : data);
+		}
 	}
 
 	private String failureMessage(Exception e) {
