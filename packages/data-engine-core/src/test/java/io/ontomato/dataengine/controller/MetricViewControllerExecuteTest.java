@@ -73,7 +73,7 @@ class MetricViewControllerExecuteTest {
     }
 
     @Test
-    void executePreservesEmptyAndMultipleMetricResultsAsArrays() throws Exception {
+    void executePreservesMultipleMetricResultsAsAnArray() throws Exception {
         JSONArray results = new JSONArray();
         results.add(new JSONObject().fluentPut("name", "first"));
         results.add(new JSONObject().fluentPut("name", "second"));
@@ -88,7 +88,7 @@ class MetricViewControllerExecuteTest {
     }
 
     @Test
-    void executePreservesAnEmptyMetricResultAsAnArray() throws Exception {
+    void executeOmitsDataForAnEmptyMetricResult() throws Exception {
         JSONArray results = new JSONArray();
         when(metricViewService.execute(eq("metric-1"), any(JSONObject.class), eq("zh-CN"), same(user),
                 same(permission), anyInt())).thenReturn(executeResult(results));
@@ -96,25 +96,54 @@ class MetricViewControllerExecuteTest {
         JSONObject response = controller.execute("zh-CN", request());
 
         assertTrue(response.getBooleanValue("success"));
+        assertFalse(response.containsKey("data"));
+    }
+
+    @Test
+    void testExecuteUnwrapsASingleMetricResultObject() throws Exception {
+        JSONArray results = new JSONArray();
+        JSONObject result = new JSONObject().fluentPut("name", "first");
+        results.add(result);
+        PythonExecuteResult execution = new PythonExecuteResult();
+        execution.setPartialQuery(JSONObject.of("rowLimit", 100, "truncationHint", "partial result"));
+        when(metricViewService.testExecute(any(MetricView.class), any(JSONObject.class), eq("zh-CN"), same(user),
+                same(permission), anyInt())).thenReturn(executeResult(results, execution));
+
+        JSONObject response = controller.testExecute("zh-CN", testRequest());
+
+        assertTrue(response.getBooleanValue("success"));
+        assertEquals(result, response.get("data"));
+        assertFalse(response.get("data") instanceof JSONArray);
+        assertTrue(response.getBooleanValue("truncated"));
+        assertEquals(100, response.getIntValue("rowLimit"));
+        assertEquals("partial result", response.getString("truncationHint"));
+    }
+
+    @Test
+    void testExecutePreservesMultipleMetricResultsAsAnArray() throws Exception {
+        JSONArray results = new JSONArray();
+        results.add(new JSONObject().fluentPut("name", "first"));
+        results.add(new JSONObject().fluentPut("name", "second"));
+        when(metricViewService.testExecute(any(MetricView.class), any(JSONObject.class), eq("zh-CN"), same(user),
+                same(permission), anyInt())).thenReturn(executeResult(results));
+
+        JSONObject response = controller.testExecute("zh-CN", testRequest());
+
+        assertTrue(response.getBooleanValue("success"));
         assertEquals(results, response.get("data"));
         assertTrue(response.get("data") instanceof JSONArray);
     }
 
     @Test
-    void testExecuteKeepsItsArrayResponse() throws Exception {
+    void testExecuteOmitsDataForAnEmptyMetricResult() throws Exception {
         JSONArray results = new JSONArray();
-        results.add(new JSONObject().fluentPut("name", "first"));
         when(metricViewService.testExecute(any(MetricView.class), any(JSONObject.class), eq("zh-CN"), same(user),
                 same(permission), anyInt())).thenReturn(executeResult(results));
 
-        JSONObject request = new JSONObject()
-                .fluentPut("metricView", new JSONObject())
-                .fluentPut("param", new JSONObject());
-        JSONObject response = controller.testExecute("zh-CN", request);
+        JSONObject response = controller.testExecute("zh-CN", testRequest());
 
         assertTrue(response.getBooleanValue("success"));
-        assertEquals(results, response.get("data"));
-        assertTrue(response.get("data") instanceof JSONArray);
+        assertFalse(response.containsKey("data"));
     }
 
     private static JSONObject request() {
@@ -123,7 +152,17 @@ class MetricViewControllerExecuteTest {
                 .fluentPut("param", new JSONObject());
     }
 
+    private static JSONObject testRequest() {
+        return new JSONObject()
+                .fluentPut("metricView", new JSONObject())
+                .fluentPut("param", new JSONObject());
+    }
+
     private static Object[] executeResult(JSONArray results) {
-        return new Object[] { results, new PythonExecuteResult() };
+        return executeResult(results, new PythonExecuteResult());
+    }
+
+    private static Object[] executeResult(JSONArray results, PythonExecuteResult execution) {
+        return new Object[] { results, execution };
     }
 }
