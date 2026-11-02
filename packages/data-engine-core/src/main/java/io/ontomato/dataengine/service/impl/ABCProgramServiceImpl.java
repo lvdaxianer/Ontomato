@@ -77,29 +77,7 @@ public class ABCProgramServiceImpl implements ABCProgramService {
 	
 	@Override
 	public Object[] execute(String sessionId, Function function, String userId, UserDataPermission curUserDataPermission, String sandboxId, String lang, int timeoutMinutes, String domainId) throws Exception {
-		File parameterFile = new File(baseWorkspace, sessionId + ".json");
-		FileOutputStream fos = null;
-		try {
-			JSONObject parameters = new JSONObject();
-			if (function.getParameters() != null) {
-				for (Parameter parameter : function.getParameters()) {
-					parameters.put(parameter.getName(), parameter.getValue());
-				}
-			}
-			parameterFile.getParentFile().mkdirs();
-			fos = new FileOutputStream(parameterFile);
-			fos.write(JSON.toJSONString(parameters, Feature.WriteMapNullValue).getBytes("utf-8"));
-		} catch (Exception e) {
-			throw e;
-		} finally {
-			if (fos != null) {
-				try {
-					fos.close();
-				} catch (Exception e) {
-					log.error(e.getMessage(), e);
-				}
-			}
-		}
+		File parameterFile = writeFunctionParameters(sessionId, function);
 		if (Function.OPERATION_READ.equals(function.getOperation())) {
 			PythonExecuteResult result = pythonExecuteService.runPythonCode(sessionId, function.getCode(), timeoutMinutes, lang, userId, domainId, parameterFile.getAbsolutePath());
 			return new Object[] {dealPythonReturn(result.getResult(), result.getError(), function.getReturnDef().getOutKeyRefs(), curUserDataPermission), result};
@@ -107,6 +85,15 @@ public class ABCProgramServiceImpl implements ABCProgramService {
 			PythonExecuteResult result = pythonExecuteService.runPythonCode(sessionId, function.getCode(), timeoutMinutes, lang, sandboxId, domainId, parameterFile.getAbsolutePath());
 			return new Object[] {null, result};
 		}
+	}
+
+	@Override
+	public Object[] executeRawFunction(String sessionId, Function function, String userId, String lang,
+			int timeoutMinutes, String domainId) throws Exception {
+		File parameterFile = writeFunctionParameters(sessionId, function);
+		PythonExecuteResult result = pythonExecuteService.runPythonCode(sessionId, function.getCode(), timeoutMinutes,
+				lang, userId, domainId, parameterFile.getAbsolutePath());
+		return new Object[] {parseRawPythonReturn(result.getResult(), result.getError()), result};
 	}
 	
 	@Override
@@ -184,6 +171,37 @@ public class ABCProgramServiceImpl implements ABCProgramService {
 			}
 		}
         return answer;
+	}
+
+	private Object parseRawPythonReturn(String pythonOutput, String errorMessage) throws Exception {
+		if (errorMessage != null && !errorMessage.trim().isEmpty()) {
+			throw new Exception("python error stream: \n```\n" + errorMessage + "\n```\n");
+		}
+		try {
+			String normalizedOutput = pythonOutput == null ? "" : pythonOutput.replaceAll(":\\s*NaN", ": null");
+			Object parsed = JSON.parse(normalizedOutput.trim());
+			if (parsed instanceof JSONObject object && object.containsKey("answer")) {
+				return object.get("answer");
+			}
+			return parsed;
+		} catch (Exception e) {
+			throw new Exception("The program print result must be valid JSON.", e);
+		}
+	}
+
+	private File writeFunctionParameters(String sessionId, Function function) throws Exception {
+		File parameterFile = new File(baseWorkspace, sessionId + ".json");
+		JSONObject parameters = new JSONObject();
+		if (function.getParameters() != null) {
+			for (Parameter parameter : function.getParameters()) {
+				parameters.put(parameter.getName(), parameter.getValue());
+			}
+		}
+		parameterFile.getParentFile().mkdirs();
+		try (FileOutputStream fos = new FileOutputStream(parameterFile)) {
+			fos.write(JSON.toJSONString(parameters, Feature.WriteMapNullValue).getBytes("utf-8"));
+		}
+		return parameterFile;
 	}
 	
 	private String getAnswerJSON(String pythonOutput){

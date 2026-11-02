@@ -113,23 +113,28 @@ Unknown fields and field-level validation are handled by the service; exact reje
 
 #### 2.3.3 Success response
 
-For exactly one result, `data` is the result object rather than a one-item array. For multiple results, `data` is an array preserving order. For no results, `data` is omitted. A partial execution may add completeness fields.
+`data` is derived directly from the JSON emitted by `function.code`. If the
+top-level JSON object contains `answer`, the value of `answer` is used;
+otherwise the complete parsed JSON value is used. The value's JSON type and
+array cardinality are preserved: a one-item array remains an array, and an
+empty array remains present as an empty array. A partial execution may add
+completeness fields.
 
 ```json
 {
   "success": true,
-  "data": {
-    "id": "6283427598497800337"
-  }
+  "data": [
+    {
+      "id": "6283427598497800337"
+    }
+  ]
 }
 ```
 
 | Field path | Type | Required | Nullable | Example | Description |
 | --- | --- | --- | --- | --- | --- |
 | `success` | boolean | Required | No | `true` | Indicates successful controller handling. |
-| `data` | object | Required for one result | No | `{ "id": "6283427598497800337" }` | Sole result object. |
-| `data` | array<object> | Required for multiple results | No | `[{ "id": "..." }, { "id": "..." }]` | All result objects in service order. |
-| `data` | absent | For no results | N/A | N/A | No result payload. |
+| `data` | any JSON value | Required for a successful function result | Yes, when the function result is JSON `null` | `[{ "id": "6283427598497800337" }]` | The `answer` value when the top-level function output has `answer`; otherwise the complete parsed function output. Objects, arrays, scalars, and array cardinality are preserved. |
 | `truncated` | boolean | Optional | No | `true` | Indicates that a query contributing to the result was partial. |
 | `rowLimit` | integer | Optional | Yes | `100000` | Row limit associated with a partial result. |
 | `truncationHint` | string | Optional | Yes | `...` | Human-readable completeness guidance. |
@@ -175,7 +180,7 @@ curl --request POST '<DATA_ENGINE_BASE_URL>/api/data-query/metricView/execute' \
 HTTP/1.1 200 OK
 Content-Type: application/json
 
-{"success":true,"data":{"id":"6283427598497800337"}}
+{"success":true,"data":[{"id":"6283427598497800337"}]}
 ```
 
 ## 3. Test-execute a metric view definition
@@ -228,7 +233,10 @@ Request headers are the same as [section 2.2.3](#222-request-headers): `Accept-L
 
 ### 3.3 Response definition
 
-The response envelope and cardinality rules are identical to [section 2.3.3](#233-success-response): one result is an object, multiple results remain an array, and no result omits `data`. The endpoint also preserves the optional completeness fields. Handled errors use the shape in [section 2.3.4](#234-error-response).
+The response envelope and answer-aware passthrough rules are identical to
+[section 2.3.3](#233-success-response). The endpoint also preserves the
+optional completeness fields. Handled errors use the shape in
+[section 2.3.4](#234-error-response).
 
 ### 3.4 Complete example
 
@@ -250,11 +258,11 @@ Example one-result response:
 HTTP/1.1 200 OK
 Content-Type: application/json
 
-{"success":true,"data":{"id":"6283427598497800337"}}
+{"success":true,"data":[{"id":"6283427598497800337"}]}
 ```
 
 ## 4. Common contract checks
 
 - Both endpoints are read/test operations; pagination, sorting, caching, and idempotency keys are not applicable to the controller contract.
-- Callers must branch on `success` and must not assume that `data` is always present or always an array.
+- Callers must branch on `success` and must treat `data` as the JSON value emitted by the function after optional `answer` extraction; it is not cardinality-normalized.
 - Authentication and exact host-level HTTP error mapping remain **待确认** because they are supplied outside this controller.

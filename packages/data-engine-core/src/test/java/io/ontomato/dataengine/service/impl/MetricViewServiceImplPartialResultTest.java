@@ -76,6 +76,25 @@ class MetricViewServiceImplPartialResultTest {
 		assertFalse(content.getMd().contains("partial hint"), content.getMd());
 	}
 
+	@Test
+	void metricViewExecutionUsesTheRawFunctionResult() throws Exception {
+		Function function = new Function();
+		function.setParameters(new ArrayList<>());
+		MetricView metricView = new MetricView();
+		metricView.setStatus(MetricView.STATUS_PUBLISHED);
+		metricView.setType(MetricView.TYPE_STATIC);
+		metricView.setFunction(function);
+		JSONObject rawResult = JSONObject.of("id", "x");
+		PythonExecuteResult execution = new PythonExecuteResult();
+		when(abcProgramService.executeRawFunction(anyString(), any(Function.class), anyString(), anyString(), anyInt(), anyString()))
+				.thenReturn(new Object[] {rawResult, execution});
+
+		Object[] result = service.testExecute(metricView, new JSONObject(), "en", user, new UserDataPermission(), 1);
+
+		assertEquals(rawResult, result[0]);
+		verify(abcProgramService).executeRawFunction(anyString(), any(Function.class), anyString(), anyString(), anyInt(), anyString());
+	}
+
 	private MetricViewContent runCard(boolean partial) throws Exception {
 		Function function = new Function();
 		function.setName("Order total");

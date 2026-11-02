@@ -360,24 +360,9 @@ public class MetricViewController {
 		return ret;
 	}
 
-	/**
-	 * Normalizes metric view results according to their result cardinality.
-	 *
-	 * @param response response object to receive the normalized data
-	 * @param resultData raw service result payload
-	 * @author lvdaxianer@yeah.net
-	 * @date 2026-10-30
-	 */
+	/** Places the function result in data without changing its JSON shape. */
 	private void putMetricViewData(JSONObject response, Object resultData) {
-		if (!(resultData instanceof JSONArray data)) {
-			if (resultData != null) {
-				response.put("data", resultData);
-			}
-			return;
-		}
-		if (!data.isEmpty()) {
-			response.put("data", data.size() == 1 ? data.get(0) : data);
-		}
+		response.put("data", resultData);
 	}
 
 	private String failureMessage(Exception e) {

@@ -635,7 +635,7 @@ public class MetricViewServiceImpl implements MetricViewService {
 					}
 				}
 				
-				return abcProgramService.execute(UUID.randomUUID().toString(), function, user.getId(), permission, null, lang, timeoutMinutes, user.getDomainId());
+				return abcProgramService.executeRawFunction(UUID.randomUUID().toString(), function, user.getId(), lang, timeoutMinutes, user.getDomainId());
 			} else {
 				throw new Exception(langService.get(lang, "MetricView.notPublished"));
 			}

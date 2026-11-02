@@ -19,6 +19,9 @@ public interface ABCProgramService {
 	public Object[] execute(String sessionId, ABCHarnessDashboard dashboard, String userId, UserDataPermission curUserDataPermission, String lang, int timeoutMinutes, String domainId) throws Exception;
 	
 	public Object[] execute(String sessionId, Function function, String userId, UserDataPermission curUserDataPermission, String sandboxId, String lang, int timeoutMinutes, String domainId) throws Exception;
+
+	/** Returns the JSON value emitted by a metric-view function without changing its shape. */
+	public Object[] executeRawFunction(String sessionId, Function function, String userId, String lang, int timeoutMinutes, String domainId) throws Exception;
 	
 	public JSONArray dealPythonReturn(String pythonOutput, String errorMessage, List<ABCHarnessProgramOutKeyRef> outKeyRefs, UserDataPermission curUserDataPermission) throws Exception;
 	
