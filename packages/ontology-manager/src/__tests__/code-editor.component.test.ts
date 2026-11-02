@@ -104,4 +104,26 @@ describe("CodeEditor", () => {
     expect(code.value).toBe("x = 1\n");
     app.unmount();
   });
+
+  it("expand opens a large right-side drawer with the same code", async () => {
+    const { app, element } = mountEditor("x = 1\n");
+    await settle();
+
+    const button = [...element.querySelectorAll("button")].find(
+      (item) => item.textContent?.trim() === "Expand"
+    ) as HTMLButtonElement;
+    button.click();
+    await settle();
+
+    const drawer = document.querySelector(".el-drawer")!;
+    expect(drawer.classList.contains("rtl")).toBe(true);
+    expect(drawer.querySelector(".cm-content")?.textContent).toContain("x = 1");
+    expect(drawer.querySelector(".code-editor")).toBeTruthy();
+
+    (drawer.querySelector(".el-drawer__close-btn") as HTMLButtonElement).click();
+    await settle();
+    // The closed drawer keeps its hidden wrapper; the editor content is destroyed on close.
+    expect(drawer.querySelector(".cm-content")).toBeNull();
+    app.unmount();
+  });
 });

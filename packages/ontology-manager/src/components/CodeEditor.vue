@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
-import { WandSparkles } from "lucide-vue-next";
-import { ElButton } from "element-plus";
+import { Maximize2, WandSparkles } from "lucide-vue-next";
+import { ElButton, ElDrawer } from "element-plus";
 import { EditorView, basicSetup } from "codemirror";
 import { Compartment, EditorState } from "@codemirror/state";
 import { StreamLanguage } from "@codemirror/language";
@@ -15,8 +15,10 @@ const props = withDefaults(
     language?: string;
     // eslint-disable-next-line no-unused-vars -- base rule false-positive on TS function-type parameter names in .vue files
     formatter?: (code: string) => Promise<string>;
+    expandable?: boolean;
+    fillHeight?: boolean;
   }>(),
-  { language: "python" }
+  { language: "python", expandable: true, fillHeight: false }
 );
 
 const emit = defineEmits<{ "update:modelValue": [value: string] }>();
@@ -24,6 +26,7 @@ const { ot } = useOntologyText();
 
 const editorHost = ref<HTMLDivElement | null>(null);
 const formatting = ref(false);
+const expanded = ref(false);
 let editor: EditorView | null = null;
 let themeObserver: MutationObserver | null = null;
 const themeCompartment = new Compartment();
@@ -128,6 +131,10 @@ const languageLabel = computed(() => {
   return language ? language.charAt(0).toUpperCase() + language.slice(1) : "";
 });
 
+const drawerTitle = computed(() =>
+  languageLabel.value ? `${languageLabel.value} · ${ot("explainerCode")}` : ot("explainerCode")
+);
+
 watch(
   () => props.modelValue,
   (value) => {
@@ -179,7 +186,7 @@ defineExpose({ format });
 </script>
 
 <template>
-  <div class="code-editor">
+  <div class="code-editor" :class="{ 'is-fill': fillHeight }">
     <div class="code-editor-toolbar">
       <span v-if="languageLabel" class="code-editor-language">{{ languageLabel }}</span>
       <span class="code-editor-spacer" />
@@ -195,9 +202,38 @@ defineExpose({ format });
       >
         {{ ot("codeFormat") }}
       </el-button>
+      <el-button
+        v-if="expandable"
+        size="small"
+        text
+        type="primary"
+        :icon="Maximize2"
+        @click="expanded = true"
+      >
+        {{ ot("codeExpand") }}
+      </el-button>
     </div>
     <div ref="editorHost" class="code-editor-host" />
   </div>
+  <el-drawer
+    v-model="expanded"
+    class="code-editor-drawer"
+    :title="drawerTitle"
+    size="min(1400px, 92%)"
+    :lock-scroll="false"
+    destroy-on-close
+  >
+    <div class="code-editor-drawer-body">
+      <CodeEditor
+        :model-value="modelValue"
+        :language="language"
+        :formatter="formatter"
+        :expandable="false"
+        fill-height
+        @update:model-value="emit('update:modelValue', $event)"
+      />
+    </div>
+  </el-drawer>
 </template>
 
 <style scoped>
@@ -207,6 +243,31 @@ defineExpose({ format });
   border-radius: var(--radius-sm, 8px);
   overflow: hidden;
   background: var(--el-fill-color-lighter);
+}
+.code-editor.is-fill {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.code-editor.is-fill .code-editor-host {
+  flex: 1;
+  height: auto;
+  min-height: 0;
+}
+.code-editor-drawer-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+:global(.code-editor-drawer .el-drawer__body) {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 12px;
+  overflow: hidden;
 }
 .code-editor-toolbar {
   display: flex;

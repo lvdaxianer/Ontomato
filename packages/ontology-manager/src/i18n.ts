@@ -362,6 +362,7 @@ const ontologyEn = {
   codeFormat: "Format",
   codeFormatDone: "Code formatted",
   codeFormatFailed: "Failed to format code",
+  codeExpand: "Expand",
   taskExecutionEyebrow: "Task execution",
   taskExecutionTitle: "Execution management",
   taskSchedule: "Schedule",

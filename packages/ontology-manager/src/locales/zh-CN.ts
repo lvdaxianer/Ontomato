@@ -341,6 +341,7 @@ const ontologyZh: OntologyMessages = {
   codeFormat: "格式化",
   codeFormatDone: "代码已格式化",
   codeFormatFailed: "代码格式化失败",
+  codeExpand: "放大",
   taskExecutionEyebrow: "任务执行",
   taskExecutionTitle: "执行管理",
   taskSchedule: "调度",
