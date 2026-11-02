@@ -6,6 +6,23 @@ server {
 
   ${API_LOCATION}
 
+  # The entry documents contain the asset hash used by the running bundle. Do
+  # not let a browser keep an older index that points at a stale bundle after
+  # an image deployment; hashed assets remain cacheable through the fallback.
+  location = /index.html {
+    add_header Cache-Control "no-store, no-cache, must-revalidate, proxy-revalidate" always;
+    add_header Pragma "no-cache" always;
+    expires 0;
+    try_files $uri =404;
+  }
+
+  location = /config.js {
+    add_header Cache-Control "no-store, no-cache, must-revalidate, proxy-revalidate" always;
+    add_header Pragma "no-cache" always;
+    expires 0;
+    try_files $uri =404;
+  }
+
   location / {
     try_files $uri $uri/ /index.html;
   }
