@@ -29,6 +29,7 @@ import type { AssetTab } from "../workspace";
 import ActionCodeExplainer from "./codeExplainer/ActionCodeExplainer.vue";
 import BusinessMeaning from "./codeExplainer/BusinessMeaning.vue";
 import { normalizeBusinessMeaning, normalizeCodeSegments } from "./codeExplainer/codeSegments";
+import CodeEditor from "./CodeEditor.vue";
 import { useManagerClient, useOntologyText } from "../context";
 
 type AssetRecord = Record<string, any>;
@@ -42,7 +43,7 @@ const emit = defineEmits<{ back: []; saved: []; created: [] }>();
 
 const { ot } = useOntologyText();
 const { message, confirm } = useManagerFeedback();
-const { loadSmartAssets, requestSmartAsset } = useManagerClient();
+const { loadSmartAssets, requestSmartAsset, formatPythonCode } = useManagerClient();
 
 const loading = ref(false);
 const saving = ref(false);
@@ -370,6 +371,19 @@ async function viewTaskResult(result: AssetRecord) {
   }
 }
 
+// Formatting runs server-side (black) and only replaces the editor content on success, so a failed
+// format request never loses or rewrites the user's code.
+async function formatCode(code: string): Promise<string> {
+  try {
+    const formatted = await formatPythonCode(code);
+    message.success(ot("codeFormatDone"));
+    return formatted;
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : ot("codeFormatFailed"));
+    throw error;
+  }
+}
+
 function openMetricTest() {
   markdownView.value = "preview";
   testMarkdown.value = "";
@@ -684,7 +698,7 @@ onMounted(() => void loadDetail());
                 <el-input v-model="record.logic" type="textarea" :rows="3" />
               </el-form-item>
               <el-form-item :label="ot('explainerCode')">
-                <el-input v-model="record.code" type="textarea" :rows="14" class="code-input" />
+                <CodeEditor v-model="record.code" language="python" :formatter="formatCode" />
               </el-form-item>
             </template>
             <template v-else>
@@ -692,12 +706,7 @@ onMounted(() => void loadDetail());
                 <el-input v-model="functionRecord.logic" type="textarea" :rows="3" />
               </el-form-item>
               <el-form-item :label="ot('explainerCode')">
-                <el-input
-                  v-model="functionRecord.code"
-                  type="textarea"
-                  :rows="14"
-                  class="code-input"
-                />
+                <CodeEditor v-model="functionRecord.code" language="python" :formatter="formatCode" />
               </el-form-item>
             </template>
           </template>

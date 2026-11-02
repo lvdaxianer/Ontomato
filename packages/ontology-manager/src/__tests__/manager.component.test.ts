@@ -38,6 +38,8 @@ let graphLayout: { positions: Record<string, { x: number; y: number }> };
 let graphLayoutSaveFailures: number;
 /** Knowledge IDs whose delete returns a business failure. */
 let knowledgeDeleteFails: Set<string>;
+/** When true, /python/format answers like unparseable code. */
+let formatFails: boolean;
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -76,8 +78,13 @@ function respond(url: string, body?: Record<string, unknown>): Response {
   ] });
   if (path === "/metricView/queryById") return json({ success: true, data: {
     id: "metric-1", name: "Revenue metric", status: "PUBLISHED", origin: "USER",
-    function: { name: "Revenue", parameters: [], returnDef: { classNames: [] } },
+    function: { name: "Revenue", parameters: [], returnDef: { classNames: [] },
+      code: "def f( a,b ):\n  return a+b\n" },
   } });
+  if (path === "/python/format") {
+    if (formatFails) return json({ success: false, message: "error: cannot parse: 1:11" });
+    return json({ success: true, data: { code: "def f(a, b):\n    return a + b\n" } });
+  }
   if (path === "/metricView/test") return json({ success: true, data: {
     md: "# Revenue\n\n| Month | Total |\n| --- | ---: |\n| Jan | 42 |",
   } });
@@ -160,6 +167,7 @@ beforeEach(() => {
     k2: { knowledgeID: "k2", knowledgeTitle: "Legacy note", knowledgeText: "t2", status: 0 },
   };
   knowledgeDeleteFails = new Set();
+  formatFails = false;
   graphLayout = { positions: {} };
   graphLayoutSaveFailures = 0;
   vi.stubGlobal("fetch", (url: string, init: RequestInit) => {
@@ -555,6 +563,41 @@ describe("OntologyManager root component with real pages", () => {
     await settle();
     expect(root().querySelector(".metric-markdown-preview")).toBeNull();
     expect((root().querySelector(".el-dialog textarea") as HTMLTextAreaElement).value).toContain("# Revenue");
+  });
+
+  it("metric code field edits in a python code editor and formats through the data engine", async () => {
+    const { root } = mountHost({ ...base, view: "/assets/metrics" });
+    await settle();
+    (root().querySelector(".resource-table-row") as HTMLButtonElement).click();
+    await settle();
+
+    const editorContent = () => root().querySelector(".cm-content")?.textContent ?? "";
+    expect(root().querySelector(".code-editor-language")?.textContent).toBe("Python");
+    expect(editorContent()).toContain("def f( a,b ):");
+
+    clickButton("Format");
+    await settle();
+
+    const formatRequest = requests.find((request) => request.url.endsWith("/python/format"));
+    expect(formatRequest?.method).toBe("POST");
+    expect(formatRequest?.body).toEqual({ code: "def f( a,b ):\n  return a+b\n" });
+    expect(editorContent()).toContain("def f(a, b):");
+  });
+
+  it("a failed format keeps the editor code untouched and surfaces the engine message", async () => {
+    formatFails = true;
+    const { root } = mountHost({ ...base, view: "/assets/metrics" });
+    await settle();
+    (root().querySelector(".resource-table-row") as HTMLButtonElement).click();
+    await settle();
+
+    const editorContent = () => root().querySelector(".cm-content")?.textContent ?? "";
+    clickButton("Format");
+    await settle();
+
+    expect(requests.some((request) => request.url.endsWith("/python/format"))).toBe(true);
+    expect(editorContent()).toContain("def f( a,b ):");
+    expect(document.body.textContent).toContain("error: cannot parse: 1:11");
   });
 
   it("view locates data browsing; internal navigation goes back to the host through update:view, unknown paths return to the graph by the original rule", async () => {

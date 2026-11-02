@@ -313,6 +313,16 @@ export function createManagerClient(
     return post(`${smartAssetPaths[kind]}/${operation}`, body);
   }
 
+  /**
+   * Format Python code through the data engine's black-based formatter.
+   * Resolves with the formatted code; rejects with the engine's message when the code has syntax errors
+   * or the formatter is unavailable, so the caller can keep the editor content untouched.
+   */
+  async function formatPythonCode(code: string): Promise<string> {
+    const response = await post("/python/format", { code });
+    return String(response.data?.code ?? "");
+  }
+
   /** Raw metadata; data browsing and visual modeling read their own fields. */
   function getMetas() {
     return post("/admin/getMetas", {});
@@ -653,6 +663,7 @@ export function createManagerClient(
       disposed = true;
     },
     requestSmartAsset,
+    formatPythonCode,
     getMetas,
     loadOntology,
     listOntologyRevisions,
