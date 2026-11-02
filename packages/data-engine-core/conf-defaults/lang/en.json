@@ -382,5 +382,13 @@
   {
     "key": "AgentRole.knowledgeGovernance",
     "value": "Knowledge Governance Agent"
+  },
+  {
+    "key": "PythonFormat.unavailable",
+    "value": "The code formatter is not available in this deployment."
+  },
+  {
+    "key": "PythonFormat.failed",
+    "value": "Failed to format the code."
   }
 ]
