@@ -8,6 +8,6 @@
   formatting endpoint changes.
 - [x] T4: Update REST API documentation for metric-view passthrough responses
   and `/python/format`.
-- [ ] T5: Run focused and broader verification, review the diff, commit, merge
+- [x] T5: Run focused and broader verification, review the diff, commit, merge
   into `features/doris`, and deploy both changed Docker images to
   `10.100.31.37`.
