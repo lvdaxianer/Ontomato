@@ -296,6 +296,10 @@
     "value": "MetricView domain mismatch"
   },
   {
+    "key": "MetricView.domainRequired",
+    "value": "MetricView domain is required"
+  },
+  {
     "key": "MetricView.notPublished",
     "value": "MetricView not published"
   },
