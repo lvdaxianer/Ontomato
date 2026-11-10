@@ -50,7 +50,7 @@
 
 ## 3. Integrate the enterprise overlay
 
-- [ ] 3.1 Adapt enterprise Workbench, Manager, Data Engine, and deployment assembly to consume the migrated public behavior while preserving enterprise identity, permissions, license enforcement, PostgreSQL configuration, and Doris support; verify no public anonymous assembly replaces enterprise boundaries.
+- [x] 3.1 Adapt enterprise Workbench, Manager, Data Engine, and deployment assembly to consume the migrated public behavior while preserving enterprise identity, permissions, license enforcement, PostgreSQL configuration, and Doris support; verify no public anonymous assembly replaces enterprise boundaries.
 
   - Boundary: enterprise `apps/*`, `packages/*-enterprise`, `deploy`, and build scripts.
   - Owner: `enterprise-overlay-integrator`.
