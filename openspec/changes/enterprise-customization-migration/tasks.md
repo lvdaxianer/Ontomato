@@ -15,7 +15,7 @@
 
 ## 2. Port public customization behavior
 
-- [ ] 2.1 Port Doris adapter behavior and its tests into the matched public/Data Engine source used by the enterprise build; verify adapter identity, read-only FE verification, PostgreSQL product runtime compatibility, and no M3 runtime dependency.
+- [x] 2.1 Port Doris adapter behavior and its tests into the matched public/Data Engine source used by the enterprise build; verify adapter identity, read-only FE verification, PostgreSQL product runtime compatibility, and no M3 runtime dependency.
 
   - Boundary: Doris adapter, adapter contracts, Data Engine module lists, and focused Java tests.
   - Owner: `data-engine-doris-migrator`.
