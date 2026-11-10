@@ -26,7 +26,7 @@
   - Broader verification: enterprise Data Engine compile/package with `LICENSE_MODE=real` and PostgreSQL/Doris adapter discovery.
   - Handoff evidence: diff, focused test output, adapter list, and confirmation that M3 is not a health prerequisite.
 
-- [ ] 2.2 Port MetricView response and Python formatting behavior into the matched public contracts/server/UI source; verify the single-result, multi-result, empty-result, completeness metadata, and formatting contracts.
+- [x] 2.2 Port MetricView response and Python formatting behavior into the matched public contracts/server/UI source; verify the single-result, multi-result, empty-result, completeness metadata, and formatting contracts.
 
   - Boundary: MetricView contracts/routes/consumers and Python-format endpoint behavior.
   - Owner: `workbench-contracts-migrator`.
