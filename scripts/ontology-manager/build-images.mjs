@@ -7,6 +7,7 @@ import { join } from "node:path";
 import {
   buildStamp,
   docker,
+  dockerProxyBuildArgs,
   imageLabels,
   imageCacheArgs,
   inspectImage,
@@ -76,6 +77,7 @@ export async function buildManagerImage(app, args) {
     `linux/${arch}`,
     "--load",
     ...imageCacheArgs(),
+    ...dockerProxyBuildArgs(),
     "--build-arg",
     `WORKSPACE=${record.workspaceId}`,
     "--build-arg",

@@ -12,6 +12,9 @@ ARG DEBIAN_SECURITY_MIRROR=https://deb.debian.org/debian-security
 # Source code changes do not invalidate this layer.
 FROM ${NODE_RUNTIME_IMAGE} AS dependencies-installer
 
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG NO_PROXY
 ARG PNPM_VERSION=9.15.9
 RUN npm install -g pnpm@${PNPM_VERSION}
 ENV npm_config_store_dir=/pnpm/store
@@ -27,6 +30,9 @@ RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store node /tmp/tools/workbenc
 # Runs on build host platform.
 FROM --platform=$BUILDPLATFORM ${NODE_BUILDER_IMAGE} AS app-builder
 
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG NO_PROXY
 ARG WORKSPACE=ontomato
 ARG APPLICATION
 ARG TARGETPLATFORM
@@ -58,6 +64,9 @@ EOF
 # Stage 3: Python 3.10 runtime base with Chromium, system libraries and Python packages.
 FROM ${PYTHON_RUNTIME_IMAGE} AS runtime-base
 
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG NO_PROXY
 ARG PIP_INDEX_URL
 ARG DEBIAN_MIRROR
 ARG DEBIAN_SECURITY_MIRROR
