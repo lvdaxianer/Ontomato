@@ -9,8 +9,8 @@
 ## 2. Verification and Release
 
 - [x] 2.1 Run the focused data-engine tests and the applicable broader module checks, and verify no unrelated test regression is introduced.
-- [ ] 2.2 Review the diff and OpenSpec coverage, commit the fix with required traceability, and push the integration branch.
-- [ ] 2.3 Back up the active enterprise DataRAG deployment, build and deploy the corrected image, and verify health, Doris data browsing, and metric-view save behavior on `10.100.31.37`.
+- [x] 2.2 Review the diff and OpenSpec coverage, commit the fix with required traceability, and push the integration branch.
+- [x] 2.3 Back up the active enterprise DataRAG deployment, build and deploy the corrected image, and verify health, Doris data browsing, and metric-view save behavior on `10.100.31.37`.
 
 ## Workflow follow-up
 
