@@ -37,7 +37,7 @@
   - Broader verification: public/enterprise typecheck and API documentation coverage for affected public routes.
   - Handoff evidence: behavior tests, route-to-module mapping, and compatibility notes for enterprise consumers.
 
-- [ ] 2.3 Port ontology version management, relation join fields, code editor, editor cache, and localization behavior into the matched public Manager/UI source; verify Doris SQL relation fields, legacy metadata loading, Chinese/English behavior, and editor workflows.
+- [x] 2.3 Port ontology version management, relation join fields, code editor, editor cache, and localization behavior into the matched public Manager/UI source; verify Doris SQL relation fields, legacy metadata loading, Chinese/English behavior, and editor workflows.
 
   - Boundary: public Ontology Manager package, public Manager app shell inputs, and related Workbench UI consumers.
   - Owner: `ontology-manager-migrator`.
