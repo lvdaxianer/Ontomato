@@ -228,6 +228,10 @@ public class MetricViewServiceImpl implements MetricViewService {
 
 	@Override
 	public MetricView save(MetricView metricView, String lang) throws Exception {
+		String domainId = metricView.getDomainId();
+		if (domainId == null || domainId.isBlank()) {
+			throw new IllegalArgumentException(langService.get(lang, "MetricView.domainRequired"));
+		}
 		if (metricView.getId() != null) {
 			Object[] exist = metricViewDao.queryById(metricView.getId());
 			if (exist == null) {
@@ -247,6 +251,9 @@ public class MetricViewServiceImpl implements MetricViewService {
 			if (function.getId() != null) {
 				Function existFunction = functionDao.queryById(function.getId());
 				if (existFunction != null) {
+					if (existFunction.getDomainId() != null && !domainId.equals(existFunction.getDomainId())) {
+						throw new Exception(langService.get(lang, "Function.domainMismatch"));
+					}
 					if (!Function.OPERATION_READ.equals(existFunction.getOperation())) {
 						throw new Exception(langService.get(lang, "Function.notRead"));
 					}
@@ -258,6 +265,7 @@ public class MetricViewServiceImpl implements MetricViewService {
 					throw new Exception(langService.get(lang, "Function.notRead"));
 				}
 			}
+			function.setDomainId(domainId);
 			function = functionDao.save(function);
 			metricView.setFunction(function);
 		} else {

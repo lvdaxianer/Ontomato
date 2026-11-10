@@ -1,0 +1,4 @@
+schema: spec-driven
+created: 2026-11-10
+goal: Prevent metric-view save failures when the nested function does not carry
+  domainId.
