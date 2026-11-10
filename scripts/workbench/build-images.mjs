@@ -6,6 +6,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   buildStamp,
   docker,
+  dockerProxyBuildArgs,
   imageLabels,
   imageCacheArgs,
   inspectImage,
@@ -107,6 +108,7 @@ export async function buildWorkbenchImage(app, args) {
   docker([
     ...baseBuild(arch),
     ...imageCacheArgs(),
+    ...dockerProxyBuildArgs(),
     ...imageBuildArgs(BUILD_ARG_NAMES),
     "--load",
     "--build-arg",

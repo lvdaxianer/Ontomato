@@ -172,7 +172,7 @@ function fakeDocker(t, dir, env = {}) {
   chmodSync(join(bin, "docker"), 0o755);
   const saved = {};
   const set = { PATH: `${bin}${delimiter}${process.env.PATH}`, FAKE_STATE: state, ...env };
-  for (const key of ["PATH", "FAKE_STATE", "FAKE_MODE", "DOCKER_API_VERSION"]) {
+  for (const key of ["PATH", "FAKE_STATE", "FAKE_MODE", "DOCKER_API_VERSION", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"]) {
     saved[key] = process.env[key];
     if (set[key] === undefined) delete process.env[key];
     else process.env[key] = set[key];
@@ -262,8 +262,8 @@ test("the public entry builds ontomato-ontology-manager from its two owners", (t
   const tag = out.match(/^\[build\] manager (\S+)$/m)[1];
   assert.match(tag, new RegExp(`^ontomato-ontology-manager:${VERSION}-\\d{8}-\\d{6}-g${head.slice(0, 12)}-arm64$`));
   const calls = docker.calls();
-  assert.deepEqual(calls.map((argv) => argv[0]), ["buildx", "version", "image"]);
-  const build = calls[0];
+  assert.deepEqual(calls.filter((argv) => argv[0] !== "info").map((argv) => argv[0]), ["buildx", "version", "image"]);
+  const build = calls.find((argv) => argv[0] === "buildx");
   assert.deepEqual(build.slice(0, 5), ["buildx", "build", "--provenance=false", "--platform", "linux/arm64"]);
   assert.equal(build.includes("--load"), true);
   assert.equal(build.includes("--push"), false);
@@ -315,6 +315,22 @@ test("the public entry builds ontomato-ontology-manager from its two owners", (t
   assert.equal(existsSync(join(publicRoot, "apps/ontology-manager/runtime-lock.json")), false);
 });
 
+test("forwards configured Docker proxy build arguments", async (t) => {
+  const repos = fixture(t);
+  const docker = fakeDocker(t, repos.dir, {
+    HTTP_PROXY: "http://proxy.invalid:7897",
+    HTTPS_PROXY: "http://proxy.invalid:7897",
+    NO_PROXY: "localhost,127.0.0.1",
+  });
+  await buildManagerImage(enterpriseApp(repos), ["--arch", "amd64"]);
+  const build = docker.calls().find((argv) => argv[0] === "buildx");
+  for (const value of [
+    "HTTP_PROXY=http://proxy.invalid:7897",
+    "HTTPS_PROXY=http://proxy.invalid:7897",
+    "NO_PROXY=localhost,127.0.0.1",
+  ]) assert.equal(buildArg(build, value.split("=")[0]).includes(value.slice(value.indexOf("=") + 1)), true, value);
+});
+
 test("an enterprise build takes its own app plus the public owners and stamps the private revision", async (t) => {
   const repos = fixture(t);
   const { dir, publicRoot, privateRoot } = repos;
@@ -325,7 +341,7 @@ test("an enterprise build takes its own app plus the public owners and stamps th
   await buildManagerImage(enterpriseApp(repos), ["--arch", "amd64"]);
   const enterpriseHead = git(privateRoot, "rev-parse", "HEAD");
 
-  const build = docker.calls()[0];
+  const build = docker.calls().find((argv) => argv[0] === "buildx");
   assert.deepEqual(buildArg(build, "WORKSPACE"), ["enterprise"]);
   assert.deepEqual(buildArg(build, "APPLICATION"), ["@enterprise/ontology-manager-app"]);
   const listing = docker.context();

@@ -260,6 +260,33 @@ test("buildWorkbenchImage builds the final image and tags deploy alias for publi
   }
 });
 
+test("forwards configured Docker proxy build arguments", async (t) => {
+  const root = repo(t, "@ontomato/workbench");
+  const docker = fakeDocker(t, root);
+  const saved = Object.fromEntries(["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"].map((key) => [key, process.env[key]]));
+  Object.assign(process.env, {
+    HTTP_PROXY: "http://proxy.invalid:7897",
+    HTTPS_PROXY: "http://proxy.invalid:7897",
+    NO_PROXY: "localhost,127.0.0.1",
+  });
+  try {
+    await withDocker({ ...docker, mode: "ok" }, async () => {
+      await buildWorkbenchImage(descriptor(root), ["--arch", "amd64"]);
+    });
+  } finally {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+  const build = calls(docker.state).find((argv) => argv.includes("buildx"));
+  for (const value of [
+    "HTTP_PROXY=http://proxy.invalid:7897",
+    "HTTPS_PROXY=http://proxy.invalid:7897",
+    "NO_PROXY=localhost,127.0.0.1",
+  ]) assert.ok(build.includes(value), value);
+});
+
 test("an early Docker failure rejects without writing output", async (t) => {
   const root = repo(t, "@ontomato/workbench");
   const docker = fakeDocker(t, root);
