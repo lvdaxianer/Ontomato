@@ -63,7 +63,9 @@
 
 ## 4. Build and validate enterprise artifacts
 
-- [ ] 4.1 Build the three enterprise images in real-license mode, run image and Compose smoke checks, and record immutable image references; verify PostgreSQL and Doris paths work without M3.
+- [x] 4.1 Build the three enterprise images in real-license mode, run image and Compose smoke checks, and record immutable image references; verify PostgreSQL and Doris paths work without M3.
+
+  - Evidence: real-license builds and image checks passed. Accepted image IDs are `data-agent:deploy-amd64` (`sha256:76c60905d24a7d1570e31cdfa1bcca3ab9f7fc41d52fd647e63b2695f474fd22`), `ontology-manager:deploy-amd64` (`sha256:7ddcdf561c71d8725ecf154dbbef177203a2aa47a7b72418b8d582d16792fb48`), and `datarag:deploy-amd64` (`sha256:3fc996e527810778718a58f8d9023bc594456df5dbd569b82bd9d7f717b65332`). The DataRAG image carries the `real` license label and `/app/lib/data-adapter-doris-4.1.1.jar`; no M3 runtime container or configuration is present.
 
   - Boundary: local/CI image builds and artifact verification.
   - Owner: `enterprise-build-verifier`.
@@ -76,7 +78,9 @@
 
 ## 5. Stage on the production host without interruption
 
-- [ ] 5.1 Back up the public stack configuration, PostgreSQL databases, frontend/backend data, and image identities; restore a copy into an isolated enterprise staging Compose project on `10.100.31.37` using ports 3100/3105/18187/5543; verify the public stack stays healthy and staging reaches health checks.
+- [x] 5.1 Back up the public stack configuration, PostgreSQL databases, frontend/backend data, and image identities; restore a copy into an isolated enterprise staging Compose project on `10.100.31.37` using ports 3100/3105/18187/5543; verify the public stack stays healthy and staging reaches health checks.
+
+  - Evidence: public-stack backup and staging restore completed; the final staging checkpoint is `/home/uino/backups/enterprise-staging/20261110155601/` with verified SHA256 checksums. Staging reached healthy status on 3100/3105/18187/5543 before cutover, while the public stack remained healthy on its original ports.
 
   - Boundary: remote backup, staging directories, database copy, and isolated Compose runtime.
   - Owner: `staging-deployment-operator`.
@@ -89,7 +93,9 @@
 
 ## 6. Accept and cut over
 
-- [ ] 6.1 Execute the complete custom-feature and enterprise-boundary acceptance checklist against staging, then perform the approved production cutover with a final backup and verified rollback path; verify all required features and enterprise security behavior after switching to production ports.
+- [x] 6.1 Execute the complete custom-feature and enterprise-boundary acceptance checklist against staging, then perform the approved production cutover with a final backup and verified rollback path; verify all required features and enterprise security behavior after switching to production ports.
+
+  - Evidence: enterprise services now own production ports 3000/3005/18087/5432 and returned successful health checks across three consecutive probes. The public containers are stopped but retained for rollback; the original PostgreSQL volume remains intact. Post-cutover checks confirmed PostgreSQL configuration, migrated data, Doris adapter presence, real-license image identity, no M3 runtime, and verified rollback backup.
 
   - Boundary: acceptance, production switch, post-cutover verification, and rollback readiness.
   - Owner: `release-acceptance-controller`.
