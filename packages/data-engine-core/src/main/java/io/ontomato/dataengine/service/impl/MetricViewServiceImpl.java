@@ -628,6 +628,9 @@ public class MetricViewServiceImpl implements MetricViewService {
 	@Override
 	public Object[] execute(String id, JSONObject param, String lang, User user, UserDataPermission permission, int timeoutMinutes) throws Exception {
 		MetricView metricView = queryById(id);
+		if (!MetricViewDomainGuard.canAccess(metricView, user)) {
+			metricView = null;
+		}
 		return testExecute(metricView, param, lang, user, permission, timeoutMinutes);
 	}
 	
