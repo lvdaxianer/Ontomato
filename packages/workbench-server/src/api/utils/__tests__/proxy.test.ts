@@ -2,7 +2,7 @@ import express from "express";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
-import { proxyResponse, proxyUpstream } from "../proxy";
+import { buildUpstreamHeaders, proxyResponse, proxyUpstream } from "../proxy";
 
 let servers: http.Server[] = [];
 
@@ -103,6 +103,15 @@ describe("proxyResponse", () => {
 });
 
 describe("proxyUpstream", () => {
+  it("forwards the trusted service token to the data engine", () => {
+    const req = {
+      header: (name: string) => (name.toLowerCase() === "x-trusted-token" ? "trusted-token" : undefined),
+      query: {},
+    } as unknown as express.Request;
+
+    expect(buildUpstreamHeaders(req)["X-Trusted-Token"]).toBe("trusted-token");
+  });
+
   it("forwards a multipart upload with its boundary unchanged", async () => {
     let received: { contentType?: string; body: string } | null = null;
     const upstream = express();

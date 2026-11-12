@@ -48,6 +48,7 @@ export async function proxyResponse(upstreamRes: globalThis.Response, res: Respo
 export function buildUpstreamHeaders(req: Request): Record<string, string> {
   const tk = getTokenFromRequest(req);
   const apiKey = getApiKeyFromRequest(req);
+  const trustedToken = String(req.header("x-trusted-token") || "").trim();
   const locale = getLocaleFromRequest(req);
   const xClientId = getClientIdFromRequest(req);
 
@@ -56,6 +57,7 @@ export function buildUpstreamHeaders(req: Request): Record<string, string> {
     "X-Requested-With": "XMLHttpRequest",
   };
   if (apiKey) headers["x-api-key"] = apiKey;
+  if (trustedToken) headers["X-Trusted-Token"] = trustedToken;
   if (tk) headers.tk = tk;
   if (xClientId) headers["x-client-id"] = xClientId;
   if (locale) headers["Accept-Language"] = locale;
