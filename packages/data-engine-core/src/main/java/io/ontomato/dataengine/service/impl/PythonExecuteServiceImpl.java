@@ -23,6 +23,8 @@ import io.ontomato.dataengine.service.BackendSessionEntrance;
 import io.ontomato.dataengine.service.LangService;
 import io.ontomato.dataengine.service.PythonExecuteService;
 import io.ontomato.dataengine.service.SessionCancelledException;
+import io.ontomato.dataengine.service.runtime.PythonRuntimeContext;
+import io.ontomato.dataengine.service.runtime.RuntimeVariableResolver;
 
 import lombok.extern.slf4j.Slf4j;
 
@@ -42,13 +44,28 @@ public class PythonExecuteServiceImpl implements PythonExecuteService {
     @Value("${server.port}")
     private int serverPort;
 
+    /** 企业版本提供解析器；公共版本保持空值以兼容没有运行时变量的既有代码。 */
+    @Autowired(required = false)
+    private RuntimeVariableResolver runtimeVariableResolver;
+
     @Override
     public PythonExecuteResult runPythonCode(String sessionId, String code, int timeoutMinute, String lang, String... args) throws Exception {
         Files.createDirectories(pythonPath.toPath());
-        File file = new File(pythonPath, sessionId + ".py");
-        Files.writeString(file.toPath(), code);
-        // Saved programs, cards and dashboards continue to use the original service working directory.
-        return executeFile(sessionId, file, null, timeoutMinute, lang, args);
+        String userId = args != null && args.length > 0 ? args[0] : null;
+        String domainId = args != null && args.length > 1 ? args[1] : null;
+        String resolvedCode = runtimeVariableResolver == null
+                ? code
+                : runtimeVariableResolver.resolve(code, new PythonRuntimeContext(sessionId, userId, domainId));
+        Path path = Files.createTempFile(pythonPath.toPath(), "metric-view-", ".py");
+        File file = path.toFile();
+        try {
+            Files.writeString(path, resolvedCode);
+            // 持久化的指标视图代码只保留占位符，解析值只存在于本次执行的临时文件。
+            return executeFile(sessionId, file, null, timeoutMinute, lang, args);
+        } finally {
+            try { Files.deleteIfExists(path); }
+            catch (Exception error) { log.warn("[{}] Failed to clean up the Python program temporary file", sessionId, error); }
+        }
     }
 
     @Override
@@ -75,7 +92,7 @@ public class PythonExecuteServiceImpl implements PythonExecuteService {
         Path queryStatus = null;
         try {
             if (Thread.currentThread().isInterrupted()) throw new InterruptedException("Python execution has been cancelled");
-            log.info("[{}] pythonCode:\n{}", sessionId, Files.readString(file.toPath()));
+            log.info("[{}] python program prepared ({} bytes)", sessionId, Files.size(file.toPath()));
             String executable = dataRagConfig.getPythonpath();
             if (executable == null || executable.isEmpty()) executable = "python";
             if (executable.contains(File.separator)) executable = Path.of(executable).toAbsolutePath().toString();
