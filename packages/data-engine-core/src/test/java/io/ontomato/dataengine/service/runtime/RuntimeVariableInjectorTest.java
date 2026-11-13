@@ -36,4 +36,12 @@ class RuntimeVariableInjectorTest {
 
         assertEquals("A = '$1\\backslash'\nB = '$1\\backslash'", result);
     }
+
+    @Test
+    void rejectsAnUnresolvedPlaceholderAfterReplacement() {
+        IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+                () -> RuntimeVariableInjector.inject("TOKEN = '__request_token'", Map.of()));
+
+        assertEquals("替换后仍存在未解析的运行时变量：__request_token", error.getMessage());
+    }
 }

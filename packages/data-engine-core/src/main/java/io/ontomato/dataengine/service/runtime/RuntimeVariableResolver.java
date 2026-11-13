@@ -4,6 +4,9 @@ package io.ontomato.dataengine.service.runtime;
  * 在 Python 程序执行前解析模型可见的变量占位符。
  *
  * <p>实现只能读取可信配置或请求上下文，不能持久化解析后的代码、在日志中输出凭据，或把缺失值静默转换为空字符串。</p>
+ *
+ * @author lvdaxianer@yeah.net
+ * @date 2026-11-14
  */
 @FunctionalInterface
 public interface RuntimeVariableResolver {

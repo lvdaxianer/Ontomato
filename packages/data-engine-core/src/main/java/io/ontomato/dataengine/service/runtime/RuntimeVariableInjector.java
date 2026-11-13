@@ -1,9 +1,19 @@
 package io.ontomato.dataengine.service.runtime;
 
 import java.util.Map;
+import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
-/** 供企业运行时解析器和测试使用的安全字面量占位符替换器。 */
+/**
+ * 供企业运行时解析器和测试使用的安全字面量占位符替换器。
+ *
+ * @author lvdaxianer@yeah.net
+ * @date 2026-11-14
+ */
 public final class RuntimeVariableInjector {
+
+    private static final Pattern PLACEHOLDER = Pattern.compile("__[A-Za-z0-9_-]{1,127}");
 
     private RuntimeVariableInjector() {}
 
@@ -16,9 +26,8 @@ public final class RuntimeVariableInjector {
      */
     public static String inject(String sourceCode, Map<String, String> values) {
         if (sourceCode == null) throw new IllegalArgumentException("Python 源码不能为空");
-        if (values == null || values.isEmpty()) return sourceCode;
         String result = sourceCode;
-        for (Map.Entry<String, String> entry : values.entrySet()) {
+        for (Map.Entry<String, String> entry : values == null ? Map.<String, String>of().entrySet() : values.entrySet()) {
             String placeholder = entry.getKey();
             String value = entry.getValue();
             if (placeholder == null || !placeholder.matches("__[A-Za-z0-9_-]{1,127}")) {
@@ -28,6 +37,13 @@ public final class RuntimeVariableInjector {
                 throw new IllegalArgumentException("运行时变量 " + placeholder + " 的值不能为空");
             }
             result = result.replace(placeholder, value);
+        }
+        Matcher matcher = PLACEHOLDER.matcher(result);
+        while (matcher.find()) {
+            String remaining = matcher.group();
+            if (!Set.of("__main__", "__name__", "__file__", "__builtins__").contains(remaining)) {
+                throw new IllegalArgumentException("替换后仍存在未解析的运行时变量：" + remaining);
+            }
         }
         return result;
     }

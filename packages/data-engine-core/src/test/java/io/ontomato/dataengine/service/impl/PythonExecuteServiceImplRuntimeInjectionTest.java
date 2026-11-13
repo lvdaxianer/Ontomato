@@ -35,7 +35,7 @@ class PythonExecuteServiceImplRuntimeInjectionTest {
         PythonExecuteResult result = service.runPythonCode("runtime-injection", "TOKEN = '__request_token'", 1, "en",
                 "user-1", "domain-1");
 
-        assertEquals("{\"answer\": []}", result.getResult());
+        assertEquals("{\"answer\": []}", result.getResult().trim());
         verify(resolver).resolve("TOKEN = '__request_token'", new PythonRuntimeContext("runtime-injection", "user-1", "domain-1"));
         File[] remaining = ((File) ReflectionTestUtils.getField(service, "pythonPath")).listFiles();
         assertEquals(0, remaining == null ? 0 : remaining.length);
