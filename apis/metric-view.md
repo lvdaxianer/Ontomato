@@ -266,3 +266,21 @@ Content-Type: application/json
 - Both endpoints are read/test operations; pagination, sorting, caching, and idempotency keys are not applicable to the controller contract.
 - Callers must branch on `success` and must treat `data` as the JSON value emitted by the function after optional `answer` extraction; it is not cardinality-normalized.
 - Authentication and exact host-level HTTP error mapping remain **待确认** because they are supplied outside this controller.
+
+## 5. Python 指标视图运行时注入约定
+
+Python 指标视图可以保存运行时占位符，而不把部署地址或请求 Token 写入持久化代码。
+公共执行器在保留既有 `userId`、`domainId`、`parameterFilePath` 参数顺序的前提下，
+将解析后的代码写入一次性临时文件执行；未配置运行时解析器时，旧代码路径保持兼容。
+
+| Item | Contract |
+| --- | --- |
+| Placeholder format | `__[A-Za-z0-9_-]{1,127}` |
+| Resolver extension | `RuntimeVariableResolver.resolve(sourceCode, PythonRuntimeContext)` |
+| Execution context | `sessionId`、`userId`、`domainId`；不向 Python 暴露凭据上下文对象 |
+| Value lifetime | 仅本次执行；解析后的源码不回写 MetricView 定义、日志或接口响应 |
+| Failure behavior | 未声明占位符、缺失必填值或替换后仍残留占位符时拒绝执行 |
+| Concrete value source | 由企业装配层从可信运行配置或当前请求上下文提供 |
+
+企业层可以通过全局变量目录接口向模型提供占位符的含义和使用条件，但目录只返回
+元数据，不返回真实 Token、密码或连接串。
