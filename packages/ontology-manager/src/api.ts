@@ -36,6 +36,11 @@ export interface ManagerRequestContext {
   readonly dataFallbacks: ManagerDataFallbacks;
 }
 
+export interface ManagerRequestOptions {
+  /** Request-scoped credential used only by metric test execution. */
+  readonly trustedToken?: string;
+}
+
 /** 401 means authentication expired and 402 a license failure; the host decides how to handle them. */
 export type ManagerAuthFailureStatus = 401 | 402;
 
@@ -269,7 +274,11 @@ export function createManagerClient(
   const stale = () =>
     new DOMException(ontologyText(context.messages, "staleResponseDropped"), "AbortError");
 
-  async function send(path: string, init: { method: "GET" | "POST"; body?: string }) {
+  async function send(
+    path: string,
+    init: { method: "GET" | "POST"; body?: string },
+    options?: ManagerRequestOptions
+  ) {
     if (disposed) throw stale();
     const credential = context.credential;
     if (!credential) throw new Error(ontologyText(context.messages, "credentialMissing"));
@@ -277,6 +286,7 @@ export function createManagerClient(
     const assertCurrent = () => {
       if (disposed || hostSource(context) !== source) throw stale();
     };
+    const trustedToken = options?.trustedToken?.trim();
 
     const response = await fetch(`${context.apiBase}/data-query${path}`, {
       ...init,
@@ -285,6 +295,7 @@ export function createManagerClient(
         "Accept-Language": context.locale,
         "X-Requested-With": "XMLHttpRequest",
         ...credentialHeaders(credential),
+        ...(trustedToken ? { "X-Trusted-Token": trustedToken } : {}),
       },
     });
     assertCurrent();
@@ -302,15 +313,19 @@ export function createManagerClient(
     return json;
   }
 
-  const post = (path: string, body: Record<string, unknown>) =>
-    send(path, { method: "POST", body: JSON.stringify(body) });
+  const post = (
+    path: string,
+    body: Record<string, unknown>,
+    options?: ManagerRequestOptions
+  ) => send(path, { method: "POST", body: JSON.stringify(body) }, options);
 
   function requestSmartAsset(
     kind: SmartAssetKind,
     operation: string,
-    body: Record<string, unknown>
+    body: Record<string, unknown>,
+    options?: ManagerRequestOptions
   ) {
-    return post(`${smartAssetPaths[kind]}/${operation}`, body);
+    return post(`${smartAssetPaths[kind]}/${operation}`, body, options);
   }
 
   /**
