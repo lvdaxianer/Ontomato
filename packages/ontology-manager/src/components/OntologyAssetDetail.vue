@@ -66,7 +66,6 @@ const markdown = new MarkdownIt({ html: false, linkify: true, breaks: true });
 const testMarkdownPreview = computed(() => markdown.render(testMarkdown.value));
 const testJson = ref("");
 const testResultUrl = ref("");
-const metricTrustedToken = ref("");
 const taskResultsVisible = ref(false);
 const taskResultLoading = ref(false);
 const taskResults = ref<AssetRecord[]>([]);
@@ -390,32 +389,19 @@ function openMetricTest() {
   testMarkdown.value = "";
   testJson.value = "";
   testResultUrl.value = "";
-  metricTrustedToken.value = "";
   testTab.value = "markdown";
   testVisible.value = true;
 }
 
 function closeMetricTest() {
   testVisible.value = false;
-  metricTrustedToken.value = "";
-}
-
-function metricTestRequestOptions() {
-  const trustedToken = metricTrustedToken.value.trim();
-  if (!trustedToken) {
-    message.warning(ot("metricTestTrustedTokenRequired"));
-    return null;
-  }
-  return { trustedToken };
 }
 
 async function testMetricView() {
   if (!record.value) return;
-  const requestOptions = metricTestRequestOptions();
-  if (!requestOptions) return;
   testing.value = true;
   try {
-    const response = await requestSmartAsset("metrics", "test", record.value, requestOptions);
+    const response = await requestSmartAsset("metrics", "test", record.value);
     testMarkdown.value = response?.data?.md || ot("metricTestNoResult");
     markdownView.value = "preview";
     testResultUrl.value = typeof response?.data?.url === "string" ? response.data.url : "";
@@ -423,7 +409,6 @@ async function testMetricView() {
   } catch (error) {
     message.error(error instanceof Error ? error.message : ot("metricTestFailed"));
   } finally {
-    metricTrustedToken.value = "";
     testing.value = false;
   }
 }
@@ -434,8 +419,6 @@ async function testExecuteMetricView() {
     message.warning(ot("metricJsonTestPublishedOnly"));
     return;
   }
-  const requestOptions = metricTestRequestOptions();
-  if (!requestOptions) return;
   testing.value = true;
   try {
     const param = Object.fromEntries(
@@ -444,15 +427,13 @@ async function testExecuteMetricView() {
     const response = await requestSmartAsset(
       "metrics",
       "testExecute",
-      { metricView: record.value, param },
-      requestOptions
+      { metricView: record.value, param }
     );
     testJson.value = JSON.stringify(response?.data ?? null, null, 2);
     testTab.value = "json";
   } catch (error) {
     message.error(error instanceof Error ? error.message : ot("metricJsonTestFailed"));
   } finally {
-    metricTrustedToken.value = "";
     testing.value = false;
   }
 }
@@ -820,21 +801,8 @@ onMounted(() => void loadDetail());
       :lock-scroll="false"
       :title="ot('metricTestTitle')"
       width="min(900px, 94cqw)"
-      @closed="metricTrustedToken = ''"
     >
       <el-alert :title="ot('metricTestHint')" type="info" :closable="false" />
-      <div class="metric-test-token">
-        <label for="metric-test-trusted-token">{{ ot("metricTestTrustedToken") }}</label>
-        <el-input
-          id="metric-test-trusted-token"
-          v-model="metricTrustedToken"
-          type="password"
-          show-password
-          autocomplete="off"
-          :placeholder="ot('metricTestTrustedTokenPlaceholder')"
-        />
-        <p>{{ ot("metricTestTrustedTokenHint") }}</p>
-      </div>
       <el-form v-if="metricParameters.length" label-position="top" class="test-parameters">
         <el-form-item
           v-for="parameter in metricParameters"
@@ -959,9 +927,6 @@ onMounted(() => void loadDetail());
 
 <style scoped>
 .markdown-view-toggle { margin-bottom: var(--spacing-md); }
-.metric-test-token { margin-top: var(--spacing-md); }
-.metric-test-token label { display: block; margin-bottom: var(--spacing-xs); color: var(--el-text-color-primary); font-weight: var(--font-medium); }
-.metric-test-token p { margin: var(--spacing-xs) 0 0; color: var(--el-text-color-secondary); font-size: var(--text-xs); }
 .metric-markdown-preview {
   min-height: 300px;
   max-height: 55vh;

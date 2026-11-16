@@ -5,6 +5,9 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
@@ -29,6 +32,8 @@ import com.sun.net.httpserver.HttpServer;
 import io.ontomato.dataengine.bean.PythonExecuteResult;
 import io.ontomato.dataengine.config.DataRagConfig;
 import io.ontomato.dataengine.util.DslToPythonCodeUtil;
+import io.ontomato.dataengine.service.runtime.PythonRuntimeContext;
+import io.ontomato.dataengine.service.runtime.RuntimeVariableResolver;
 
 /**
  * Runs real Python programs against a local stand-in for the engine's {@code /dsl/execute}: the
@@ -42,6 +47,8 @@ class PythonExecuteServiceImplQueryStatusTest {
 	private static HttpServer server;
 	private static HttpServer foreignServer;
 	private static PythonExecuteServiceImpl service;
+	private static volatile String lastTrustedToken;
+	private static volatile String lastSessionToken;
 	@TempDir
 	Path workspace;
 
@@ -62,6 +69,8 @@ class PythonExecuteServiceImplQueryStatusTest {
 	private static HttpServer standIn() throws IOException {
 		HttpServer standIn = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
 		HttpHandler handler = exchange -> {
+			lastTrustedToken = exchange.getRequestHeaders().getFirst("X-Trusted-Token");
+			lastSessionToken = exchange.getRequestHeaders().getFirst("tk");
 			JSONObject request = JSONObject.parseObject(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
 			String mode = request.getJSONObject("dsl").getString("mode");
 			JSONObject body = new JSONObject();
@@ -88,6 +97,34 @@ class PythonExecuteServiceImplQueryStatusTest {
 		standIn.createContext("/other/execute", handler);
 		standIn.start();
 		return standIn;
+	}
+
+	/**
+	 * 验证本地 DSL 请求使用当前会话 Token，并移除脚本中的旧可信 Token。
+	 *
+	 * @author lvdaxianer@yeah.net
+	 * @date 2026-11-16
+	 */
+	@Test
+	void currentSessionTokenReplacesTrustedTokenForLocalDslCalls() throws Exception {
+		RuntimeVariableResolver resolver = mock(RuntimeVariableResolver.class);
+		when(resolver.resolve(any(), any(PythonRuntimeContext.class)))
+				.thenAnswer(invocation -> invocation.getArgument(0));
+		when(resolver.resolveSessionToken(any(PythonRuntimeContext.class))).thenReturn("current-session-token");
+		ReflectionTestUtils.setField(service, "runtimeVariableResolver", resolver);
+		String code = """
+				import json
+				import requests
+				response = requests.post("http://127.0.0.1:%s/dsl/execute",
+				    headers={"X-Trusted-Token": "stale-external-token"},
+				    json={"dsl": {"mode": "complete"}}).json()
+				print(json.dumps({"answer": response["data"][0]["answer"]}))
+				""".formatted(port());
+		PythonExecuteResult result = service.runPythonCode("session-auth", code, 1, "en", "admin", "domain");
+
+		assertNull(result.getError(), result.getError());
+		assertEquals("current-session-token", lastSessionToken);
+		assertNull(lastTrustedToken);
 	}
 
 	@AfterAll

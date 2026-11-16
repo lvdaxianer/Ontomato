@@ -549,10 +549,6 @@ describe("OntologyManager root component with real pages", () => {
     await settle();
     clickButton("Test");
     await settle();
-    const tokenInput = root().querySelector<HTMLInputElement>('input[type="password"]')!;
-    tokenInput.value = "trusted-token";
-    tokenInput.dispatchEvent(new Event("input", { bubbles: true }));
-    await settle();
     clickButton("Test and generate Markdown");
     await settle();
 
@@ -569,7 +565,7 @@ describe("OntologyManager root component with real pages", () => {
     expect((root().querySelector(".el-dialog textarea") as HTMLTextAreaElement).value).toContain("# Revenue");
   });
 
-  it("requires a trusted token for metric tests and sends it only for the test request", async () => {
+  it("uses the current page session for metric tests without a manual token", async () => {
     const { root } = mountHost({ ...base, view: "/assets/metrics" });
     await settle();
     (root().querySelector(".resource-table-row") as HTMLButtonElement).click();
@@ -577,21 +573,13 @@ describe("OntologyManager root component with real pages", () => {
     clickButton("Test");
     await settle();
 
-    clickButton("Test and generate Markdown");
-    await settle();
-    expect(document.body.textContent).toContain("Enter a trusted token to test this metric view");
-    expect(requests.some((request) => request.url.endsWith("/metricView/test"))).toBe(false);
-
-    const tokenInput = root().querySelector<HTMLInputElement>('input[type="password"]')!;
-    tokenInput.value = "trusted-token";
-    tokenInput.dispatchEvent(new Event("input", { bubbles: true }));
-    await settle();
+    expect(root().querySelector('input[type="password"]')).toBeNull();
     clickButton("Test and generate Markdown");
     await settle();
 
     const testRequest = requests.find((request) => request.url.endsWith("/metricView/test"));
-    expect(testRequest?.headers["X-Trusted-Token"]).toBe("trusted-token");
-    expect(tokenInput.value).toBe("");
+    expect(testRequest).toBeDefined();
+    expect(testRequest?.headers["X-Trusted-Token"]).toBeUndefined();
   });
 
   it("metric code field edits in a python code editor and formats through the data engine", async () => {

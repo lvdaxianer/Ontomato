@@ -82,6 +82,7 @@ public class PythonExecuteServiceImpl implements PythonExecuteService {
     private static final String QUERY_RUNTIME_RESOURCE = "/python/query_runtime.py";
     private static final String QUERY_STATUS_ENV = "ONTOMATO_QUERY_STATUS_FILE";
     private static final String ENGINE_PORT_ENV = "ONTOMATO_ENGINE_PORT";
+    private static final String SESSION_TOKEN_ENV = "ONTOMATO_SESSION_TOKEN";
 
     private PythonExecuteResult executeFile(String sessionId, File file, File directory, int timeoutMinute, String lang, String... args) throws Exception {
         long start = System.currentTimeMillis();
@@ -111,6 +112,7 @@ public class PythonExecuteServiceImpl implements PythonExecuteService {
                     .redirectOutput(stdout.toFile()).redirectError(stderr.toFile());
             builder.environment().put(QUERY_STATUS_ENV, queryStatus.toString());
             builder.environment().put(ENGINE_PORT_ENV, String.valueOf(serverPort));
+            putSessionToken(builder, sessionId, args);
             process = builder.start();
             // Sliced waiting: on detecting cancellation, throw immediately and go through the existing process-tree kill logic in finally; timeout semantics are the same as before.
             long deadlineNanos = System.nanoTime() + TimeUnit.MINUTES.toNanos(timeoutMinute);
@@ -160,5 +162,43 @@ public class PythonExecuteServiceImpl implements PythonExecuteService {
                 if (interrupted) Thread.currentThread().interrupt();
             }
         }
+    }
+
+    /**
+     * 将当前会话 Token 作为一次性子进程环境变量传递，避免把凭据写入源码或日志。
+     *
+     * @param builder 当前 Python 子进程构造器
+     * @param sessionId 当前执行会话标识
+     * @param args 运行时上下文参数，前两个参数分别为用户和域
+     * @author lvdaxianer@yeah.net
+     * @date 2026-11-16
+     */
+    private void putSessionToken(ProcessBuilder builder, String sessionId, String... args) {
+        String token = resolveSessionToken(sessionId, args);
+        // 条件注释：只有解析到非空会话 Token 时才向子进程注入敏感环境变量。
+        if (!token.isBlank()) {
+            builder.environment().put(SESSION_TOKEN_ENV, token);
+        }
+    }
+
+    /**
+     * 从企业运行时解析器读取当前会话 Token；公共版没有解析器时保持兼容。
+     *
+     * @param sessionId 当前执行会话标识
+     * @param args 运行时上下文参数，前两个参数分别为用户和域
+     * @return 清理后的会话 Token
+     * @author lvdaxianer@yeah.net
+     * @date 2026-11-16
+     */
+    private String resolveSessionToken(String sessionId, String... args) {
+        // 条件注释：公共实现没有企业运行时解析器时返回空值，保持原有兼容行为。
+        if (runtimeVariableResolver == null) {
+            return "";
+        }
+        String userId = args != null && args.length > 0 ? args[0] : "";
+        String domainId = args != null && args.length > 1 ? args[1] : "";
+        String token = runtimeVariableResolver.resolveSessionToken(
+                new PythonRuntimeContext(sessionId, userId, domainId));
+        return token == null ? "" : token.trim();
     }
 }

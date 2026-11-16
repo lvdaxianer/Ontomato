@@ -19,4 +19,16 @@ public interface RuntimeVariableResolver {
      * @return 仅用于本次执行的解析后源码
      */
     String resolve(String sourceCode, PythonRuntimeContext context);
+
+    /**
+     * 解析当前登录会话的短期 Token，供 Python 子进程访问本地 DSL 接口。
+     *
+     * @param context 当前 Python 执行上下文
+     * @return 当前会话 Token；没有会话时返回空字符串
+     * @author lvdaxianer@yeah.net
+     * @date 2026-11-16
+     */
+    default String resolveSessionToken(PythonRuntimeContext context) {
+        return "";
+    }
 }

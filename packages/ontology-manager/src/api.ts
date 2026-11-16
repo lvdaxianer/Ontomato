@@ -36,11 +36,6 @@ export interface ManagerRequestContext {
   readonly dataFallbacks: ManagerDataFallbacks;
 }
 
-export interface ManagerRequestOptions {
-  /** Request-scoped credential used only by metric test execution. */
-  readonly trustedToken?: string;
-}
-
 /** 401 means authentication expired and 402 a license failure; the host decides how to handle them. */
 export type ManagerAuthFailureStatus = 401 | 402;
 
@@ -276,8 +271,7 @@ export function createManagerClient(
 
   async function send(
     path: string,
-    init: { method: "GET" | "POST"; body?: string },
-    options?: ManagerRequestOptions
+    init: { method: "GET" | "POST"; body?: string }
   ) {
     if (disposed) throw stale();
     const credential = context.credential;
@@ -286,8 +280,6 @@ export function createManagerClient(
     const assertCurrent = () => {
       if (disposed || hostSource(context) !== source) throw stale();
     };
-    const trustedToken = options?.trustedToken?.trim();
-
     const response = await fetch(`${context.apiBase}/data-query${path}`, {
       ...init,
       headers: {
@@ -295,7 +287,6 @@ export function createManagerClient(
         "Accept-Language": context.locale,
         "X-Requested-With": "XMLHttpRequest",
         ...credentialHeaders(credential),
-        ...(trustedToken ? { "X-Trusted-Token": trustedToken } : {}),
       },
     });
     assertCurrent();
@@ -315,17 +306,15 @@ export function createManagerClient(
 
   const post = (
     path: string,
-    body: Record<string, unknown>,
-    options?: ManagerRequestOptions
-  ) => send(path, { method: "POST", body: JSON.stringify(body) }, options);
+    body: Record<string, unknown>
+  ) => send(path, { method: "POST", body: JSON.stringify(body) });
 
   function requestSmartAsset(
     kind: SmartAssetKind,
     operation: string,
-    body: Record<string, unknown>,
-    options?: ManagerRequestOptions
+    body: Record<string, unknown>
   ) {
-    return post(`${smartAssetPaths[kind]}/${operation}`, body, options);
+    return post(`${smartAssetPaths[kind]}/${operation}`, body);
   }
 
   /**

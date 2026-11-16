@@ -100,17 +100,16 @@ describe("credentials and request headers", () => {
     expect(requests).toHaveLength(0);
   });
 
-  it("sends a request-scoped trusted token only for the metric test request", async () => {
+  it("does not attach a request-scoped trusted token to metric test requests", async () => {
     const { client } = setup({ type: "apiKey", apiKey: "k-1" });
 
     await client.requestSmartAsset(
       "metrics",
       "testExecute",
-      { metricView: { id: "metric-1" }, param: {} },
-      { trustedToken: " trusted-token " }
+      { metricView: { id: "metric-1" }, param: {} }
     );
 
-    expect(requests[0].headers["X-Trusted-Token"]).toBe("trusted-token");
+    expect(requests[0].headers).not.toHaveProperty("X-Trusted-Token");
     expect(requests[0].body).not.toHaveProperty("trustedToken");
 
     await client.requestSmartAsset("metrics", "testExecute", { metricView: {}, param: {} });
