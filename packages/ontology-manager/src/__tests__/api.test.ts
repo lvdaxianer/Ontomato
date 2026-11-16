@@ -100,6 +100,23 @@ describe("credentials and request headers", () => {
     expect(requests).toHaveLength(0);
   });
 
+  it("sends a request-scoped trusted token only for the metric test request", async () => {
+    const { client } = setup({ type: "apiKey", apiKey: "k-1" });
+
+    await client.requestSmartAsset(
+      "metrics",
+      "testExecute",
+      { metricView: { id: "metric-1" }, param: {} },
+      { trustedToken: " trusted-token " }
+    );
+
+    expect(requests[0].headers["X-Trusted-Token"]).toBe("trusted-token");
+    expect(requests[0].body).not.toHaveProperty("trustedToken");
+
+    await client.requestSmartAsset("metrics", "testExecute", { metricView: {}, param: {} });
+    expect(requests[1].headers).not.toHaveProperty("X-Trusted-Token");
+  });
+
   it("after replacing the credential and locale, later requests use the new values immediately", async () => {
     const { context, client } = setup({ type: "token", token: "t-1" });
     await client.loadOntology();
