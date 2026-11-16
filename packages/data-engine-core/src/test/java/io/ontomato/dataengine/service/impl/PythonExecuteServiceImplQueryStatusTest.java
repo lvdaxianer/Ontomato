@@ -65,7 +65,7 @@ class PythonExecuteServiceImplQueryStatusTest {
 		ReflectionTestUtils.setField(service, "serverPort", server.getAddress().getPort());
 	}
 
-	/** Serves the engine's answer shape on /dsl/execute and, as an unrelated endpoint, on /other/execute. */
+	/** Serves the engine's answer shape on the supported local DSL paths and on an unrelated endpoint. */
 	private static HttpServer standIn() throws IOException {
 		HttpServer standIn = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
 		HttpHandler handler = exchange -> {
@@ -94,6 +94,7 @@ class PythonExecuteServiceImplQueryStatusTest {
 			exchange.close();
 		};
 		standIn.createContext("/dsl/execute", handler);
+		standIn.createContext("/metricView/dsl/execute", handler);
 		standIn.createContext("/other/execute", handler);
 		standIn.start();
 		return standIn;
@@ -121,6 +122,38 @@ class PythonExecuteServiceImplQueryStatusTest {
 				print(json.dumps({"answer": response["data"][0]["answer"]}))
 				""".formatted(port());
 		PythonExecuteResult result = service.runPythonCode("session-auth", code, 1, "en", "admin", "domain");
+
+		assertNull(result.getError(), result.getError());
+		assertEquals("current-session-token", lastSessionToken);
+		assertNull(lastTrustedToken);
+	}
+
+	/**
+	 * 验证指标视图实际使用的 urllib 请求入口同样继承当前会话 Token。
+	 *
+	 * @author lvdaxianer@yeah.net
+	 * @date 2026-11-16
+	 */
+	@Test
+	void currentSessionTokenReplacesTrustedTokenForUrllibCalls() throws Exception {
+		RuntimeVariableResolver resolver = mock(RuntimeVariableResolver.class);
+		when(resolver.resolve(any(), any(PythonRuntimeContext.class)))
+				.thenAnswer(invocation -> invocation.getArgument(0));
+		when(resolver.resolveSessionToken(any(PythonRuntimeContext.class))).thenReturn("current-session-token");
+		ReflectionTestUtils.setField(service, "runtimeVariableResolver", resolver);
+		String code = """
+				import json
+				import urllib.request
+				url = "http://127.0.0.1:%s/metricView/dsl/execute"
+				request = urllib.request.Request(url,
+				    data=json.dumps({"dsl": {"mode": "complete"}}).encode("utf-8"),
+				    headers={"Content-Type": "application/json", "X-Trusted-Token": "stale-external-token"},
+				    method="POST")
+				with urllib.request.urlopen(request) as response:
+				    payload = json.load(response)
+				print(json.dumps({"answer": payload["data"][0]["answer"]}))
+				""".formatted(port());
+		PythonExecuteResult result = service.runPythonCode("session-auth-urllib", code, 1, "en", "admin", "domain");
 
 		assertNull(result.getError(), result.getError());
 		assertEquals("current-session-token", lastSessionToken);

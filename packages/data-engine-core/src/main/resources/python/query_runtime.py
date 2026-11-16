@@ -9,12 +9,13 @@ import json
 import os
 import runpy
 import sys
+import urllib.request
 from urllib.parse import urlsplit
 
 STATUS_FILE = os.environ.pop("ONTOMATO_QUERY_STATUS_FILE")
 ENGINE_PORT = int(os.environ.pop("ONTOMATO_ENGINE_PORT"))
 ENGINE_HOSTS = ("localhost", "127.0.0.1", "::1")
-DSL_EXECUTE_PATH = "/dsl/execute"
+LOCAL_DSL_PATHS = ("/dsl/execute", "/metricView/dsl/execute")
 STATUS_KEYS = ("truncated", "rowLimit", "truncationHint")
 SESSION_TOKEN = os.environ.pop("ONTOMATO_SESSION_TOKEN", "").strip()
 
@@ -38,7 +39,7 @@ def _is_engine_url(method, url_value):
         return False
     url = urlsplit(url_value)
     return (method.upper() == "POST" and url.hostname in ENGINE_HOSTS
-            and url.port == ENGINE_PORT and url.path == DSL_EXECUTE_PATH)
+            and url.port == ENGINE_PORT and url.path in LOCAL_DSL_PATHS)
 
 
 def _is_engine_query(request):
@@ -140,7 +141,48 @@ def _record_partial_queries():
     requests.sessions.Session.request = request_with_session
 
 
+def _install_urllib_session_adapter():
+    """
+    为 urllib 发起的本地 DSL 请求注入当前会话 Token。
+
+    Returns:
+        None；仅改写当前 Python 子进程内的 urllib 请求入口。
+
+    Author: lvdaxianer@yeah.net
+    Date: 2026-11-16
+    """
+    original_urlopen = urllib.request.urlopen
+
+    def urlopen_with_session(url, data=None, timeout=None,
+                             *args, **kwargs):
+        """
+        只为当前运行时的本地 DSL 请求替换认证头。
+
+        Args:
+            url: urllib URL 或 Request 对象。
+            data: 请求体。
+            timeout: urllib 超时时间。
+            args: 兼容 urllib 的额外位置参数。
+            kwargs: 兼容 urllib 的额外关键字参数。
+
+        Returns:
+            urllib 响应对象。
+        """
+        request = url if isinstance(url, urllib.request.Request) else urllib.request.Request(url, data=data)
+        if SESSION_TOKEN and _is_engine_url(request.get_method(), request.full_url):
+            for header_name in list(request.headers):
+                if header_name.lower() == "x-trusted-token":
+                    request.remove_header(header_name)
+            request.add_unredirected_header("tk", SESSION_TOKEN)
+        if timeout is None:
+            return original_urlopen(request, *args, **kwargs)
+        return original_urlopen(request, timeout=timeout, *args, **kwargs)
+
+    urllib.request.urlopen = urlopen_with_session
+
+
 _record_partial_queries()
+_install_urllib_session_adapter()
 program = os.path.abspath(sys.argv[1])
 sys.argv = sys.argv[1:]
 sys.path[0] = os.path.dirname(program)
