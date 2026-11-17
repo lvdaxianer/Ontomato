@@ -16,6 +16,7 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 
 import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONArray;
@@ -33,6 +34,7 @@ import io.ontomato.dataengine.service.LangService;
 import io.ontomato.dataengine.service.MetricViewService;
 import io.ontomato.dataengine.service.SessionCancelledException;
 import io.ontomato.dataengine.service.IdentityService;
+import io.ontomato.dataengine.service.impl.MetricViewExecutionException;
 import io.ontomato.dataengine.service.sys.bean.permission.UserDataPermission;
 import io.ontomato.dataengine.util.SseEmitterUtil;
 import io.ontomato.dataengine.util.SystemUtils;
@@ -238,9 +240,7 @@ public class MetricViewController {
 			ret.put("success", true);
 			ret.put("data", metricViewContent);
 		} catch (Exception e) {
-			log.error(e.getMessage(), e);
-			ret.put("success", false);
-			ret.put("message", e.getMessage());
+			putMetricViewFailure(ret, e);
 		}
 		return ret;
 	}
@@ -327,9 +327,7 @@ public class MetricViewController {
 			putMetricViewData(ret, o[0]);
 			((PythonExecuteResult)o[1]).markCompleteness(ret);
 		} catch (Exception e) {
-			log.error(e.getMessage(), e);
-			ret.put("success", false);
-			ret.put("message", e.getMessage());
+			putMetricViewFailure(ret, e);
 		}
 		return ret;
 	}
@@ -353,9 +351,7 @@ public class MetricViewController {
 			putMetricViewData(ret, o[0]);
 			((PythonExecuteResult)o[1]).markCompleteness(ret);
 		} catch (Exception e) {
-			log.error(e.getMessage(), e);
-			ret.put("success", false);
-			ret.put("message", e.getMessage());
+			putMetricViewFailure(ret, e);
 		}
 		return ret;
 	}
@@ -363,6 +359,33 @@ public class MetricViewController {
 	/** Places the function result in data without changing its JSON shape. */
 	private void putMetricViewData(JSONObject response, Object resultData) {
 		response.put("data", resultData);
+	}
+
+	/**
+	 * 把指标视图异常转换为页面可读且不泄露实现细节的响应。
+	 *
+	 * @param response 失败响应
+	 * @param exception 原始执行异常
+	 */
+	private void putMetricViewFailure(JSONObject response, Exception exception) {
+		if (exception instanceof MetricViewExecutionException failure) {
+			log.error("metric view execution failed traceId={} errorCode={}",
+					failure.getTraceId(), failure.getErrorCode(), exception);
+			response.put("success", false);
+			response.put("errorCode", failure.getErrorCode());
+			response.put("message", failure.getSafeMessage());
+			response.put("details", failure.getDetails());
+			response.put("traceId", failure.getTraceId());
+			return;
+		}
+		String traceId = UUID.randomUUID().toString();
+		log.error("metric view execution failed traceId={} errorCode=METRIC_VIEW_EXECUTION_FAILED",
+				traceId, exception);
+		response.put("success", false);
+		response.put("errorCode", "METRIC_VIEW_EXECUTION_FAILED");
+		response.put("message", "指标视图测试失败，请联系管理员");
+		response.put("details", new JSONObject());
+		response.put("traceId", traceId);
 	}
 
 	private String failureMessage(Exception e) {
