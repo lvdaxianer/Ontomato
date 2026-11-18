@@ -14,6 +14,13 @@ import java.util.regex.Pattern;
 public final class RuntimeVariableInjector {
 
     private static final Pattern PLACEHOLDER = Pattern.compile("__[A-Za-z0-9_-]{1,127}");
+    /** Python 内置名称和指标视图协议标记允许在注入后原样保留。 */
+    private static final Set<String> RESERVED_LITERALS = Set.of(
+            "__main__",
+            "__name__",
+            "__file__",
+            "__builtins__",
+            "__METRIC_VIEW_ERROR__");
 
     private RuntimeVariableInjector() {}
 
@@ -41,7 +48,7 @@ public final class RuntimeVariableInjector {
         Matcher matcher = PLACEHOLDER.matcher(result);
         while (matcher.find()) {
             String remaining = matcher.group();
-            if (!Set.of("__main__", "__name__", "__file__", "__builtins__").contains(remaining)) {
+            if (!RESERVED_LITERALS.contains(remaining)) {
                 throw new IllegalArgumentException("替换后仍存在未解析的运行时变量：" + remaining);
             }
         }
