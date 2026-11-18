@@ -2,6 +2,7 @@ package io.ontomato.dataengine.service.impl;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
@@ -61,6 +62,29 @@ class ABCProgramServiceImplRawResultTest {
 		Object result = execute("{\"answer\":[]}");
 
 		assertEquals(new JSONArray(), result);
+	}
+
+	@Test
+	void convertsStructuredDslFailureWithoutReturningPythonTraceback() throws Exception {
+		PythonExecuteResult execution = new PythonExecuteResult();
+		execution.setError("Traceback (most recent call last):\n__METRIC_VIEW_ERROR__"
+				+ "{\"errorCode\":\"PARAMETER_FIELD_TYPE_MISMATCH\","
+				+ "\"message\":\"指标参数类型不匹配\",\"traceId\":\"trace-1\","
+				+ "\"details\":{\"parameter\":\"startTime\",\"expectedType\":\"datetime\"}}\n");
+		when(pythonExecuteService.runPythonCode(anyString(), anyString(), anyInt(), anyString(), anyString(),
+				anyString(), anyString())).thenReturn(execution);
+
+		Function function = new Function();
+		function.setCode("print('result')");
+		function.setParameters(List.of());
+		Exception failure = assertThrows(Exception.class,
+				() -> service.executeRawFunction("session", function, "user", "zh-CN", 1, "domain"));
+
+		MetricViewExecutionException metricFailure = assertInstanceOf(MetricViewExecutionException.class, failure);
+		assertEquals("PARAMETER_FIELD_TYPE_MISMATCH", metricFailure.getErrorCode());
+		assertEquals("trace-1", metricFailure.getTraceId());
+		assertEquals("datetime", metricFailure.getDetails().get("expectedType"));
+		org.junit.jupiter.api.Assertions.assertFalse(metricFailure.getMessage().contains("Traceback"));
 	}
 
 	private Object execute(String output) throws Exception {

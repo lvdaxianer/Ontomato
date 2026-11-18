@@ -8,7 +8,7 @@
 | Document path | `apis/metric-view.md` |
 | Module responsibility | Execute published metric views and return their calculated result payloads to the Ontology Manager and API clients. |
 | Base URL / version | `<DATA_ENGINE_BASE_URL>/api/data-query`; no explicit version prefix is defined by the controller. |
-| Common authentication and conventions | The controller obtains the current user and data permission from the host authentication context. The exact authentication header/cookie is provided by the host and is **待确认** from this public controller alone. Requests require the language header described below. Successful responses use `success: true`; handled failures use `success: false` and `message`. |
+| Common authentication and conventions | The controller obtains the current user and data permission from the host authentication context. The exact authentication header/cookie is provided by the host and is **待确认** from this public controller alone. Requests require the language header described below. Successful responses use `success: true`; handled failures use `success: false`, a stable `errorCode`, a safe `message`, and a `traceId`. |
 
 ### 1.1 Controller / route coverage
 
@@ -146,14 +146,29 @@ Handled controller failures keep HTTP response handling in the controller and us
 ```json
 {
   "success": false,
-  "message": "metric view execution failed"
+  "errorCode": "PARAMETER_FIELD_TYPE_MISMATCH",
+  "message": "指标参数与字段类型不匹配",
+  "details": {
+    "parameter": "startTime",
+    "field": "stat_time",
+    "databaseType": "TIMESTAMP",
+    "dslLogicalType": "datetime",
+    "metricViewType": "TYPE_TIME",
+    "actualType": "string",
+    "expectedType": "datetime",
+    "suggestion": "将参数类型改为 TYPE_TIME，并使用 YYYY-MM-DD HH:mm:ss。"
+  },
+  "traceId": "trace-1"
 }
 ```
 
 | Field path | Type | Required | Example | Description |
 | --- | --- | --- | --- | --- |
 | `success` | boolean | Required | `false` | Indicates that controller execution failed. |
-| `message` | string | Required when failure is handled | `metric view execution failed` | Error message returned by the caught exception. Exact localization and error-code mapping are **待确认**. |
+| `errorCode` | string | Required | `PARAMETER_FIELD_TYPE_MISMATCH` | Stable machine-readable failure code. |
+| `message` | string | Required | `指标参数与字段类型不匹配` | Safe user-facing summary; never a raw exception or traceback. |
+| `details` | object | Optional | `{ "parameter": "startTime" }` | Bounded field/type diagnostics. It never contains SQL, credentials, full request/response bodies, or stack traces. |
+| `traceId` | string | Required | `trace-1` | Correlates the safe response with the complete backend log entry. |
 
 ### 2.4 Complete example
 

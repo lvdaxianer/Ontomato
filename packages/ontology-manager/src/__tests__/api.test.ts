@@ -62,6 +62,41 @@ function deferred() {
 }
 
 describe("credentials and request headers", () => {
+  it("preserves safe metric diagnostics without exposing a raw exception", async () => {
+    respond = async () => json({
+      success: false,
+      errorCode: "PARAMETER_FIELD_TYPE_MISMATCH",
+      message: "指标参数类型不匹配",
+      details: { parameter: "startTime", expectedType: "datetime", suggestion: "改为 TYPE_TIME" },
+      traceId: "trace-1",
+    });
+    const { client } = setup({ type: "apiKey", apiKey: "k-1" });
+
+    await expect(client.requestSmartAsset("metrics", "testExecute", { metricView: {}, param: {} }))
+      .rejects.toMatchObject({
+        errorCode: "PARAMETER_FIELD_TYPE_MISMATCH",
+        code: "PARAMETER_FIELD_TYPE_MISMATCH",
+        traceId: "trace-1",
+        details: { parameter: "startTime", expectedType: "datetime" },
+      });
+  });
+
+  it("replaces a raw metric traceback with the localized request failure", async () => {
+    respond = async () => json({
+      success: false,
+      errorCode: "METRIC_VIEW_EXECUTION_FAILED",
+      message: "Traceback (most recent call last):\n  File \"metric-view.py\", line 1",
+      details: { suggestion: "safe", raw: "must not render" },
+    });
+    const { client } = setup({ type: "apiKey", apiKey: "k-1" });
+
+    await expect(client.requestSmartAsset("metrics", "testExecute", { metricView: {}, param: {} }))
+      .rejects.toMatchObject({
+        message: englishMessages.ontology.requestFailed,
+        details: { suggestion: "safe" },
+      });
+  });
+
   it("a token sends only tk and paths use the host apiBase", async () => {
     const { client } = setup({ type: "token", token: "t-1" });
     await client.loadOntology();

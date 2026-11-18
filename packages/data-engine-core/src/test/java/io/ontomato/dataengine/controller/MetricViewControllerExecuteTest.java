@@ -24,6 +24,7 @@ import io.ontomato.dataengine.core.bean.User;
 import io.ontomato.dataengine.service.BusinessConfigService;
 import io.ontomato.dataengine.service.IdentityService;
 import io.ontomato.dataengine.service.MetricViewService;
+import io.ontomato.dataengine.service.impl.MetricViewExecutionException;
 import io.ontomato.dataengine.service.sys.bean.permission.UserDataPermission;
 import io.ontomato.dataengine.util.SpringBeanUtil;
 
@@ -146,6 +147,24 @@ class MetricViewControllerExecuteTest {
         assertTrue(response.getBooleanValue("success"));
         assertEquals(results, response.get("data"));
         assertTrue(response.containsKey("data"));
+    }
+
+    @Test
+    void testExecuteReturnsStructuredFailureWithoutRawExceptionText() throws Exception {
+        MetricViewExecutionException failure = MetricViewExecutionException.fromPayload(
+                JSONObject.parseObject("{\"errorCode\":\"PARAMETER_FIELD_TYPE_MISMATCH\","
+                        + "\"message\":\"指标参数类型不匹配\",\"traceId\":\"trace-1\","
+                        + "\"details\":{\"parameter\":\"startTime\",\"expectedType\":\"datetime\"}}"));
+        when(metricViewService.testExecute(any(MetricView.class), any(JSONObject.class), eq("zh-CN"), same(user),
+                same(permission), anyInt())).thenThrow(failure);
+
+        JSONObject response = controller.testExecute("zh-CN", testRequest());
+
+        assertFalse(response.getBooleanValue("success"));
+        assertEquals("PARAMETER_FIELD_TYPE_MISMATCH", response.getString("errorCode"));
+        assertEquals("trace-1", response.getString("traceId"));
+        assertEquals("datetime", response.getJSONObject("details").getString("expectedType"));
+        assertFalse(response.toJSONString().contains("Traceback"));
     }
 
     private static JSONObject request() {

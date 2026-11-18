@@ -13,6 +13,78 @@ export type ManagerCredential =
   | { type: "apiKey"; apiKey: string }
   | { type: "anonymous" };
 
+export interface ManagerErrorDetails {
+  parameter?: string;
+  field?: string;
+  path?: string;
+  table?: string;
+  databaseType?: string;
+  dslLogicalType?: string;
+  metricViewType?: string;
+  actualType?: string;
+  expectedType?: string;
+  suggestion?: string;
+}
+
+const managerErrorDetailKeys: (keyof ManagerErrorDetails)[] = [
+  "parameter",
+  "field",
+  "path",
+  "table",
+  "databaseType",
+  "dslLogicalType",
+  "metricViewType",
+  "actualType",
+  "expectedType",
+  "suggestion",
+];
+
+function safeManagerErrorMessage(value: unknown, fallback: string): string {
+  if (
+    typeof value !== "string" ||
+    value.trim().length === 0 ||
+    value.length > 160 ||
+    /traceback|python error stream|runtimeexception|exception in thread|^\s*at\s+/im.test(value)
+  ) {
+    return fallback;
+  }
+  return value;
+}
+
+function safeManagerErrorDetails(value: unknown): ManagerErrorDetails {
+  if (!value || typeof value !== "object") return {};
+  const source = value as Record<string, unknown>;
+  return Object.fromEntries(
+    managerErrorDetailKeys.flatMap((key) => {
+      const detail = source[key];
+      if (typeof detail !== "string" || detail.length > 160 || /[\r\n]/.test(detail)) return [];
+      return [[key, detail]];
+    })
+  ) as ManagerErrorDetails;
+}
+
+/** 表示可安全交给指标视图页面渲染的受控业务失败。 */
+export class ManagerApiError extends Error {
+  readonly errorCode: string;
+  readonly code: string;
+  readonly details: ManagerErrorDetails;
+  readonly traceId?: string;
+
+  constructor(
+    message: string,
+    errorCode = "REQUEST_FAILED",
+    details: ManagerErrorDetails = {},
+    traceId?: string
+  ) {
+    super(message);
+    this.name = "ManagerApiError";
+    this.errorCode = errorCode;
+    this.code = errorCode;
+    this.details = details;
+    this.traceId = traceId;
+  }
+}
+
 /**
  * The two data defaults supplied statically by the host. They pre-fill edit forms or are submitted with save payloads,
  * so they are data, not UI text, and do not change with the UI locale or credential type. Each shell passes its own
@@ -299,7 +371,15 @@ export function createManagerClient(
     const json = await response.json();
     assertCurrent();
     if (json?.success === false) {
-      throw Object.assign(new Error(json.message || json.error || ontologyText(context.messages, "requestFailed")), { code: json.code });
+      throw new ManagerApiError(
+        safeManagerErrorMessage(
+          json.message || json.error,
+          ontologyText(context.messages, "requestFailed")
+        ),
+        json.errorCode || json.code || "REQUEST_FAILED",
+        safeManagerErrorDetails(json.details),
+        json.traceId
+      );
     }
     return json;
   }
