@@ -324,6 +324,7 @@ const ontologyEn = {
   metricErrorCode: "Error code",
   metricErrorParameter: "Parameter",
   metricErrorField: "Field",
+  metricErrorPath: "DSL path",
   metricErrorDatabaseType: "Database type",
   metricErrorDslType: "DSL type",
   metricErrorMetricType: "MetricView type",

@@ -83,7 +83,7 @@ public final class MetricViewExecutionException extends Exception {
         }
         Map<String, Object> result = new LinkedHashMap<>();
         for (String key : new String[] {
-                "parameter", "field", "databaseType", "dslLogicalType", "metricViewType",
+                "parameter", "field", "path", "table", "databaseType", "dslLogicalType", "metricViewType",
                 "actualType", "expectedType", "suggestion"}) {
             String value = safeText(source.getString(key), "");
             if (!value.isBlank()) {

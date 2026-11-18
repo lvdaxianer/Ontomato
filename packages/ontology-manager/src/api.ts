@@ -16,6 +16,8 @@ export type ManagerCredential =
 export interface ManagerErrorDetails {
   parameter?: string;
   field?: string;
+  path?: string;
+  table?: string;
   databaseType?: string;
   dslLogicalType?: string;
   metricViewType?: string;
@@ -27,6 +29,8 @@ export interface ManagerErrorDetails {
 const managerErrorDetailKeys: (keyof ManagerErrorDetails)[] = [
   "parameter",
   "field",
+  "path",
+  "table",
   "databaseType",
   "dslLogicalType",
   "metricViewType",

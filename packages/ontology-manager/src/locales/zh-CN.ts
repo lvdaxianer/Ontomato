@@ -303,6 +303,7 @@ const ontologyZh: OntologyMessages = {
   metricErrorCode: "错误码",
   metricErrorParameter: "参数",
   metricErrorField: "字段",
+  metricErrorPath: "DSL 路径",
   metricErrorDatabaseType: "数据库类型",
   metricErrorDslType: "DSL 类型",
   metricErrorMetricType: "指标视图类型",

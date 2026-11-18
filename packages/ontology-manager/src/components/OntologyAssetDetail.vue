@@ -823,6 +823,7 @@ onMounted(() => void loadDetail());
           <span>{{ ot("metricErrorCode") }}: {{ metricTestError.errorCode }}</span>
           <span v-if="metricTestError.details.parameter">{{ ot("metricErrorParameter") }}: {{ metricTestError.details.parameter }}</span>
           <span v-if="metricTestError.details.field">{{ ot("metricErrorField") }}: {{ metricTestError.details.field }}</span>
+          <span v-if="metricTestError.details.path">{{ ot("metricErrorPath") }}: {{ metricTestError.details.path }}</span>
           <span v-if="metricTestError.details.databaseType">{{ ot("metricErrorDatabaseType") }}: {{ metricTestError.details.databaseType }}</span>
           <span v-if="metricTestError.details.dslLogicalType">{{ ot("metricErrorDslType") }}: {{ metricTestError.details.dslLogicalType }}</span>
           <span v-if="metricTestError.details.metricViewType">{{ ot("metricErrorMetricType") }}: {{ metricTestError.details.metricViewType }}</span>
