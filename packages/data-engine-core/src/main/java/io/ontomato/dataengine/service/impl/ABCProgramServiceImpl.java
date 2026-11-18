@@ -32,6 +32,7 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 @Service
 public class ABCProgramServiceImpl implements ABCProgramService {
+	private static final String METRIC_VIEW_ERROR_MARKER = "__METRIC_VIEW_ERROR__";
 	
 	@Autowired
 	private PythonExecuteService pythonExecuteService;
@@ -175,7 +176,7 @@ public class ABCProgramServiceImpl implements ABCProgramService {
 
 	private Object parseRawPythonReturn(String pythonOutput, String errorMessage) throws Exception {
 		if (errorMessage != null && !errorMessage.trim().isEmpty()) {
-			throw new Exception("python error stream: \n```\n" + errorMessage + "\n```\n");
+			throw parseMetricViewError(errorMessage);
 		}
 		try {
 			String normalizedOutput = pythonOutput == null ? "" : pythonOutput.replaceAll(":\\s*NaN", ": null");
@@ -187,6 +188,28 @@ public class ABCProgramServiceImpl implements ABCProgramService {
 		} catch (Exception e) {
 			throw new Exception("The program print result must be valid JSON.", e);
 		}
+	}
+
+	/**
+	 * 解析 Skill 生成脚本输出的单行安全错误标记；未知 stderr 只转为通用失败。
+	 *
+	 * @param errorMessage Python stderr
+	 * @return 可供 Controller 安全返回的执行失败
+	 */
+	private Exception parseMetricViewError(String errorMessage) {
+		String[] lines = errorMessage.split("\\R");
+		for (String line : lines) {
+			if (!line.startsWith(METRIC_VIEW_ERROR_MARKER)) {
+				continue;
+			}
+			try {
+				String payload = line.substring(METRIC_VIEW_ERROR_MARKER.length()).trim();
+				return MetricViewExecutionException.fromPayload(JSON.parseObject(payload));
+			} catch (RuntimeException ignored) {
+				return MetricViewExecutionException.unknown();
+			}
+		}
+		return MetricViewExecutionException.unknown();
 	}
 
 	private File writeFunctionParameters(String sessionId, Function function) throws Exception {

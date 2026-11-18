@@ -24,7 +24,7 @@ import {
   vLoading,
 } from "element-plus";
 import { useManagerFeedback } from "../feedback";
-import type { SmartAsset } from "../api";
+import { ManagerApiError, type SmartAsset } from "../api";
 import type { AssetTab } from "../workspace";
 import ActionCodeExplainer from "./codeExplainer/ActionCodeExplainer.vue";
 import BusinessMeaning from "./codeExplainer/BusinessMeaning.vue";
@@ -65,6 +65,7 @@ const markdownView = ref("preview");
 const markdown = new MarkdownIt({ html: false, linkify: true, breaks: true });
 const testMarkdownPreview = computed(() => markdown.render(testMarkdown.value));
 const testJson = ref("");
+const metricTestError = ref<ManagerApiError | null>(null);
 const testResultUrl = ref("");
 const taskResultsVisible = ref(false);
 const taskResultLoading = ref(false);
@@ -388,6 +389,7 @@ function openMetricTest() {
   markdownView.value = "preview";
   testMarkdown.value = "";
   testJson.value = "";
+  metricTestError.value = null;
   testResultUrl.value = "";
   testTab.value = "markdown";
   testVisible.value = true;
@@ -397,17 +399,23 @@ function closeMetricTest() {
   testVisible.value = false;
 }
 
+function toMetricTestError(error: unknown, fallback: string): ManagerApiError {
+  if (error instanceof ManagerApiError) return error;
+  return new ManagerApiError(fallback);
+}
+
 async function testMetricView() {
   if (!record.value) return;
   testing.value = true;
   try {
+    metricTestError.value = null;
     const response = await requestSmartAsset("metrics", "test", record.value);
     testMarkdown.value = response?.data?.md || ot("metricTestNoResult");
     markdownView.value = "preview";
     testResultUrl.value = typeof response?.data?.url === "string" ? response.data.url : "";
     testTab.value = "markdown";
   } catch (error) {
-    message.error(error instanceof Error ? error.message : ot("metricTestFailed"));
+    metricTestError.value = toMetricTestError(error, ot("metricTestFailed"));
   } finally {
     testing.value = false;
   }
@@ -421,6 +429,7 @@ async function testExecuteMetricView() {
   }
   testing.value = true;
   try {
+    metricTestError.value = null;
     const param = Object.fromEntries(
       metricParameters.value.map((parameter: AssetRecord) => [parameter.name, parameter.value])
     );
@@ -432,7 +441,7 @@ async function testExecuteMetricView() {
     testJson.value = JSON.stringify(response?.data ?? null, null, 2);
     testTab.value = "json";
   } catch (error) {
-    message.error(error instanceof Error ? error.message : ot("metricJsonTestFailed"));
+    metricTestError.value = toMetricTestError(error, ot("metricJsonTestFailed"));
   } finally {
     testing.value = false;
   }
@@ -803,6 +812,26 @@ onMounted(() => void loadDetail());
       width="min(900px, 94cqw)"
     >
       <el-alert :title="ot('metricTestHint')" type="info" :closable="false" />
+      <el-alert
+        v-if="metricTestError"
+        class="metric-test-error"
+        :title="metricTestError.message"
+        type="error"
+        :closable="false"
+      >
+        <div class="metric-test-error-details">
+          <span>{{ ot("metricErrorCode") }}: {{ metricTestError.errorCode }}</span>
+          <span v-if="metricTestError.details.parameter">{{ ot("metricErrorParameter") }}: {{ metricTestError.details.parameter }}</span>
+          <span v-if="metricTestError.details.field">{{ ot("metricErrorField") }}: {{ metricTestError.details.field }}</span>
+          <span v-if="metricTestError.details.databaseType">{{ ot("metricErrorDatabaseType") }}: {{ metricTestError.details.databaseType }}</span>
+          <span v-if="metricTestError.details.dslLogicalType">{{ ot("metricErrorDslType") }}: {{ metricTestError.details.dslLogicalType }}</span>
+          <span v-if="metricTestError.details.metricViewType">{{ ot("metricErrorMetricType") }}: {{ metricTestError.details.metricViewType }}</span>
+          <span v-if="metricTestError.details.actualType">{{ ot("metricErrorActualType") }}: {{ metricTestError.details.actualType }}</span>
+          <span v-if="metricTestError.details.expectedType">{{ ot("metricErrorExpectedType") }}: {{ metricTestError.details.expectedType }}</span>
+          <span v-if="metricTestError.details.suggestion">{{ ot("metricErrorSuggestion") }}: {{ metricTestError.details.suggestion }}</span>
+          <span v-if="metricTestError.traceId">{{ ot("metricErrorTraceId") }}: {{ metricTestError.traceId }}</span>
+        </div>
+      </el-alert>
       <el-form v-if="metricParameters.length" label-position="top" class="test-parameters">
         <el-form-item
           v-for="parameter in metricParameters"
@@ -927,6 +956,8 @@ onMounted(() => void loadDetail());
 
 <style scoped>
 .markdown-view-toggle { margin-bottom: var(--spacing-md); }
+.metric-test-error { margin-top: var(--spacing-md); }
+.metric-test-error-details { display: grid; gap: var(--spacing-xs); line-height: 1.5; overflow-wrap: anywhere; }
 .metric-markdown-preview {
   min-height: 300px;
   max-height: 55vh;
